@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChordPath — chord progression notebook</title>
+  <meta name="description" content="Build chord progressions, hear them played back, and read why each choice works." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ─── Row 1: Header ────────────────────────────────────────────── -->
+  <header class="bar topbar">
+    <div class="brand">
+      <h1>ChordPath</h1>
+    </div>
+
+    <div class="key-block">
+      <div id="keyGrid" class="key-grid" role="group" aria-label="Choose key"></div>
+      <div class="key-mode-toggle" id="keyModeToggle" role="tablist" aria-label="Key colour">
+        <button type="button" data-mode="major" class="active" role="tab" aria-selected="true">maj</button>
+        <button type="button" data-mode="minor" role="tab" aria-selected="false">min</button>
+      </div>
+    </div>
+
+    <div class="scale-block">
+      <select id="scaleSelect" aria-label="Choose scale"></select>
+      <p id="scaleMeta" class="scale-meta"></p>
+    </div>
+
+    <div class="header-actions">
+      <button class="hbtn" popovertarget="popFeeling" type="button">Feeling</button>
+      <button class="hbtn" popovertarget="popCategories" type="button">Categories</button>
+      <button class="hbtn" popovertarget="popSaved" type="button">Saved</button>
+      <button class="hbtn" popovertarget="popMore" type="button">More</button>
+      <button class="hbtn" id="btnTheme" type="button" aria-label="Toggle theme">Theme</button>
+    </div>
+  </header>
+
+  <!-- ─── Row 2: Progression strip ────────────────────────────────── -->
+  <section class="bar progression-bar">
+    <div class="progression-head">
+      <h2>Your progression</h2>
+      <div class="prog-tools">
+        <button id="btnUndo" type="button" class="ghost">Undo</button>
+        <button id="btnReset" type="button" class="danger">Clear</button>
+      </div>
+    </div>
+    <div id="progression" class="progression empty" aria-live="polite"></div>
+    <div id="cadenceBanner" class="cadence-banner hidden"></div>
+    <div class="tension-row">
+      <span class="meta">Tension arc</span>
+      <svg id="tensionChart" class="tension-chart" viewBox="0 0 200 28" preserveAspectRatio="none"></svg>
+    </div>
+  </section>
+
+  <!-- ─── Row 3: Main workspace ───────────────────────────────────── -->
+  <main class="workspace">
+
+    <!-- Left: chord options -->
+    <section class="pane options-pane">
+      <div class="pane-head">
+        <h2>Next chord</h2>
+        <span class="pane-help">Sorted by fit. Click — or press <span class="kbd">1</span>–<span class="kbd">9</span>.</span>
+      </div>
+      <div id="options" class="options-grid"></div>
+    </section>
+
+    <!-- Right: visualizer + chord shape + genre -->
+    <aside class="pane right-pane">
+      <div class="sounds-like-row">
+        <span class="label">Sounds like</span>
+        <span id="genrePrimary" class="value">—</span>
+        <span id="genreInfluences" class="sub"></span>
+      </div>
+
+      <div class="viz-block">
+        <div class="viz-tabs" role="tablist" aria-label="Visualizer">
+          <button type="button" class="active" data-viz="piano" role="tab" aria-selected="true">Piano</button>
+          <button type="button" data-viz="guitar" role="tab" aria-selected="false">Guitar scale</button>
+        </div>
+        <div id="vizPiano" class="piano" role="img" aria-label="Piano keyboard showing current chord">
+          <div id="pianoKeys" class="piano-keys"></div>
+        </div>
+        <div id="vizGuitar" class="fretboard hidden" role="img" aria-label="Guitar fretboard showing chord tones across the neck">
+          <div id="fretGrid" class="fret-grid"></div>
+        </div>
+      </div>
+
+      <div class="chord-shape-block">
+        <div class="shape-head">
+          <span class="label">How to play</span>
+          <span id="chordShapeName" class="value">—</span>
+        </div>
+        <svg id="chordShape" class="chord-shape" viewBox="0 0 200 130" preserveAspectRatio="xMidYMid meet" aria-label="Guitar chord-shape diagram"></svg>
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- ─── Row 4: Playback bar ─────────────────────────────────────── -->
+  <footer class="bar playback-bar">
+    <div class="play-row">
+      <button id="btnPlay" type="button" class="play-main">Play</button>
+      <button id="btnPlayBand" type="button">Band</button>
+      <button id="btnPlayMelody" type="button">+ Melody</button>
+      <button id="btnStop" type="button" class="ghost">Stop</button>
+      <div class="beat-led" aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <span class="spacer"></span>
+      <label class="tempo-label">Tempo
+        <input id="tempo" type="range" min="40" max="200" value="92" />
+        <span id="tempoVal" class="meta">92</span>
+      </label>
+      <label>Inst
+        <select id="instrument">
+          <option value="piano">Piano</option>
+          <option value="epiano">E. Piano</option>
+          <option value="guitar">Guitar</option>
+          <option value="strings">Strings</option>
+          <option value="pad">Pad</option>
+          <option value="organ">Organ</option>
+          <option value="harp">Harp</option>
+        </select>
+      </label>
+      <label>Style
+        <select id="style">
+          <option value="block">Block</option>
+          <option value="arpeggio">Arpeggio</option>
+          <option value="strum">Strum</option>
+        </select>
+      </label>
+      <label>Voicing
+        <select id="voicing">
+          <option value="root">Root</option>
+          <option value="smart" selected>Smart VL</option>
+          <option value="shell">Shell</option>
+          <option value="drop2">Drop-2</option>
+          <option value="rootless">Rootless</option>
+          <option value="spread">Spread</option>
+        </select>
+      </label>
+      <label class="ck"><input id="metronome" type="checkbox" /> Click</label>
+      <label class="ck"><input id="withBass" type="checkbox" checked /> Bass</label>
+      <label class="ck"><input id="withSevenths" type="checkbox" /> 7ths</label>
+      <label class="ck"><input id="loop" type="checkbox" /> Loop</label>
+    </div>
+  </footer>
+
+</div><!-- /.app -->
+
+<!-- ─── Popovers ───────────────────────────────────────────────────── -->
+
+<div id="popFeeling" popover="auto" class="popover">
+  <h3>Pick a feeling</h3>
+  <div class="emotion-row">
+    <select id="emotionSelect" aria-label="Choose target emotion">
+      <option value="">— any —</option>
+    </select>
+    <button id="btnPickEmotion" type="button">Pick best chord</button>
+  </div>
+  <p id="emotionMeta" class="emotion-meta"></p>
+</div>
+
+<div id="popCategories" popover="auto" class="popover">
+  <h3>Chord categories</h3>
+  <div class="filters">
+    <label><input type="checkbox" data-filter="diatonic" checked /> Diatonic <span class="meta">(in-key)</span></label>
+    <label><input type="checkbox" data-filter="borrowed" checked /> Borrowed <span class="meta">(modal interchange)</span></label>
+    <label><input type="checkbox" data-filter="secondary" checked /> Secondary dominants</label>
+    <label><input type="checkbox" data-filter="ttSub" /> Tritone substitutions</label>
+    <label><input type="checkbox" data-filter="dimPassing" /> Diminished passing</label>
+    <label><input type="checkbox" data-filter="neapolitan" checked /> Neapolitan flat-II</label>
+    <label><input type="checkbox" data-filter="chromatic" /> Chromatic mediants</label>
+    <label><input type="checkbox" data-filter="aug6" /> Augmented sixths</label>
+  </div>
+</div>
+
+<div id="popSaved" popover="auto" class="popover">
+  <h3>Saved progressions <span class="hint">stored locally</span></h3>
+  <select id="loadSelect" aria-label="Load saved progression">
+    <option value="">— pick to load —</option>
+  </select>
+  <div class="save-row">
+    <input id="saveName" type="text" placeholder="name…" maxlength="40" aria-label="Save name" />
+    <button id="btnSave" type="button">Save</button>
+    <button id="btnDelete" type="button" class="ghost" title="Delete selected">Delete</button>
+  </div>
+  <div class="save-row two-col">
+    <button id="btnShare" type="button" class="ghost" title="Copy share URL">Share link</button>
+    <button id="btnExportMidi" type="button" class="ghost" title="Export MIDI">Export MIDI</button>
+  </div>
+</div>
+
+<div id="popMore" popover="auto" class="popover popover-wide">
+  <h3>More</h3>
+
+  <div class="more-grid">
+    <div class="more-section">
+      <h4>What's happening</h4>
+      <div class="card description-card" id="descriptionCard">
+        <p id="description">Pick a key and scale to start.</p>
+      </div>
+    </div>
+
+    <div class="more-section">
+      <h4>Songs in this shape</h4>
+      <div id="songList" class="song-list">
+        <div class="song faint">Add 2–4 chords to find matches.</div>
+      </div>
+    </div>
+
+    <div class="more-section">
+      <h4>Rhythm</h4>
+      <div class="rhythm-card">
+        <span id="rhythmTime" class="value">—</span>
+        <p id="rhythmTip" class="sub">Add chords for a tailored groove tip.</p>
+      </div>
+    </div>
+
+    <div class="more-section">
+      <h4>Modulation</h4>
+      <div id="modulation" class="modulation-grid"></div>
+    </div>
+  </div>
+
+  <div class="more-actions">
+    <button id="btnPresets" type="button" class="ghost">Presets</button>
+    <button id="btnQuiz" type="button" class="ghost">Ear training</button>
+    <button id="btnLearn" type="button" class="ghost">Theory primer</button>
+    <button id="btnShortcuts" type="button" class="ghost">Shortcuts</button>
+  </div>
+</div>
+
+<!-- Modal (presets, quiz, learn, shortcuts) -->
+<div id="scrim" class="scrim" role="dialog" aria-modal="true">
+  <div class="modal" id="modal">
+    <button class="close-x" id="modalClose" aria-label="Close">×</button>
+    <div id="modalContent"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast hidden" role="status"></div>
+
+<!-- Tone.js -->
+<script src="https://unpkg.com/tone@14.8.49/build/Tone.js"></script>
+
+<!-- ChordPath modules -->
+<script src="theory/scales.js"></script>
+<script src="theory/chords.js"></script>
+<script src="theory/voicings.js"></script>
+<script src="theory/progressions.js"></script>
+<script src="theory/analysis.js"></script>
+<script src="theory/genres.js"></script>
+<script src="theory/emotions.js"></script>
+<script src="theory/descriptions.js"></script>
+<script src="theory/songs.js"></script>
+<script src="theory/melody.js"></script>
+<script src="theory/storage.js"></script>
+<script src="theory/midi.js"></script>
+<script src="theory/learn.js"></script>
+<script src="audio.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
