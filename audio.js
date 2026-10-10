@@ -20,26 +20,109 @@
   const V = global.Voicings;
 
   let started = false;
-  let chordInst = null, bassInst = null, leadInst = null, clickInst = null;
+  let chordInst = null, bassInst = null, leadInst = null, underInst = null, clickInst = null;
   let kickDrum = null, snareDrum = null, hatClosed = null, hatOpen = null;
   let reverb = null, master = null;
   let stopFlag = false;
   let timers = [];
+  let previewTimers = [];
+  let previewToken = 0;
   let currentInstrument = 'piano';
+  const bandOptions = {
+    texture: 'wash',
+    drums: 'hazy',
+    melody: 'soft',
+    levels: {
+      chords: 100,
+      bass: 100,
+      drums: 100,
+      melody: 100,
+    },
+  };
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function seededUnit(seed) {
+    const x = Math.sin(seed * 999.73) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function humanOffset(amountMs, seed) {
+    return (seededUnit(seed) - 0.5) * amountMs;
+  }
+
+  function humanVelocity(base, seed, depth) {
+    return clamp(base + (seededUnit(seed) - 0.5) * depth, 0.15, 1);
+  }
+
+  function levelToDb(value) {
+    const n = clamp(Number(value == null ? 100 : value), 0, 100);
+    if (n <= 0) return -80;
+    return 20 * Math.log10(n / 100);
+  }
+
+  function setBaseVolume(inst, db, group) {
+    if (!inst) return;
+    inst._baseVolumeDb = db;
+    inst._mixGroup = group;
+    applyInstVolume(inst);
+  }
+
+  function applyInstVolume(inst) {
+    if (!inst || !inst.volume) return;
+    const group = inst._mixGroup || 'chords';
+    const level = bandOptions.levels[group] == null ? 100 : bandOptions.levels[group];
+    try { inst.volume.value = (inst._baseVolumeDb || 0) + levelToDb(level); } catch(e) {}
+  }
+
+  function applyMix() {
+    [chordInst, bassInst, leadInst, underInst, kickDrum, snareDrum, hatClosed, hatOpen]
+      .forEach(applyInstVolume);
+  }
+
+  function setBandOptions(opts) {
+    opts = opts || {};
+    if (opts.texture) bandOptions.texture = opts.texture;
+    if (opts.drums) bandOptions.drums = opts.drums;
+    if (opts.melody) bandOptions.melody = opts.melody;
+    if (opts.levels) {
+      ['chords','bass','drums','melody'].forEach(k => {
+        if (opts.levels[k] != null) bandOptions.levels[k] = clamp(Number(opts.levels[k]), 0, 100);
+      });
+    }
+    if (!started) return;
+    applySpaceTone();
+    applyDrumTone();
+    buildLead();
+    buildUnder();
+    setInstrument(currentInstrument);
+    applyMix();
+  }
 
   async function start() {
     if (started) return;
     await Tone.start();
     master = new Tone.Limiter(-1).toDestination();
     reverb = new Tone.Reverb({ decay: 2.6, wet: 0.20 }).connect(master);
-    setInstrument('piano');
+    applySpaceTone();
+    setInstrument(currentInstrument);
     buildBass();
     buildDrums();
     buildLead();
+    buildUnder();
     buildClick();
     started = true;
+  }
+
+  function applySpaceTone() {
+    if (!reverb) return;
+    const wet = {
+      clean: 0.12,
+      wash: 0.34,
+      fuzz: 0.28,
+      dark: 0.42,
+    }[bandOptions.texture] ?? 0.24;
+    try { reverb.wet.value = wet; } catch(e) {}
   }
 
   function buildBass() {
@@ -49,18 +132,69 @@
       filter:{ Q:1.2, type:'lowpass', rolloff:-24 },
       filterEnvelope:{ attack:0.01, decay:0.4, sustain:0.4, release:0.5, baseFrequency:90, octaves:2.4 },
     }).connect(master);
-    bassInst.volume.value = -6;
+    setBaseVolume(bassInst, -6, 'bass');
+  }
+
+  function disposeLead() {
+    if (leadInst && leadInst.dispose) { try { leadInst.dispose(); } catch(e){} }
+  }
+
+  function disposeUnder() {
+    if (underInst && underInst.dispose) { try { underInst.dispose(); } catch(e){} }
   }
 
   function buildLead() {
-    leadInst = new Tone.AMSynth({
-      harmonicity: 2,
-      oscillator:{ type:'sine' },
-      envelope:{ attack:0.02, decay:0.3, sustain:0.5, release:0.5 },
-      modulation:{ type:'square' },
-      modulationEnvelope:{ attack:0.02, decay:0.2, sustain:0.4, release:0.3 },
+    disposeLead();
+    switch (bandOptions.melody) {
+      case 'bell':
+        leadInst = new Tone.FMSynth({
+          harmonicity: 3,
+          modulationIndex: 8,
+          oscillator:{ type:'sine' },
+          envelope:{ attack:0.006, decay:0.5, sustain:0.15, release:1.1 },
+          modulationEnvelope:{ attack:0.006, decay:0.35, sustain:0.05, release:0.8 },
+        }).connect(reverb);
+        setBaseVolume(leadInst, -12, 'melody');
+        break;
+      case 'airy':
+        leadInst = new Tone.Synth({
+          oscillator:{ type:'fatsine', count:3, spread:18 },
+          envelope:{ attack:0.08, decay:0.4, sustain:0.55, release:1.4 },
+        }).connect(reverb);
+        setBaseVolume(leadInst, -13, 'melody');
+        break;
+      case 'grit':
+        leadInst = new Tone.AMSynth({
+          harmonicity: 1.5,
+          oscillator:{ type:'sawtooth' },
+          envelope:{ attack:0.01, decay:0.25, sustain:0.45, release:0.55 },
+          modulation:{ type:'square' },
+          modulationEnvelope:{ attack:0.01, decay:0.18, sustain:0.35, release:0.35 },
+        }).connect(reverb);
+        setBaseVolume(leadInst, -11, 'melody');
+        break;
+      case 'soft':
+      default:
+        leadInst = new Tone.AMSynth({
+          harmonicity: 2,
+          oscillator:{ type:'sine' },
+          envelope:{ attack:0.025, decay:0.32, sustain:0.5, release:0.7 },
+          modulation:{ type:'square' },
+          modulationEnvelope:{ attack:0.02, decay:0.2, sustain:0.4, release:0.35 },
+        }).connect(reverb);
+        setBaseVolume(leadInst, -9, 'melody');
+        break;
+    }
+  }
+
+  function buildUnder() {
+    disposeUnder();
+    const airy = bandOptions.melody === 'airy' || bandOptions.texture === 'wash';
+    underInst = new Tone.Synth({
+      oscillator:{ type: airy ? 'fatsine' : 'triangle', count: airy ? 3 : undefined, spread: airy ? 16 : undefined },
+      envelope:{ attack: airy ? 0.08 : 0.03, decay:0.4, sustain:0.35, release: airy ? 1.8 : 1.2 },
     }).connect(reverb);
-    leadInst.volume.value = -8;
+    setBaseVolume(underInst, airy ? -17 : -15, 'melody');
   }
 
   function buildDrums() {
@@ -69,25 +203,67 @@
       oscillator:{ type:'sine' },
       envelope:{ attack:0.001, decay:0.42, sustain:0.0, release:1.4 },
     }).connect(master);
-    kickDrum.volume.value = -3;
+    setBaseVolume(kickDrum, -3, 'drums');
 
     snareDrum = new Tone.NoiseSynth({
       noise:{ type:'white' },
       envelope:{ attack:0.001, decay:0.16, sustain:0 },
     }).connect(master);
-    snareDrum.volume.value = -12;
+    setBaseVolume(snareDrum, -12, 'drums');
 
     hatClosed = new Tone.MetalSynth({
       frequency: 250, envelope:{ attack:0.001, decay:0.06, release:0.02 },
       harmonicity: 5.1, modulationIndex: 32, resonance: 4000, octaves: 1.5,
     }).connect(master);
-    hatClosed.volume.value = -24;
+    setBaseVolume(hatClosed, -24, 'drums');
 
     hatOpen = new Tone.MetalSynth({
       frequency: 250, envelope:{ attack:0.001, decay:0.3, release:0.1 },
       harmonicity: 5.1, modulationIndex: 32, resonance: 4000, octaves: 1.5,
     }).connect(master);
-    hatOpen.volume.value = -20;
+    setBaseVolume(hatOpen, -20, 'drums');
+    applyDrumTone();
+  }
+
+  function reconnect(inst, dest) {
+    if (!inst || !dest) return;
+    try { inst.disconnect(); } catch(e) {}
+    try { inst.connect(dest); } catch(e) {}
+  }
+
+  function applyDrumTone() {
+    if (!kickDrum || !snareDrum || !hatClosed || !hatOpen || !master) return;
+    const tone = bandOptions.drums;
+    reconnect(kickDrum, master);
+    reconnect(snareDrum, tone === 'dry' ? master : reverb);
+    reconnect(hatClosed, tone === 'dry' ? master : reverb);
+    reconnect(hatOpen, tone === 'dry' ? master : reverb);
+
+    if (tone === 'dry') {
+      setBaseVolume(kickDrum, -3, 'drums');
+      setBaseVolume(snareDrum, -11, 'drums');
+      setBaseVolume(hatClosed, -24, 'drums');
+      setBaseVolume(hatOpen, -22, 'drums');
+      try { snareDrum.envelope.decay = 0.13; } catch(e) {}
+    } else if (tone === 'soft') {
+      setBaseVolume(kickDrum, -8, 'drums');
+      setBaseVolume(snareDrum, -18, 'drums');
+      setBaseVolume(hatClosed, -30, 'drums');
+      setBaseVolume(hatOpen, -28, 'drums');
+      try { snareDrum.envelope.decay = 0.22; } catch(e) {}
+    } else if (tone === 'distant') {
+      setBaseVolume(kickDrum, -8, 'drums');
+      setBaseVolume(snareDrum, -20, 'drums');
+      setBaseVolume(hatClosed, -32, 'drums');
+      setBaseVolume(hatOpen, -30, 'drums');
+      try { snareDrum.envelope.decay = 0.34; } catch(e) {}
+    } else {
+      setBaseVolume(kickDrum, -5, 'drums');
+      setBaseVolume(snareDrum, -16, 'drums');
+      setBaseVolume(hatClosed, -29, 'drums');
+      setBaseVolume(hatOpen, -26, 'drums');
+      try { snareDrum.envelope.decay = 0.28; } catch(e) {}
+    }
   }
 
   function buildClick() {
@@ -105,7 +281,10 @@
   function setInstrument(name) {
     currentInstrument = name;
     if (!reverb) return; // wait for start()
+    applySpaceTone();
     disposeChordInst();
+    const texture = bandOptions.texture;
+    let chordBaseDb = -8;
     switch (name) {
       case 'epiano':
         chordInst = new Tone.PolySynth(Tone.FMSynth, {
@@ -115,14 +294,25 @@
           modulation:{ type:'square' },
           modulationEnvelope:{ attack:0.02, decay:0.5, sustain:0, release:0.5 },
         }).connect(reverb);
-        chordInst.volume.value = -10;
+        chordBaseDb = -10;
         break;
       case 'guitar':
         chordInst = new Tone.PolySynth(Tone.Synth, {
-          oscillator:{ type:'fmsawtooth', modulationType:'sine', harmonicity:1 },
-          envelope:{ attack:0.005, decay:0.7, sustain:0, release:1.0 },
+          oscillator:{
+            type: texture === 'clean' ? 'triangle' : texture === 'dark' ? 'fatsine' : 'fmsawtooth',
+            modulationType:'sine',
+            harmonicity: texture === 'fuzz' ? 0.55 : 1,
+            count: texture === 'dark' ? 3 : undefined,
+            spread: texture === 'dark' ? 14 : undefined,
+          },
+          envelope:{
+            attack: texture === 'wash' ? 0.018 : 0.005,
+            decay: texture === 'clean' ? 0.42 : 0.8,
+            sustain: texture === 'wash' || texture === 'dark' ? 0.18 : 0,
+            release: texture === 'wash' || texture === 'dark' ? 1.8 : 1.0,
+          },
         }).connect(reverb);
-        chordInst.volume.value = -12;
+        chordBaseDb = texture === 'fuzz' ? -16 : texture === 'wash' ? -14 : -12;
         break;
       case 'strings':
         chordInst = new Tone.PolySynth(Tone.AMSynth, {
@@ -132,14 +322,14 @@
           modulation:{ type:'sine' },
           modulationEnvelope:{ attack:0.4, decay:0.2, sustain:0.7, release:1.0 },
         }).connect(reverb);
-        chordInst.volume.value = -14;
+        chordBaseDb = -14;
         break;
       case 'pad':
         chordInst = new Tone.PolySynth(Tone.Synth, {
-          oscillator:{ type:'sawtooth' },
-          envelope:{ attack:0.8, decay:0.6, sustain:0.92, release:2.4 },
+          oscillator:{ type: texture === 'dark' ? 'fatsine' : 'sawtooth', count: texture === 'dark' ? 3 : undefined, spread: texture === 'dark' ? 18 : undefined },
+          envelope:{ attack: texture === 'clean' ? 0.35 : 0.8, decay:0.6, sustain:0.92, release: texture === 'clean' ? 1.4 : 2.4 },
         }).connect(reverb);
-        chordInst.volume.value = -18;
+        chordBaseDb = -18;
         break;
       case 'organ':
         chordInst = new Tone.PolySynth(Tone.Synth, {
@@ -148,13 +338,13 @@
           },
           envelope:{ attack:0.02, decay:0.2, sustain:0.9, release:0.4 },
         }).connect(reverb);
-        chordInst.volume.value = -12;
+        chordBaseDb = -12;
         break;
       case 'harp':
         chordInst = new Tone.PolySynth(Tone.PluckSynth, {
           attackNoise: 1.0, dampening: 4000, resonance: 0.96,
         }).connect(reverb);
-        chordInst.volume.value = -8;
+        chordBaseDb = -8;
         break;
       case 'piano':
       default:
@@ -162,8 +352,15 @@
           oscillator:{ type:'triangle' },
           envelope:{ attack:0.004, decay:0.5, sustain:0.25, release:1.4 },
         }).connect(reverb);
-        chordInst.volume.value = -8;
+        chordBaseDb = -8;
     }
+    if (chordInst && name !== 'guitar') {
+      if (texture === 'clean') chordBaseDb += 1.5;
+      if (texture === 'wash') chordBaseDb -= 1;
+      if (texture === 'fuzz') chordBaseDb -= 2.5;
+      if (texture === 'dark') chordBaseDb -= 2;
+    }
+    setBaseVolume(chordInst, chordBaseDb, 'chords');
   }
 
   function clearTimers() {
@@ -171,12 +368,28 @@
     timers = [];
   }
 
-  function stop() {
+  function clearPreviewTimers() {
+    previewTimers.forEach(t => clearTimeout(t));
+    previewTimers = [];
+  }
+
+  function stopPreview() {
+    previewToken += 1;
+    clearPreviewTimers();
+  }
+
+  function stopPlayback() {
     stopFlag = true;
     clearTimers();
     try { chordInst && chordInst.releaseAll(); } catch(e){}
     try { bassInst && bassInst.triggerRelease(); } catch(e){}
     try { leadInst && leadInst.triggerRelease(); } catch(e){}
+    try { underInst && underInst.triggerRelease(); } catch(e){}
+  }
+
+  function stop() {
+    stopPlayback();
+    stopPreview();
   }
 
   // ── Voicing helpers ──────────────────────────────────────────────────────
@@ -220,6 +433,35 @@
     return n + oct;
   }
 
+  function uniqueNotes(notes) {
+    const seen = new Set();
+    return notes.filter(n => {
+      if (!n || seen.has(n)) return false;
+      seen.add(n);
+      return true;
+    });
+  }
+
+  function performanceVoicing(chord, voicing, limit) {
+    const thirdIv = chord.intervals[1] == null ? 4 : chord.intervals[1];
+    const fifthIv = chord.intervals.find(iv => iv === 6 || iv === 7 || iv === 8);
+    const colorIv = chord.intervals.length > 3 ? chord.intervals[chord.intervals.length - 1] : thirdIv;
+    const expanded = [
+      rootName(chord, 3),
+      ...voicing,
+      noteAt((chord.rootPc + thirdIv) % 12, 4, chord.preferFlats),
+      noteAt((chord.rootPc + (fifthIv == null ? 7 : fifthIv)) % 12, 4, chord.preferFlats),
+      noteAt((chord.rootPc + colorIv) % 12, 5, chord.preferFlats),
+      rootName(chord, 5),
+    ];
+    return uniqueNotes(expanded).slice(0, limit || 6);
+  }
+
+  function shouldLoop(opts) {
+    if (!opts) return false;
+    return typeof opts.loop === 'function' ? !!opts.loop() : !!opts.loop;
+  }
+
   // Schedule click track (one beep per beat). If accent, first beat is louder.
   function scheduleClick(startMs, beatMs, beats, opts) {
     if (!opts || !opts.metronome) return;
@@ -234,10 +476,17 @@
     }
   }
 
+  function notifyNote(opts, chordIdx, chord, noteName) {
+    if (opts && opts.onNote) {
+      try { opts.onNote(chordIdx, chord, noteName); } catch(e) {}
+    }
+  }
+
   // ── Simple chord-by-chord playback ───────────────────────────────────────
   async function playProgression(chords, opts) {
     await start();
-    stop();
+    stopPlayback();
+    stopPreview();
     stopFlag = false;
     opts = opts || {};
     const tempo = clamp(opts.tempo || 90, 40, 240);
@@ -245,9 +494,9 @@
     const withBass = opts.withBass !== false;
     const voicingMode = opts.voicing || 'smart';
     const beatMs = 60000 / tempo;
-    const chordDur = beatMs * 2;
-    const noteDur = chordDur / 1000 - 0.05;
-    const totalMs = chords.length * chordDur;
+    const beatsPerChord = opts.beatsPerChord || 4;
+    const chordDur = beatMs * beatsPerChord;
+    const noteDur = Math.max(0.1, chordDur / 1000 - 0.08);
 
     // Count-in if metronome on
     let chordsStartMs = 0;
@@ -255,79 +504,116 @@
       scheduleClick(0, beatMs, 4, opts);
       chordsStartMs = 4 * beatMs;
     }
-    if (opts.metronome) scheduleClick(chordsStartMs, beatMs, chords.length * 2, opts);
+    if (opts.metronome) scheduleClick(chordsStartMs, beatMs, chords.length * beatsPerChord, opts);
 
     let prevVoicing = null;
     let t = chordsStartMs;
+    function scheduleAt(atMs, fn) {
+      timers.push(setTimeout(() => {
+        if (!stopFlag) fn();
+      }, Math.max(0, atMs)));
+    }
+    function chordHit(idx, ch, notes, atMs, dur, velocity) {
+      scheduleAt(atMs, () => {
+        const list = Array.isArray(notes) ? notes : [notes];
+        list.forEach(n => notifyNote(opts, idx, ch, n));
+        try { chordInst.triggerAttackRelease(notes, dur, undefined, velocity == null ? 0.76 : velocity); } catch(e){}
+      });
+    }
+    function strumHit(idx, ch, notes, atMs, spreadMs, dur, velocity, reverse) {
+      const list = reverse ? notes.slice().reverse() : notes.slice();
+      list.forEach((n, j) => {
+        scheduleAt(atMs + j * spreadMs + humanOffset(8, idx * 101 + j), () => {
+          notifyNote(opts, idx, ch, n);
+          try { chordInst.triggerAttackRelease(n, dur, undefined, humanVelocity(velocity, idx * 131 + j, 0.12)); } catch(e){}
+        });
+      });
+    }
     for (let i = 0; i < chords.length; i++) {
       const idx = i;
       const ch = chords[i];
-      const voicing = voiceChord(ch, voicingMode, prevVoicing);
-      prevVoicing = voicing;
+      const rawVoicing = voiceChord(ch, voicingMode, prevVoicing);
+      const voicing = performanceVoicing(ch, rawVoicing, 6);
+      prevVoicing = rawVoicing;
       const bassNote = rootName(ch, 2);
+      const top = voicing.slice(-Math.min(4, voicing.length));
 
-      timers.push(setTimeout(() => {
-        if (stopFlag) return;
+      scheduleAt(t, () => {
         if (opts.onChordStart) opts.onChordStart(idx, ch);
-        if (withBass) try { bassInst.triggerAttackRelease(bassNote, noteDur); } catch(e){}
-        if (style === 'block') {
-          try { chordInst.triggerAttackRelease(voicing, noteDur); } catch(e){}
-        } else if (style === 'arpeggio') {
-          const step = chordDur / voicing.length / 1000;
-          voicing.forEach((n, j) => {
-            timers.push(setTimeout(() => {
-              if (!stopFlag) try { chordInst.triggerAttackRelease(n, step + 0.15); } catch(e){}
-            }, j * step * 1000));
-          });
-        } else if (style === 'strum') {
-          voicing.forEach((n, j) => {
-            timers.push(setTimeout(() => {
-              if (!stopFlag) try { chordInst.triggerAttackRelease(n, noteDur); } catch(e){}
-            }, j * 28));
-          });
+      });
+      if (withBass) {
+        scheduleAt(t, () => { try { bassInst.triggerAttackRelease(bassNote, Math.max(0.2, noteDur * 0.55)); } catch(e){} });
+        if (beatsPerChord >= 4) {
+          scheduleAt(t + beatMs * 2, () => { try { bassInst.triggerAttackRelease(bassNote, Math.max(0.2, noteDur * 0.42)); } catch(e){} });
         }
-      }, t));
+      }
+
+      if (style === 'arpeggio') {
+        const seqs = [
+          [0, 2, 4, 1, 3, 5, 4, 2],
+          [0, 1, 3, 5, 2, 4, 5, 3],
+          [0, 3, 2, 4, 1, 5, 3, 2],
+          [0, 4, 2, 5, 3, 1, 4, 5],
+        ];
+        const seq = seqs[idx % seqs.length];
+        seq.forEach((noteIdx, j) => {
+          const n = voicing[noteIdx % voicing.length];
+          const at = t + j * (chordDur / seq.length) + humanOffset(12, idx * 37 + j);
+          chordHit(idx, ch, n, at, (chordDur / seq.length) / 1000 + 0.22, humanVelocity(0.78, idx * 41 + j, 0.15));
+        });
+      } else if (style === 'strum') {
+        strumHit(idx, ch, voicing, t, 24, '2n', 0.8, false);
+        chordHit(idx, ch, top, t + beatMs + beatMs * 0.5, '8n', 0.42);
+        strumHit(idx, ch, voicing, t + beatMs * 2, 20, '2n', 0.68, false);
+        strumHit(idx, ch, top, t + beatMs * 3 + beatMs * 0.5, 16, '8n', 0.45, true);
+      } else {
+        chordHit(idx, ch, voicing, t, Math.max(0.6, noteDur * 0.58), 0.78);
+        if (beatsPerChord >= 4) chordHit(idx, ch, top, t + beatMs * 2, Math.max(0.35, noteDur * 0.3), 0.52);
+      }
 
       t += chordDur;
     }
     timers.push(setTimeout(() => {
       if (stopFlag) return;
-      if (opts.loop) { playProgression(chords, opts); return; }
+      if (shouldLoop(opts)) { playProgression(chords, opts); return; }
       opts.onDone && opts.onDone();
     }, t + 50));
   }
 
   // ── Backing-track playback ───────────────────────────────────────────────
-  async function playBacking(chords, opts) {
-    await start();
-    stop();
-    stopFlag = false;
+  // Core scheduler: pushes all note timers for one pass of `chords` starting
+  // at `startOffset` ms from now, and returns the total end time in ms.
+  // Does NOT call start()/stop cleanup and does NOT schedule looping — the
+  // public entry points (playBacking, playSong) own that.
+  function scheduleBacking(chords, opts, startOffset) {
     opts = opts || {};
     const tempo = clamp(opts.tempo || 90, 40, 240);
     const pattern = opts.pattern || { drums:{kick:[0,8],snare:[4,12],hhClosed:[0,2,4,6,8,10,12,14],hhOpen:[]}, bass:'root', chords:'block' };
     const sixteenthMs = (60000 / tempo) / 4;
     const beatMs = sixteenthMs * 4;
     const stepsPerChord = 16;
-    const swingAmt = (opts.swing != null ? opts.swing : (pattern.swing ? 0.18 : 0));
+    // pattern.swing may be a tuned number (0-0.3) or legacy boolean true (=0.18)
+    const swingAmt = (opts.swing != null ? opts.swing
+      : (typeof pattern.swing === 'number' ? pattern.swing : (pattern.swing ? 0.18 : 0)));
     const voicingMode = opts.voicing || 'smart';
+    const withBass = opts.withBass !== false;
+    const drumHuman = pattern.drum && pattern.drum.human != null
+      ? pattern.drum.human
+      : (bandOptions.drums === 'hazy' || bandOptions.drums === 'distant' ? 18 : 7);
 
     function swungOffset(step) {
       return swingAmt > 0 && (step % 2 === 1) ? sixteenthMs * swingAmt : 0;
     }
 
     let prevVoicing = null;
-    let startOffset = 0;
-    if (opts.metronome && opts.countIn) {
-      scheduleClick(0, beatMs, 4, opts);
-      startOffset = 4 * beatMs;
-    }
 
     for (let ci = 0; ci < chords.length; ci++) {
       const ch = chords[ci];
       const next = chords[ci + 1];
       const chordStartMs = startOffset + ci * stepsPerChord * sixteenthMs;
-      const voicing = voiceChord(ch, voicingMode, prevVoicing);
-      prevVoicing = voicing;
+      const rawVoicing = voiceChord(ch, voicingMode, prevVoicing);
+      const voicing = performanceVoicing(ch, rawVoicing, 6);
+      prevVoicing = rawVoicing;
 
       // Beat LED
       if (opts.onBeat) {
@@ -337,30 +623,16 @@
       }
 
       // ── Drums ─────────────────────────────────────────────────────────────
-      const d = pattern.drums || {};
-      ['kick','snare','hhClosed','hhOpen'].forEach(layer => {
-        (d[layer] || []).forEach(step => {
-          const at = chordStartMs + step * sixteenthMs + swungOffset(step);
-          timers.push(setTimeout(() => {
-            if (stopFlag) return;
-            try {
-              if (layer === 'kick')          kickDrum.triggerAttackRelease('C1', '8n');
-              else if (layer === 'snare')    snareDrum.triggerAttackRelease('16n');
-              else if (layer === 'hhClosed') hatClosed.triggerAttackRelease('32n');
-              else if (layer === 'hhOpen')   hatOpen.triggerAttackRelease('8n');
-            } catch(e){}
-          }, at));
-        });
-      });
+      scheduleDrumGroove(pattern.drums, ci, chords.length, chordStartMs, sixteenthMs, swingAmt, drumHuman, pattern.drum);
 
       // Click track
       if (opts.metronome) scheduleClick(chordStartMs, beatMs, 4, opts);
 
       // Bass
-      schedulesBass(pattern.bass, ch, next, chordStartMs, sixteenthMs);
+      if (withBass) schedulesBass(pattern.bass, ch, next, chordStartMs, sixteenthMs);
 
       // Chord layer
-      schedulesChords(pattern.chords, voicing, chordStartMs, sixteenthMs, swingAmt);
+      schedulesChords(pattern.chords, voicing, chordStartMs, sixteenthMs, swingAmt, opts, ci, ch);
 
       // Card highlight
       timers.push(setTimeout(() => {
@@ -368,12 +640,219 @@
       }, chordStartMs));
     }
 
-    const total = startOffset + chords.length * stepsPerChord * sixteenthMs + 50;
+    scheduleMelodyEvents(opts.melody, leadInst, startOffset, beatMs, 0.85, opts);
+    scheduleMelodyEvents(opts.underMelody, underInst, startOffset, beatMs, 0.55, opts);
+
+    return startOffset + chords.length * stepsPerChord * sixteenthMs;
+  }
+
+  async function playBacking(chords, opts) {
+    await start();
+    stopPlayback();
+    stopPreview();
+    stopFlag = false;
+    opts = opts || {};
+    let startOffset = 0;
+    if (opts.metronome && opts.countIn) {
+      const tempo = clamp(opts.tempo || 90, 40, 240);
+      const beatMs = (60000 / tempo);
+      scheduleClick(0, beatMs, 4, opts);
+      startOffset = 4 * beatMs;
+    }
+    const total = scheduleBacking(chords, opts, startOffset) + 50;
     timers.push(setTimeout(() => {
       if (stopFlag) return;
-      if (opts.loop) { playBacking(chords, opts); return; }
+      if (shouldLoop(opts)) { playBacking(chords, opts); return; }
       opts.onDone && opts.onDone();
     }, total));
+  }
+
+  // ── Whole-song playback ──────────────────────────────────────────────────
+  // items: Song.buildPlayback(song) → [{ sectionId, name, chords, melody,
+  //   under, pattern, tempo, beatsPerChord, repeat, levels, tones }]
+  // Sections chain with a timer at each boundary, so per-section tempo and
+  // tone changes are free and timing re-anchors every section.
+  async function playSong(items, opts) {
+    await start();
+    stopPlayback();
+    stopPreview();
+    stopFlag = false;
+    opts = opts || {};
+    if (!items || !items.length) { opts.onDone && opts.onDone(); return; }
+
+    // Expand repeats into a flat play queue.
+    const queue = [];
+    items.forEach((item, idx) => {
+      const reps = Math.max(1, item.repeat || 1);
+      for (let r = 0; r < reps; r++) queue.push({ item, idx });
+    });
+
+    function playNext(qi) {
+      if (stopFlag) return;
+      if (qi >= queue.length) {
+        if (shouldLoop(opts)) { playNext(0); return; }
+        opts.onDone && opts.onDone();
+        return;
+      }
+      const { item, idx } = queue[qi];
+      if (item.tones || item.levels) {
+        setBandOptions({
+          texture: item.tones && item.tones.texture,
+          drums: item.tones && item.tones.drums,
+          melody: item.tones && item.tones.melody,
+          levels: item.levels,
+        });
+      }
+      if (opts.onSectionStart) opts.onSectionStart(idx, item);
+      const total = scheduleBacking(item.chords, {
+        tempo: item.tempo,
+        pattern: item.pattern,
+        voicing: opts.voicing || 'smart',
+        withBass: opts.withBass !== false,
+        melody: item.melody,
+        underMelody: item.under,
+        metronome: false,
+        onBeat: opts.onBeat,
+        onChordStart: opts.onChordStart ? (ci, ch) => opts.onChordStart(idx, ci, ch) : null,
+        onNote: opts.onNote,
+      }, 0);
+      timers.push(setTimeout(() => playNext(qi + 1), total));
+    }
+
+    playNext(0);
+  }
+
+  async function playDrums(opts) {
+    await start();
+    stopPlayback();
+    stopPreview();
+    stopFlag = false;
+    opts = opts || {};
+    const tempo = clamp(opts.tempo || 90, 40, 240);
+    const pattern = opts.pattern || { drums:{kick:[0,8],snare:[4,12],hhClosed:[0,2,4,6,8,10,12,14],hhOpen:[]}, swing:0 };
+    const sixteenthMs = (60000 / tempo) / 4;
+    const beatMs = sixteenthMs * 4;
+    const bars = clamp(parseInt(opts.bars || 4, 10) || 4, 1, 32);
+    const swingAmt = opts.swing != null ? opts.swing : (pattern.swing || 0);
+    const drumHuman = pattern.drum && pattern.drum.human != null
+      ? pattern.drum.human
+      : (bandOptions.drums === 'hazy' || bandOptions.drums === 'distant' ? 18 : 7);
+
+    let startOffset = 0;
+    if (opts.metronome && opts.countIn) {
+      scheduleClick(0, beatMs, 4, opts);
+      startOffset = 4 * beatMs;
+    }
+
+    for (let bar = 0; bar < bars; bar++) {
+      const barStartMs = startOffset + bar * 16 * sixteenthMs;
+      if (opts.onBeat) {
+        for (let b = 0; b < 4; b++) {
+          timers.push(setTimeout(() => { if (!stopFlag) opts.onBeat(b); }, barStartMs + b * beatMs));
+        }
+      }
+      if (opts.metronome) scheduleClick(barStartMs, beatMs, 4, opts);
+      scheduleDrumGroove(pattern.drums, bar, bars, barStartMs, sixteenthMs, swingAmt, drumHuman, pattern.drum);
+    }
+
+    const total = startOffset + bars * 16 * sixteenthMs + 50;
+    timers.push(setTimeout(() => {
+      if (stopFlag) return;
+      if (shouldLoop(opts)) { playDrums(opts); return; }
+      opts.onDone && opts.onDone();
+    }, total));
+  }
+
+  function scheduleMelodyEvents(events, inst, startOffset, beatMs, velocity, opts) {
+    if (!events || !events.length || !inst) return;
+    events.forEach(ev => {
+      const at = startOffset + ev.beatStart * beatMs;
+      const dur = Math.max(0.05, ev.beats * beatMs / 1000 - 0.02);
+      timers.push(setTimeout(() => {
+        if (stopFlag) return;
+        notifyNote(opts, -1, null, ev.name);
+        try { inst.triggerAttackRelease(ev.name, dur, undefined, velocity == null ? 0.8 : velocity); } catch(e){}
+      }, at));
+    });
+  }
+
+  function scheduleDrumGroove(drums, barIdx, totalBars, startMs, stepMs, swingAmt, drumHuman, meta) {
+    const d = varyDrumPattern(drums || {}, barIdx, totalBars, meta);
+    function swungOffset(step) {
+      return swingAmt > 0 && (step % 2 === 1) ? stepMs * swingAmt : 0;
+    }
+    ['kick','snare','hhClosed','hhOpen'].forEach(layer => {
+      (d[layer] || []).forEach(step => {
+        const seed = (barIdx + 1) * 101 + step * 7 + layer.length * 13;
+        const at = startMs + step * stepMs + swungOffset(step) + humanOffset(drumHuman, seed);
+        timers.push(setTimeout(() => {
+          if (stopFlag) return;
+          const ghostSnare = layer === 'snare' && step !== 4 && step !== 12;
+          const baseVel = layer === 'kick' ? 0.82 : ghostSnare ? 0.32 : layer === 'snare' ? 0.68 : layer === 'hhOpen' ? 0.38 : 0.28;
+          const vel = humanVelocity(baseVel, seed + 5, layer === 'kick' ? 0.18 : 0.14);
+          try {
+            if (layer === 'kick')          kickDrum.triggerAttackRelease('C1', '8n', undefined, vel);
+            else if (layer === 'snare')    snareDrum.triggerAttackRelease('16n', undefined, vel);
+            else if (layer === 'hhClosed') hatClosed.triggerAttackRelease('32n', undefined, vel);
+            else if (layer === 'hhOpen')   hatOpen.triggerAttackRelease('8n', undefined, vel);
+          } catch(e){}
+        }, Math.max(0, at)));
+      });
+    });
+  }
+
+  function uniqueSteps(steps) {
+    return Array.from(new Set((steps || []).filter(s => Number.isFinite(s) && s >= 0 && s < 16))).sort((a, b) => a - b);
+  }
+
+  function varyDrumPattern(drums, chordIdx, totalChords, meta) {
+    const out = {
+      kick: uniqueSteps(drums.kick),
+      snare: uniqueSteps(drums.snare),
+      hhClosed: uniqueSteps(drums.hhClosed),
+      hhOpen: uniqueSteps(drums.hhOpen),
+    };
+    if (!out.kick.length && !out.snare.length && !out.hhClosed.length && !out.hhOpen.length) return out;
+
+    const family = meta && meta.family || '';
+    const last = chordIdx === totalChords - 1;
+    if (family === 'Shoegaze') {
+      if (chordIdx % 2 === 1) out.kick.push(15);
+      if (chordIdx % 3 === 2) out.snare.push(11);
+      if (last) out.hhOpen.push(15);
+    } else if (family === 'Post-Punk') {
+      if (chordIdx % 2 === 0) out.kick.push(10);
+      if (chordIdx % 2 === 1) out.hhClosed.push(3, 7, 11, 15);
+      if (last) out.snare.push(14);
+    } else if (family === 'Jangle') {
+      if (chordIdx % 2 === 1) out.kick.push(6);
+      out.hhClosed.push(chordIdx % 2 ? 2 : 10);
+      if (last) out.hhOpen.push(14);
+    } else if (family === 'Dream Pop') {
+      if (chordIdx % 2 === 1) out.kick.push(10);
+      out.hhClosed.push(3, 11);
+      if (last) out.hhOpen.push(15);
+    } else if (family === 'Slowcore') {
+      if (last) out.kick.push(10);
+      if (last && out.snare.length) out.snare.push(14);
+    } else if (family === 'Folk') {
+      if (chordIdx % 2 === 1) out.kick.push(10);
+      if (last) out.snare.push(14);
+    } else if (family === 'Indie Rock') {
+      if (chordIdx % 2 === 0) out.kick.push(6);
+      if (chordIdx % 2 === 1) out.hhOpen.push(15);
+      if (last) out.snare.push(14, 15);
+    } else if (family === 'Electronic') {
+      if (chordIdx % 2 === 1) out.hhClosed.push(1, 9);
+      if (last) out.hhOpen.push(14);
+      if (last) out.kick.push(15);
+    }
+
+    out.kick = uniqueSteps(out.kick);
+    out.snare = uniqueSteps(out.snare);
+    out.hhClosed = uniqueSteps(out.hhClosed);
+    out.hhOpen = uniqueSteps(out.hhOpen);
+    return out;
   }
 
   function schedulesBass(bassType, ch, next, startMs, stepMs) {
@@ -439,19 +918,40 @@
     }
   }
 
-  function schedulesChords(chordType, voicing, startMs, stepMs, swing) {
+  function schedulesChords(chordType, voicing, startMs, stepMs, swing, opts, chordIdx, chord) {
     const beat = stepMs * 4;
-    function hit(notes, atMs, dur) {
+    const top = (n) => voicing.slice(-Math.min(n, voicing.length));
+    const low = (n) => voicing.slice(0, Math.min(n, voicing.length));
+    const noteFrom = (idx) => voicing[((idx % voicing.length) + voicing.length) % voicing.length];
+    function hit(notes, atMs, dur, velocity) {
       timers.push(setTimeout(() => {
         if (stopFlag) return;
-        try { chordInst.triggerAttackRelease(notes, dur || '4n'); } catch(e){}
-      }, startMs + atMs));
+        const list = Array.isArray(notes) ? notes : [notes];
+        list.forEach(n => notifyNote(opts, chordIdx, chord, n));
+        try { chordInst.triggerAttackRelease(notes, dur || '4n', undefined, velocity == null ? 0.72 : velocity); } catch(e){}
+      }, Math.max(0, startMs + atMs)));
+    }
+    function strum(atMs, notes, spreadMs, dur, velocity, reverse) {
+      const list = (reverse ? notes.slice().reverse() : notes.slice());
+      list.forEach((n, j) => {
+        timers.push(setTimeout(() => {
+          if (stopFlag) return;
+          notifyNote(opts, chordIdx, chord, n);
+          try { chordInst.triggerAttackRelease(n, dur || '8n', undefined, humanVelocity(velocity || 0.72, chordIdx * 31 + j, 0.14)); } catch(e){}
+        }, Math.max(0, startMs + atMs + j * spreadMs + humanOffset(8, chordIdx * 41 + j))));
+      });
     }
 
     switch (chordType) {
       case 'block':
         hit(voicing, 0, '2n');
-        hit(voicing, beat * 2, '2n');
+        hit(top(4), beat * 2, '2n', 0.54);
+        break;
+      case 'strum':
+        strum(0, voicing, 24, '2n', 0.78, false);
+        hit(top(3), beat + stepMs * 2, '8n', 0.42);
+        strum(beat * 2, voicing, 20, '2n', 0.68, false);
+        strum(beat * 3 + stepMs * 2, top(4), 16, '8n', 0.46, true);
         break;
       case 'comp':
         hit(voicing, beat * 1 + stepMs * 2 + (swing ? stepMs * 0.4 : 0), '4n');
@@ -464,8 +964,14 @@
         for (let i = 0; i < 4; i++) hit(voicing, i * beat + stepMs * 2, '8n');
         break;
       case 'arp':
-        voicing.forEach((n, i) => hit([n], i * stepMs * 2, '8n'));
-        voicing.forEach((n, i) => hit([n], beat * 2 + i * stepMs * 2, '8n'));
+        [
+          [0, 2, 4, 1, 3, 5, 4, 2],
+          [0, 1, 3, 5, 2, 4, 5, 3],
+          [0, 3, 2, 4, 1, 5, 3, 2],
+          [0, 4, 2, 5, 3, 1, 4, 5],
+        ][chordIdx % 4].forEach((noteIdx, i) => {
+          hit([noteFrom(noteIdx)], i * stepMs * 2, '8n', i % 2 ? 0.62 : 0.76);
+        });
         break;
       case 'sustained':
         hit(voicing, 0, '1n');
@@ -476,6 +982,88 @@
         hit([voicing[0]], beat * 2, '4n');
         hit(voicing.slice(1), beat * 3, '4n');
         break;
+      case 'shoegaze-wash':
+        strum(0, voicing, 36, '1n', 0.72, false);
+        hit(chordIdx % 2 ? top(4) : [...low(1), ...top(3)], beat * 2 + stepMs * 2, '4n', 0.42);
+        hit(top(2), beat * 3 + stepMs, '8n', 0.3);
+        break;
+      case 'tremolo-wash':
+        strum(0, voicing, 30, '2n', 0.66, false);
+        for (let i = 2; i < 16; i += 2) {
+          const notes = i % 4 === 0 ? top(3) : [noteFrom(chordIdx + i)];
+          hit(notes, i * stepMs, '16n', i % 4 === 0 ? 0.42 : 0.32);
+        }
+        break;
+      case 'half-wash':
+        strum(0, voicing, 42, '1n', 0.72, false);
+        hit(chordIdx % 2 ? top(4) : voicing, beat * 3, '4n', 0.45);
+        break;
+      case 'reverse-swell':
+        hit(top(3), beat + stepMs * 2, '8n', 0.28);
+        strum(beat * 2 + stepMs * 2, voicing, 38, '2n', 0.68, true);
+        break;
+      case 'noise-pop-drive':
+        for (let i = 0; i < 8; i++) strum(i * stepMs * 2, voicing, 12, '8n', i % 2 ? 0.46 : 0.64, false);
+        break;
+      case 'glide-strum':
+        strum(0, voicing, 26, '4n', 0.72, false);
+        hit(chordIdx % 2 ? top(4) : voicing.slice(1), beat + stepMs * 2, '8n', 0.48);
+        strum(beat * 2, voicing, 24, '4n', 0.68, false);
+        strum(beat * 3 + stepMs * 2, top(4), 16, '8n', 0.44, true);
+        break;
+      case 'postpunk-chime':
+        hit(voicing.slice(-2), beat * 1, '8n');
+        hit(voicing, beat * 1 + stepMs * 2, '8n');
+        hit(voicing.slice(-2), beat * 3, '8n');
+        hit(voicing, beat * 3 + stepMs * 2, '8n');
+        break;
+      case 'cold-pulse':
+        hit(top(3), 0, '8n', 0.55);
+        hit([noteFrom(chordIdx + 2), noteFrom(chordIdx + 4)], beat, '8n', 0.42);
+        hit(voicing, beat * 2, '8n', 0.58);
+        hit(top(3), beat * 3, '8n', 0.42);
+        break;
+      case 'chorus-chop':
+        [0, 3, 6, 8, 11, 14].forEach((s, i) => hit(i % 2 ? voicing.slice(-2) : voicing, s * stepMs, '16n', i % 2 ? 0.42 : 0.58));
+        break;
+      case 'jangle-arp':
+        [
+          [0, 2, 4, 5, 3, 1, 4, 2, 0, 3, 5, 4, 2, 1, 3, 5],
+          [0, 1, 3, 5, 4, 2, 5, 3, 0, 2, 4, 1, 3, 5, 2, 4],
+          [0, 3, 1, 4, 2, 5, 4, 1, 0, 2, 5, 3, 1, 4, 2, 5],
+        ][chordIdx % 3].forEach((noteIdx, i) => {
+          hit([noteFrom(noteIdx)], i * stepMs, '16n', i % 4 === 0 ? 0.66 : 0.5);
+        });
+        break;
+      case 'dream-pulse':
+        hit(voicing, 0, '4n');
+        hit(chordIdx % 2 ? top(4) : [...low(1), ...top(2)], beat * 1 + stepMs * 2, '8n');
+        hit(voicing, beat * 2, '4n');
+        hit(top(3), beat * 3 + stepMs * 2, '8n', 0.44);
+        break;
+      case 'slowcore-swell':
+        hit(voicing, 0, '1n');
+        break;
+      case 'slow-pick':
+        hit([voicing[0]], 0, '4n', 0.5);
+        hit(chordIdx % 2 ? top(3) : [noteFrom(2), noteFrom(4)], beat + stepMs * 2, '4n', 0.42);
+        hit([noteFrom(chordIdx + 1)], beat * 3, '4n', 0.36);
+        break;
+      case 'folk-pick':
+        hit([voicing[0]], 0, '8n');
+        hit(voicing.slice(1), stepMs * 2, '8n');
+        hit([voicing[0]], beat, '8n');
+        hit(voicing.slice(-2), beat + stepMs * 2, '8n');
+        hit([voicing[0]], beat * 2, '8n');
+        hit(voicing.slice(1), beat * 2 + stepMs * 2, '8n');
+        hit([voicing[0]], beat * 3, '8n');
+        hit(voicing.slice(-2), beat * 3 + stepMs * 2, '8n');
+        break;
+      case 'drone-strum':
+        strum(0, voicing, 24, '2n', 0.64, false);
+        hit(top(2), beat + stepMs * 2, '8n', 0.35);
+        hit([noteFrom(chordIdx + voicing.length - 1)], beat * 3 + stepMs * 2, '8n', 0.35);
+        break;
       default:
         hit(voicing, 0, '2n');
     }
@@ -483,7 +1071,8 @@
 
   async function playWithMelody(chords, melody, opts) {
     await start();
-    stop();
+    stopPlayback();
+    stopPreview();
     stopFlag = false;
     opts = opts || {};
     const tempo = clamp(opts.tempo || 90, 40, 240);
@@ -501,11 +1090,13 @@
     let prevVoicing = null;
     for (let i = 0; i < chords.length; i++) {
       const ch = chords[i];
-      const voicing = voiceChord(ch, voicingMode, prevVoicing);
-      prevVoicing = voicing;
+      const rawVoicing = voiceChord(ch, voicingMode, prevVoicing);
+      const voicing = performanceVoicing(ch, rawVoicing, 6);
+      prevVoicing = rawVoicing;
       timers.push(setTimeout(() => {
         if (stopFlag) return;
         if (opts.onChordStart) opts.onChordStart(i, ch);
+        voicing.forEach(n => notifyNote(opts, i, ch, n));
         try { chordInst.triggerAttackRelease(voicing, (chordDur / 1000) - 0.05); } catch(e){}
         if (opts.withBass !== false) {
           try { bassInst.triggerAttackRelease(rootName(ch, 2), (chordDur / 1000) - 0.05); } catch(e){}
@@ -517,6 +1108,7 @@
       const dur = ev.beats * beatMs / 1000 - 0.02;
       timers.push(setTimeout(() => {
         if (stopFlag) return;
+        notifyNote(opts, -1, null, ev.name);
         try { leadInst.triggerAttackRelease(ev.name, Math.max(0.05, dur)); } catch(e){}
       }, at));
     });
@@ -524,17 +1116,60 @@
     const totalMs = startOffset + chords.length * chordDur + 100;
     timers.push(setTimeout(() => {
       if (stopFlag) return;
-      if (opts.loop) { playWithMelody(chords, melody, opts); return; }
+      if (shouldLoop(opts)) { playWithMelody(chords, melody, opts); return; }
       opts.onDone && opts.onDone();
     }, totalMs));
   }
 
   // Preview a single chord for hover/click feedback
-  async function previewChord(chord, voicingMode) {
+  async function previewChord(chord, voicingMode, opts) {
     await start();
     if (!chordInst) return;
-    const voicing = voiceChord(chord, voicingMode || 'smart');
-    try { chordInst.triggerAttackRelease(voicing, 0.9); } catch(e){}
+    opts = opts || {};
+    stopPreview();
+    const token = previewToken;
+    const rawVoicing = voiceChord(chord, voicingMode || 'smart');
+    const voicing = performanceVoicing(chord, rawVoicing, 6);
+    const style = opts.style || 'strum';
+    const washed = opts.focusStyle === 'shoegaze' || bandOptions.texture === 'wash' || bandOptions.texture === 'fuzz';
+    const dur = washed ? 1.35 : 0.9;
+    const top = voicing.slice(-Math.min(4, voicing.length));
+    const low = voicing.slice(0, Math.min(2, voicing.length));
+
+    function schedule(atMs, fn) {
+      previewTimers.push(setTimeout(() => {
+        if (token !== previewToken) return;
+        fn();
+      }, Math.max(0, atMs)));
+    }
+    function hit(notes, atMs, noteDur, velocity) {
+      schedule(atMs, () => {
+        const list = Array.isArray(notes) ? notes : [notes];
+        list.forEach(n => notifyNote(opts, -1, chord, n));
+        try { chordInst.triggerAttackRelease(notes, noteDur, undefined, velocity == null ? 0.72 : velocity); } catch(e){}
+      });
+    }
+    function strum(notes, atMs, spreadMs, noteDur, velocity, reverse) {
+      const list = reverse ? notes.slice().reverse() : notes.slice();
+      list.forEach((n, j) => {
+        hit(n, atMs + j * spreadMs + humanOffset(6, j + 73), noteDur, humanVelocity(velocity, j + 89, 0.1));
+      });
+    }
+
+    if (style === 'arpeggio') {
+      const seq = [0, 2, 4, 1, 3, 5, 4, 2];
+      const stepMs = washed ? 115 : 82;
+      seq.forEach((noteIdx, j) => {
+        hit(voicing[noteIdx % voicing.length], j * stepMs + humanOffset(8, j + 11), dur * 0.42, humanVelocity(0.76, j + 3, 0.12));
+      });
+    } else if (style === 'strum') {
+      strum(voicing, 0, washed ? 34 : 22, dur, 0.78, false);
+      hit(top, washed ? 520 : 360, 0.32, 0.38);
+      strum(top, washed ? 780 : 560, 15, 0.28, 0.42, true);
+    } else {
+      hit(voicing, 0, dur, 0.78);
+      hit([...low, ...top.slice(-2)], washed ? 580 : 430, 0.42, 0.4);
+    }
   }
 
   // Play single note (used by piano viz)
@@ -545,7 +1180,7 @@
   }
 
   global.Audio = {
-    start, setInstrument, playProgression, playBacking, playWithMelody,
+    start, setInstrument, setBandOptions, playProgression, playDrums, playBacking, playWithMelody, playSong,
     previewChord, previewNote, stop, voiceChord,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

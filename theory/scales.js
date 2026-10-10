@@ -108,9 +108,9 @@
     minor_pent:  ['1:m','1:m7','3:maj','4:m','4:7','5:m','5:7','b7:maj'],
     blues_minor: ['1:7','1:9','4:7','4:9','5:7','5:9','b3:maj','b7:7'],
     blues_major: ['1:7','1:6','4:7','4:9','5:7','6:m'],
-    hirajoshi:   ['1:m','1:msus2','b3:maj','5:sus4'],
+    hirajoshi:   ['1:m','1:sus2','b3:maj','5:sus4'],
     insen:       ['1:m','1:sus4','b3:maj','5:m'],
-    whole_tone:  ['1:aug','1:7#5','1:7b5','3:aug','3:7b5','b5:7b5','#5:aug'],
+    whole_tone:  ['1:aug','1:7s5','1:7b5','3:aug','3:7b5','b5:7b5','#5:aug'],
     dim_half_whole:['1:7b9','1:13b9','b3:7','b5:7','6:7'],
     dim_whole_half:['1:dim','1:dim7','b3:dim7','b5:dim7','6:dim7'],
     augmented:   ['1:aug','1:augMaj7','3:aug','b6:aug','b6:augMaj7'],
@@ -149,16 +149,15 @@
     return Object.keys(SCALES).map(id => ({ id, ...SCALES[id] }));
   }
 
-  // Scale groups for the UI dropdown
+  // Scale groups for the UI dropdown. Every scale in SCALES is reachable;
+  // the focused songwriting palette stays on top.
   const SCALE_GROUPS = [
-    { label:'Common', ids:['major','natural_minor','harmonic_minor','melodic_minor','harmonic_major'] },
-    { label:'Modes of Major', ids:['dorian','phrygian','lydian','mixolydian','locrian'] },
-    { label:'Modes of Melodic Minor', ids:['dorian_b2','lydian_aug','lydian_dom','mixolydian_b6','locrian_nat2','altered'] },
-    { label:'Modes of Harmonic Minor', ids:['phrygian_dom','lydian_s2','ukrainian_dorian'] },
-    { label:'Symmetric', ids:['whole_tone','dim_half_whole','dim_whole_half','augmented'] },
-    { label:'Pentatonic & Blues', ids:['major_pent','minor_pent','blues_minor','blues_major','hirajoshi','insen'] },
-    { label:'Bebop', ids:['bebop_dom','bebop_major','bebop_dorian'] },
-    { label:'World & Exotic', ids:['hungarian_minor','double_harmonic','neapolitan_min','neapolitan_maj','persian','enigmatic','spanish_gypsy','romanian_minor','indian_bhairav'] },
+    { label:'Focused palette', ids:['major','natural_minor','dorian','mixolydian','lydian','harmonic_minor'] },
+    { label:'Open-string / folk colors', ids:['major_pent','minor_pent','blues_minor','blues_major'] },
+    { label:'Darker edge cases', ids:['phrygian','melodic_minor','harmonic_major','locrian'] },
+    { label:'Jazz colors', ids:['lydian_dom','altered','bebop_dom','bebop_major','bebop_dorian','dim_half_whole','dim_whole_half'] },
+    { label:'World & cinematic', ids:['phrygian_dom','spanish_gypsy','hungarian_minor','double_harmonic','whole_tone','hirajoshi','insen','augmented'] },
+    { label:'Rare & exotic', ids:['dorian_b2','lydian_aug','mixolydian_b6','locrian_nat2','lydian_s2','ukrainian_dorian','neapolitan_min','neapolitan_maj','persian','enigmatic','romanian_minor','indian_bhairav'] },
   ];
 
   global.Scales = {

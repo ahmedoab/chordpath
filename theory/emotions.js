@@ -77,6 +77,56 @@
       vibe:'Late-night room; minor 9th lounging in low light.',
       qualities:['m7','m9','m11','m7b5','maj7','13'], degrees:[1,4,5], categories:['diatonic','borrowed','secondary'],
       motion:'falling', tension:'mid', colorTags:['jazzy','noir','velvety','soulful'] },
+
+    { id:'euphoric',    label:'Euphoric / Ecstatic', group:'Bright',
+      vibe:'The lights come up and everything peaks at once.',
+      qualities:['maj','add9','sus4','maj7','6','6/9'], degrees:[0,4,5,3], categories:['diatonic'],
+      motion:'rising', tension:'falling', colorTags:['bright','sunny','triumphant','shimmering'] },
+
+    { id:'hopeful',     label:'Hopeful / Uplifted', group:'Bright',
+      vibe:'The clouds break; something good is finally possible.',
+      qualities:['maj','sus2','add9','maj7','sus4'], degrees:[0,3,4,5], categories:['diatonic'],
+      motion:'rising', tension:'low', colorTags:['bright','open','sunny'] },
+
+    { id:'tender',      label:'Tender / Intimate', group:'Soft',
+      vibe:'A quiet word said close; nothing needs to be loud.',
+      qualities:['maj7','add9','sus2','6','m7'], degrees:[0,3,5], categories:['diatonic'],
+      motion:'falling', tension:'low', colorTags:['lush','soft','velvety','warm'] },
+
+    { id:'romantic',    label:'Romantic / Swooning', group:'Soft',
+      vibe:'The slow dance; the room disappears.',
+      qualities:['maj7','maj9','m7','m9','6','6/9'], degrees:[0,5,3,1], categories:['diatonic','borrowed'],
+      motion:'falling', tension:'low', colorTags:['lush','jazzy','velvety','dreamy'] },
+
+    { id:'serene',      label:'Serene / At Peace', group:'Floating',
+      vibe:'Still water at dawn. Nothing to resolve.',
+      qualities:['maj','sus2','add9','maj7','6/9'], degrees:[0,3,4], categories:['diatonic'],
+      motion:'static', tension:'low', colorTags:['open','bright','dreamy','calm'] },
+
+    { id:'lonely',      label:'Lonely / Hollow', group:'Dark',
+      vibe:'An empty room after everyone has left.',
+      qualities:['m','m7','madd9','sus2','pow'], degrees:[0,5,3], categories:['diatonic'],
+      motion:'static', tension:'low', colorTags:['cool','melancholic','sparse'] },
+
+    { id:'grieving',    label:'Grieving / Heartbroken', group:'Dark',
+      vibe:'The weight that will not lift; sorrow said out loud.',
+      qualities:['m','m7','mMaj7','madd9','m9'], degrees:[0,3,5,4], categories:['diatonic','borrowed'],
+      motion:'falling', tension:'mid', colorTags:['melancholic','noir','haunting'] },
+
+    { id:'defiant',     label:'Defiant / Unbroken', group:'Tense',
+      vibe:'Knocked down, standing back up anyway.',
+      qualities:['m','pow','maj','7','sus4'], degrees:[0,5,4,3], categories:['diatonic','borrowed'],
+      motion:'rising', tension:'mid', colorTags:['driving','gritty','triumphant'] },
+
+    { id:'menacing',    label:'Menacing / Ominous', group:'Tense',
+      vibe:'Something circling closer in the dark.',
+      qualities:['m','pow','dim','dim7','m7b5','mMaj7'], degrees:[0,1,5,6], categories:['borrowed','chromatic','dim-passing'],
+      motion:'chromatic', tension:'high', colorTags:['tense','haunting','noir','dramatic'] },
+
+    { id:'restless',    label:'Restless / Wired', group:'Tense',
+      vibe:'Can\'t sit still; the pulse keeps pushing forward.',
+      qualities:['m7','sus4','7sus4','7','sus2'], degrees:[1,4,0], categories:['diatonic','secondary'],
+      motion:'rising', tension:'rising', colorTags:['driving','urgent','open'] },
   ];
 
   // ── Scoring ──────────────────────────────────────────────────────────────
@@ -138,8 +188,8 @@
     if (e.qualities.includes(tonic.quality)) total += 3.0;
     // Penalty: if tonic quality clashes with the emotion's palette by mode
     //          (e.g. a major tonic for a sad emotion that wants minor)
-    const sadEmotion = ['melancholic','wistful','sensual','mysterious','anxious','tense_foreboding'].includes(e.id);
-    const brightEmotion = ['triumphant','heroic','nostalgic','playful','dreamy','epic'].includes(e.id);
+    const sadEmotion = ['melancholic','wistful','sensual','mysterious','anxious','tense_foreboding','lonely','grieving','menacing'].includes(e.id);
+    const brightEmotion = ['triumphant','heroic','nostalgic','playful','dreamy','epic','euphoric','hopeful','serene','tender','romantic'].includes(e.id);
     const tonicIsMinor = ['m','m7','m9','m11','mMaj7','m6'].includes(tonic.quality);
     const tonicIsMajor = ['maj','maj7','maj9','6','add9','6/9','sus2'].includes(tonic.quality);
     if (sadEmotion   && tonicIsMajor)  total -= 2.5;

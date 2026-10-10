@@ -250,7 +250,7 @@
     }
 
     // Case-fold for quality
-    const isMin = chord.quality === 'm' || chord.quality === 'm7' || chord.quality === 'm9' || chord.quality === 'm11' || chord.quality === 'm13' || chord.quality === 'm6';
+    const isMin = chord.quality === 'm' || chord.quality === 'm7' || chord.quality === 'm9' || chord.quality === 'm11' || chord.quality === 'm13' || chord.quality === 'm6' || chord.quality === 'madd9' || chord.quality === 'mMaj7' || chord.quality === 'mMaj9';
     const isDim = chord.quality === 'dim' || chord.quality === 'dim7' || chord.quality === 'm7b5';
     const isAug = chord.quality === 'aug' || chord.quality === 'augMaj7';
 

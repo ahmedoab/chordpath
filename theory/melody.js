@@ -16,12 +16,14 @@
     return S.noteName(pc, preferFlats) + oct;
   }
 
-  // Deterministic-ish pseudo-random based on a seed
+  // Deterministic pseudo-random in [0, 1) based on a seed.
+  // (The old version masked with & 0xffffffff, which yields a SIGNED 32-bit
+  // value in JS — half of all outputs were negative.)
   function rng(seed) {
     let s = seed >>> 0;
     return function () {
       s = (s * 1664525 + 1013904223) >>> 0;
-      return (s & 0xffffffff) / 0xffffffff;
+      return s / 0x100000000;
     };
   }
 
@@ -143,5 +145,178 @@
     return Math.abs(h) || 1;
   }
 
-  global.Melody = { generateMelody };
+  function moveScaleSteps(midi, scalePcs, steps) {
+    let out = midi;
+    const dir = steps >= 0 ? 1 : -1;
+    for (let i = 0; i < Math.abs(steps); i++) out = stepInScale(out, scalePcs, dir);
+    return out;
+  }
+
+  function clampMidiToRange(midi, range) {
+    if (!range || range.length < 2) return midi;
+    let out = midi;
+    while (out < range[0]) out += 12;
+    while (out > range[1]) out -= 12;
+    if (out < range[0]) out = range[0];
+    if (out > range[1]) out = range[1];
+    return out;
+  }
+
+  function nearestOctave(pc, target, range) {
+    let best = pc + 60, bestDist = Infinity;
+    for (let oct = 2; oct <= 6; oct++) {
+      const midi = pcToMidi(pc, oct);
+      const d = Math.abs(midi - target);
+      if (d < bestDist) { best = midi; bestDist = d; }
+    }
+    return clampMidiToRange(best, range);
+  }
+
+  function anchorPc(chord, anchor) {
+    if (!chord) return 0;
+    if (anchor === 'third') return (chord.rootPc + (chord.intervals.includes(3) ? 3 : 4)) % 12;
+    if (anchor === 'fifth') return (chord.rootPc + 7) % 12;
+    if (anchor === 'seventh') return (chord.rootPc + (chord.intervals.includes(10) ? 10 : 11)) % 12;
+    return chord.rootPc;
+  }
+
+  function makeScalePcs(scaleId, key) {
+    const keyPc = S.noteIndex(key);
+    return S.getIntervals(scaleId).map(iv => (keyPc + iv) % 12);
+  }
+
+  function generatePatternMelody(chords, scaleId, key, pattern, opts) {
+    opts = opts || {};
+    pattern = pattern || {};
+    const beatsPerChord = opts.beatsPerChord || 4;
+    const preferFlats = S.FLAT_KEYS.has(key) || key.includes('b');
+    const scalePcs = makeScalePcs(scaleId, key);
+    const range = pattern.range || [60, 76];
+    const cells = pattern.cells || [0, 1, 2, 3];
+    const durations = pattern.durations || [0.75, 0.75, 0.75, 0.75];
+    const contour = pattern.contour || [0, 1, 0, -1];
+    // A seed makes rerolls give a different (but repeatable) take on the same
+    // pattern: small contour detours, never a different structure.
+    const rand = opts.seed != null ? rng(opts.seed) : null;
+    const out = [];
+    let lastMidi = null;
+
+    chords.forEach((ch, ci) => {
+      const target = lastMidi == null ? (range[0] + range[1]) / 2 : lastMidi;
+      let base = nearestOctave(anchorPc(ch, pattern.anchor || 'third'), target, range);
+
+      if (opts.section === 'chorus' || pattern.id === 'chorus_lift') base = clampMidiToRange(base + 2, range);
+      if (opts.section === 'verse' && ci % 2 === 1) base = clampMidiToRange(base - 1, range);
+      if (opts.section === 'bridge') base = clampMidiToRange(base + (ci % 2 ? -2 : 2), range);
+
+      cells.forEach((cell, j) => {
+        let steps = contour[(j + ci) % contour.length] || 0;
+        if (rand && rand() < 0.28) steps += rand() < 0.5 ? 1 : -1;
+        const midi = clampMidiToRange(moveScaleSteps(base, scalePcs, steps), range);
+        out.push({
+          midi,
+          name: midiToName(midi, preferFlats),
+          beatStart: ci * beatsPerChord + cell,
+          beats: durations[j] || 0.5,
+          layer: 'vocal',
+        });
+        lastMidi = midi;
+      });
+    });
+    return out;
+  }
+
+  function keyPedalPc(key, degree) {
+    const keyPc = S.noteIndex(key);
+    if (degree === 'fifth') return (keyPc + 7) % 12;
+    if (degree === 'third') return (keyPc + 4) % 12;
+    return keyPc;
+  }
+
+  function chordTonePc(chord, tone) {
+    if (tone === 'third') return anchorPc(chord, 'third');
+    if (tone === 'fifth') return anchorPc(chord, 'fifth');
+    if (tone === 'seventh') return anchorPc(chord, 'seventh');
+    return chord.rootPc;
+  }
+
+  function generateUnderMelody(chords, scaleId, key, pattern, opts) {
+    opts = opts || {};
+    pattern = pattern || {};
+    if (!pattern || pattern.type === 'none') return [];
+    const beatsPerChord = opts.beatsPerChord || 4;
+    const preferFlats = S.FLAT_KEYS.has(key) || key.includes('b');
+    const scalePcs = makeScalePcs(scaleId, key);
+    const out = [];
+
+    if (pattern.type === 'drone') {
+      const pc = keyPedalPc(key, pattern.degree || 'root');
+      const midi = pcToMidi(pc, pattern.octave == null ? 5 : pattern.octave);
+      chords.forEach((ch, ci) => {
+        out.push({
+          midi,
+          name: midiToName(midi, preferFlats),
+          beatStart: ci * beatsPerChord,
+          beats: Math.max(0.5, beatsPerChord - 0.15),
+          layer: 'under',
+        });
+      });
+      return out;
+    }
+
+    if (pattern.type === 'chime') {
+      const cells = pattern.cells || [2];
+      chords.forEach((ch, ci) => {
+        const pc = pattern.degree ? keyPedalPc(key, pattern.degree) : chordTonePc(ch, 'root');
+        const midi = pcToMidi(pc, pattern.octave == null ? 5 : pattern.octave);
+        cells.forEach(cell => out.push({
+          midi,
+          name: midiToName(midi, preferFlats),
+          beatStart: ci * beatsPerChord + cell,
+          beats: 0.65,
+          layer: 'under',
+        }));
+      });
+      return out;
+    }
+
+    if (pattern.type === 'chord-tone') {
+      const cells = pattern.cells || [1, 3];
+      chords.forEach((ch, ci) => {
+        const pc = chordTonePc(ch, pattern.tone || 'third');
+        const midi = pcToMidi(pc, pattern.octave == null ? 4 : pattern.octave);
+        cells.forEach((cell, j) => {
+          const shifted = j % 2 ? moveScaleSteps(midi, scalePcs, -1) : midi;
+          out.push({
+            midi: shifted,
+            name: midiToName(shifted, preferFlats),
+            beatStart: ci * beatsPerChord + cell,
+            beats: 0.6,
+            layer: 'under',
+          });
+        });
+      });
+      return out;
+    }
+
+    if (pattern.type === 'counter') {
+      const cells = pattern.cells || [0, 2];
+      chords.forEach((ch, ci) => {
+        const start = pcToMidi(anchorPc(ch, 'fifth'), pattern.octave == null ? 3 : pattern.octave);
+        cells.forEach((cell, j) => {
+          const midi = moveScaleSteps(start, scalePcs, -ci - j);
+          out.push({
+            midi,
+            name: midiToName(midi, preferFlats),
+            beatStart: ci * beatsPerChord + cell,
+            beats: 0.8,
+            layer: 'under',
+          });
+        });
+      });
+    }
+    return out;
+  }
+
+  global.Melody = { generateMelody, generatePatternMelody, generateUnderMelody, rng };
 })(typeof window !== 'undefined' ? window : globalThis);

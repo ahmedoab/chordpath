@@ -7,7 +7,9 @@
 
   const SHORTCUTS = [
     { key:'Space',       desc:'Play / Stop'                  },
+    { key:'D',           desc:'Play drums only'              },
     { key:'B',           desc:'Play with band'               },
+    { key:'X',           desc:'Play selected full combo'      },
     { key:'M',           desc:'Play with melody'             },
     { key:'L',           desc:'Toggle loop'                  },
     { key:'7',           desc:'Toggle 7th chords'            },
@@ -16,58 +18,60 @@
     { key:'C',           desc:'Clear progression'            },
     { key:'1 – 9',       desc:'Add option chord #1–9'        },
     { key:'P',           desc:'Toggle Piano / Guitar view'   },
-    { key:'E',           desc:'Pick best chord for emotion'  },
-    { key:'F',           desc:'Pick best chord for feeling'  },
+    { key:'E / F',       desc:'Add best chord for the section feeling' },
+    { key:'[ / ]',       desc:'Previous / next section'      },
     { key:'T',           desc:'Toggle light / dark theme'    },
     { key:'?',           desc:'Show this shortcut list'      },
-    { key:'/',           desc:'Focus key picker'             },
-    { key:'Esc',         desc:'Close any open dialog'        },
+    { key:'Esc',         desc:'Close any open dialog / stop audio' },
   ];
 
   const PRIMER = [
     {
-      heading: 'The map of harmony',
-      body: `Tonal music in the West has been built for ~400 years on a simple bedrock: a <em>tonic</em> (home), a <em>dominant</em> (away — tense), and chords that build a path between them. The Roman numerals (I, ii, IV, V…) name these stations in any key. Once you can hear the function — "this is a IV" — you can play the same emotion in any of the 12 keys.`,
+      heading: 'Start from the section',
+      body: `Pick whether the progression is an intro, verse, pre-chorus, chorus, bridge, or outro before judging it. The same four chords can be weak as a chorus but perfect as a verse if the vocal stays narrow and the drums leave space.`,
     },
     {
-      heading: 'Diatonic chords',
-      body: `Every major scale gives you seven chords built by stacking thirds on each note: <strong>I, ii, iii, IV, V, vi, vii°</strong>. Three are <em>tonic-functioning</em> (I, iii, vi — they feel restful), two are <em>predominant</em> (ii, IV — they head somewhere), two are <em>dominant</em> (V, vii° — they pull home). The colour comes from what order you string them in.`,
+      heading: 'Shoegaze',
+      body: `Use add9, sus2, maj7, m7, and long rhythm attacks. The vocal should usually move by small steps. The under-melody can be a high drone or one bright chime; it should blur with the guitar instead of competing with the singer.`,
     },
     {
-      heading: 'Cadences — the punctuation marks',
-      body: `Cadences are how musical sentences end. <strong>V → I</strong> is a period. <strong>IV → I</strong> is a soft "amen". <strong>V → vi</strong> is a comma that surprises (the deceptive cadence). Half cadences end on V — a question that demands an answer. Picardy thirds end a minor piece on major — light breaking through.`,
+      heading: 'Cure-style post-punk',
+      body: `Let the bass and drums do more of the hook work. Minor loops, flat VII, flat VI, iv, and a major V in minor all work well. A verse can end unfinished; a chorus should either answer it clearly or lift the vocal range.`,
     },
     {
-      heading: 'Voice leading',
-      body: `When you move between chords, voices should move the smallest possible distance. Common tones stay put. Other notes step by a half- or whole-step where possible. The reason that the I–V–vi–IV progression feels so smooth is that every chord shares at least one note with its neighbour, and the bass moves by a 4th or 2nd, never a leap.`,
+      heading: 'Smiths-style jangle',
+      body: `Use bright arpeggios, melodic bass, borrowed iv, add9 chords, and quick major/minor turns. The vocal can sit close to speech rhythm, then rise at the end of the phrase for emphasis.`,
     },
     {
-      heading: 'Borrowed chords',
-      body: `In major, you can borrow from the parallel minor — most commonly <strong>iv, ♭VI, ♭VII, ♭III</strong>. They give a sudden cinematic colour (think the chorus of "Creep" where the IV becomes iv). Pop song writers use these constantly. In minor, you can borrow back from the major — most famously the major V (with raised 7th, from harmonic minor) and the Picardy third I.`,
+      heading: 'Folk edge',
+      body: `Use open-string sus chords, alternating-bass picking, drones, and simple pentatonic melody. If drums are present, keep them supportive. If the song already feels honest without drums, leave them off.`,
     },
     {
-      heading: 'Secondary dominants',
-      body: `Any chord can be temporarily treated as a tonic. A "V7 of ii" is the dom-7 a fifth above the ii — it tonicizes (briefly makes a tonic of) the ii. Jazz uses these to thread chains: V7/iii → iii7 → V7/ii → ii7 → V7 → I. The whole thing is built out of mini-V→I cells.`,
+      heading: 'Make sections interact',
+      body: `For a verse to chorus move, change one or two layers: denser drums, wider vocal melody, brighter rhythm, or a clearer home chord. For a bridge, remove something or use a borrowed chord color. For an outro, repeat the strongest fragment and let the under-melody fade or drone.`,
+    },
+  ];
+
+  const LAYER_GUIDE = [
+    {
+      heading: 'Rhythm',
+      body: `This is the main guitar or pad motion. Shoegaze wash makes simple chords huge. Jangle arpeggio makes every chord change easier to hear. Slowcore swell makes silence part of the song.`,
     },
     {
-      heading: 'Tritone substitution',
-      body: `Any dominant 7 chord shares its tritone (the 3rd + 7th interval) with the dom-7 a tritone away. So <strong>G7</strong> (G-B-D-F) shares the B-F tritone with <strong>D♭7</strong> (D♭-F-A♭-C♭). Swap them and the bass walks chromatically (D♭ → C) instead of jumping a fourth. This is the move that turns a corny ii–V–I into a sophisticated ii–♭II7–I.`,
+      heading: 'Drums',
+      body: `Drums decide the section energy. Motorik backbeat pushes post-punk. Hazy backbeat supports washed guitars. No drums is valid for intros, bridges, and folk sections.`,
     },
     {
-      heading: 'Modes',
-      body: `Modes are scales that share the same notes but start in a different place. <strong>Dorian</strong> is minor with a major 6th (cool, jazzy — "Eleanor Rigby"). <strong>Mixolydian</strong> is major with a flat 7th (bluesy — "Sweet Home Alabama"). <strong>Lydian</strong> is major with a sharp 4th (dreamy, floating — every space-movie cue). <strong>Phrygian</strong> is minor with a flat 2nd (Spanish, dark — flamenco). Try the same I–IV–V progression in different modes and listen to the change.`,
+      heading: 'Vocal melody',
+      body: `This is the singing line. Stepwise haze melts into the track, low question sounds darker and more spoken, chorus lift makes the hook feel wider, and falling plainchant gives slowcore or folk weight.`,
     },
     {
-      heading: 'Tension and release',
-      body: `Music is patterns of tension and rest. Dissonance creates tension; consonance releases it. The trick isn't to avoid tension — it's to set up an arc. A perfectly diatonic progression has a tension graph that wobbles around 2–4 out of 10. A more dramatic one might pull 6 → 7 → 8 over four chords, then drop to 1 on a resolution. The Tension Arc visual at the top of ChordPath shows you that shape in real time.`,
+      heading: 'Under melody',
+      body: `This is the second melodic layer: drone, chime, shadow thirds, or counter-line. Use one under-melody at a time. If the vocal is busy, choose None or a drone.`,
     },
     {
-      heading: 'Inversions and slash chords',
-      body: `"C/E" means a C major chord with E in the bass. Inversions smooth out the bass line, often letting it move by step instead of by leap. The classic descending bass C → C/B → Am → Am/G → F → F/E gives you the "Pachelbel walk". Bach used this technique constantly; pop ballads still use it today.`,
-    },
-    {
-      heading: 'Where to go next',
-      body: `Try setting an unusual emotion ("Mysterious" or "Sensual") and building a 6–8 chord phrase with the suggestions. Switch on 7ths and watch the same diatonic chords become jazz. Try Lydian or Dorian as your scale on the same progression you already know in major. Above all, play it — the keyboard and guitar visualizers show you the actual notes so you can copy them onto a real instrument.`,
+      heading: 'How to audition',
+      body: `Choose one rhythm, one drum pattern, one vocal melody, and one under-melody, then press Combo. Change only one selector at a time so you can actually hear what changed.`,
     },
   ];
 
@@ -80,47 +84,83 @@
 
   function renderPrimer() {
     const sections = PRIMER.map(p => `<h3>${p.heading}</h3><p>${p.body}</p>`).join('');
-    return `<h2>Theory primer</h2>${sections}
-            <p class="meta" style="margin-top:1rem">Read it once, refer back forever. Every concept here has a knob in the app.</p>`;
+    return `<h2>Writing guide</h2>${sections}
+            <p class="meta" style="margin-top:1rem">Use this as a practical checklist while auditioning combos.</p>`;
+  }
+
+  function renderLayerGuide() {
+    const sections = LAYER_GUIDE.map(p => `<h3>${p.heading}</h3><p>${p.body}</p>`).join('');
+    return `<h2>Layer guide</h2>${sections}
+            <p class="meta" style="margin-top:1rem">The fastest test is to change one selector, press Combo, and compare.</p>`;
   }
 
   // ── Preset progressions library ─────────────────────────────────────────
   // Each preset gives: name, key, scale, chord-specs (root:quality).
   // Click → instantly loaded into the editor.
   const PRESETS = [
-    { name:'I-V-vi-IV (the Axis)',  key:'C', scale:'major', specs:['C:maj','G:maj','A:m','F:maj'] },
-    { name:'50s Doo-wop',           key:'C', scale:'major', specs:['C:maj','A:m','F:maj','G:maj'] },
-    { name:'ii-V-I (jazz)',         key:'C', scale:'major', specs:['D:m7','G:7','C:maj7'] },
-    { name:'12-Bar Blues (in C)',   key:'C', scale:'major', specs:['C:7','C:7','C:7','C:7','F:7','F:7','C:7','C:7','G:7','F:7','C:7','G:7'] },
-    { name:'Andalusian Cadence',    key:'A', scale:'natural_minor', specs:['A:m','G:maj','F:maj','E:maj'] },
-    { name:'Mixolydian Rock',       key:'D', scale:'mixolydian', specs:['D:maj','C:maj','G:maj','D:maj'] },
-    { name:'Pachelbel Canon',       key:'D', scale:'major', specs:['D:maj','A:maj','B:m','F#:m','G:maj','D:maj','G:maj','A:maj'] },
-    { name:'Dorian Vamp',           key:'D', scale:'dorian', specs:['D:m7','G:7'] },
-    { name:'Synthwave Loop',        key:'A', scale:'natural_minor', specs:['A:m','F:maj','C:maj','G:maj'] },
-    { name:'Beatles "Something"',   key:'C', scale:'major', specs:['C:maj','C:maj7','C:7','F:maj'] },
-    { name:'Bossa Wave',            key:'F', scale:'major', specs:['F:maj7','D:m7','G:m7','C:7'] },
-    { name:'Gospel I-V/iii-vi',     key:'C', scale:'major', specs:['C:maj','B:7','E:m','A:7','D:m','G:7','C:maj'] },
-    { name:'Phrygian Lurch',        key:'E', scale:'phrygian', specs:['E:m','F:maj','E:m'] },
-    { name:'Lydian Float',          key:'F', scale:'lydian', specs:['F:maj7','G:maj','F:maj7','G:maj'] },
-    { name:'Backdoor Resolution',   key:'C', scale:'major', specs:['F:m7','Bb:7','C:maj7'] },
-    { name:'House of the Rising',   key:'A', scale:'natural_minor', specs:['A:m','C:maj','D:maj','F:maj','A:m','C:maj','E:maj','E:maj'] },
-    { name:'Africa (verse)',        key:'B', scale:'natural_minor', specs:['F#:m','D:maj','A:maj','E:maj'] },
-    { name:'Smells Like Teen Spirit',key:'F', scale:'natural_minor', specs:['F:m','Bb:maj','Ab:maj','Db:maj'] },
-    { name:'Hotel California',      key:'B', scale:'natural_minor', specs:['B:m','F#:maj','A:maj','E:maj','G:maj','D:maj','E:m','F#:maj'] },
-    { name:'Sus chord pads',        key:'C', scale:'major', specs:['C:sus2','G:sus4','A:m9','F:maj7'] },
+    {
+      name:'Shoegaze verse haze', key:'E', scale:'major',
+      specs:['E:add9','B:sus4','C#:m7','A:maj7'],
+      focusStyle:'shoegaze', sectionRole:'verse', rhythmPattern:'shoegaze_wash', drumPattern:'hazy_backbeat', vocalPattern:'stepwise_haze', underPattern:'high_drone',
+    },
+    {
+      name:'Shoegaze chorus lift', key:'D', scale:'major',
+      specs:['D:maj7','A:add9','B:m7','G:maj7'],
+      focusStyle:'shoegaze', sectionRole:'chorus', rhythmPattern:'glide_strum', drumPattern:'hazy_backbeat', vocalPattern:'chorus_lift', underPattern:'fifth_chime',
+    },
+    {
+      name:'Cure-ish dark verse', key:'A', scale:'natural_minor',
+      specs:['A:m','G:maj','F:maj','E:maj'],
+      focusStyle:'goth_postpunk', sectionRole:'verse', rhythmPattern:'postpunk_chime', drumPattern:'motorik_backbeat', vocalPattern:'low_question', underPattern:'octave_bell',
+    },
+    {
+      name:'Post-punk pre-chorus climb', key:'D', scale:'dorian',
+      specs:['D:m7','G:maj','F:maj','A:sus4'],
+      focusStyle:'goth_postpunk', sectionRole:'prechorus', rhythmPattern:'postpunk_chime', drumPattern:'motorik_backbeat', vocalPattern:'chorus_lift', underPattern:'octave_bell',
+    },
+    {
+      name:'Smiths-ish jangle verse', key:'C', scale:'major',
+      specs:['C:maj7','E:m','F:add9','G:sus4'],
+      focusStyle:'jangle_indie', sectionRole:'verse', rhythmPattern:'jangle_arp', drumPattern:'dry_jangle', vocalPattern:'speech_lift', underPattern:'thirds_shadow',
+    },
+    {
+      name:'Jangle borrowed-iv turn', key:'C', scale:'major',
+      specs:['F:maj','F:m','C:maj7','G:add9'],
+      focusStyle:'jangle_indie', sectionRole:'bridge', rhythmPattern:'jangle_arp', drumPattern:'dry_jangle', vocalPattern:'speech_lift', underPattern:'thirds_shadow',
+    },
+    {
+      name:'Dream-pop floating loop', key:'F', scale:'lydian',
+      specs:['F:maj9','G:add9','C:maj7','F:maj9'],
+      focusStyle:'dream_pop', sectionRole:'chorus', rhythmPattern:'dream_pulse', drumPattern:'soft_sixteenths', vocalPattern:'floating_arch', underPattern:'fifth_chime',
+    },
+    {
+      name:'Slowcore open wound', key:'A', scale:'natural_minor',
+      specs:['A:madd9','F:maj7','C:maj','G:sus4'],
+      focusStyle:'slowcore', sectionRole:'verse', rhythmPattern:'slowcore_swell', drumPattern:'minimal_room', vocalPattern:'falling_plain', underPattern:'pedal_tonic',
+    },
+    {
+      name:'Alt-folk open strings', key:'D', scale:'mixolydian',
+      specs:['D:sus2','C:maj','G:add9','D:maj'],
+      focusStyle:'alt_folk', sectionRole:'verse', rhythmPattern:'folk_pick', drumPattern:'brush_folk', vocalPattern:'folk_lilt', underPattern:'low_counter',
+    },
+    {
+      name:'Minor folk drone', key:'E', scale:'dorian',
+      specs:['E:m','G:maj','A:maj','E:m7'],
+      focusStyle:'alt_folk', sectionRole:'intro', rhythmPattern:'folk_pick', drumPattern:'none', vocalPattern:'folk_lilt', underPattern:'pedal_tonic',
+    },
   ];
 
   function renderPresets() {
     const items = PRESETS.map((p, i) =>
       `<button class="ghost pill" type="button" data-preset="${i}" style="margin: .15rem; text-align: left;">
          <strong>${p.name}</strong>
-         <small style="display:block; color: var(--muted)">${p.key} ${p.scale.replace('_',' ')} · ${p.specs.length} chords</small>
+         <small style="display:block; color: var(--muted)">${p.key} ${p.scale.replace('_',' ')} · ${p.specs.length} chords · ${p.focusStyle ? p.focusStyle.replace('_',' ') : 'custom'}</small>
        </button>`
     ).join('');
-    return `<h2>Famous progressions</h2>
-            <p class="meta" style="margin-bottom: .8rem">One-click load. Substitutes your current work.</p>
+    return `<h2>Starter sounds</h2>
+            <p class="meta" style="margin-bottom: .8rem">One-click scenes with chords, section role, rhythm, drums, vocal shape, and under-melody.</p>
             <div style="display: flex; flex-wrap: wrap; gap: .25rem;">${items}</div>`;
   }
 
-  global.Learn = { SHORTCUTS, PRIMER, PRESETS, renderShortcuts, renderPrimer, renderPresets };
+  global.Learn = { SHORTCUTS, PRIMER, LAYER_GUIDE, PRESETS, renderShortcuts, renderPrimer, renderLayerGuide, renderPresets };
 })(typeof window !== 'undefined' ? window : globalThis);

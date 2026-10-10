@@ -12,10 +12,17 @@
   const C = global.Chords;
   const A = global.Analysis;
 
+  // Roman numerals arrive from Chords.romanNumeral with unicode accidentals
+  // (♭VII); the pattern libraries below are written both ways. Normalise
+  // everything to ASCII so both match.
+  function normRoman(r) {
+    return String(r || '').replace(/♭/g, 'b').replace(/♯/g, '#');
+  }
+
   // Strip extensions from a Roman numeral down to its bare form for matching
   function stripRoman(r) {
     if (!r) return '';
-    return r.replace(/maj7|m7b5|7b9|7s9|7s11|maj9|m9|13|11|9|7|°|ø|\+/g, '');
+    return normRoman(r).replace(/maj7|m7b5|7b9|7s9|7s11|maj9|m9|13|11|9|7|°|ø|\+/g, '');
   }
 
   function romanSequence(progression) {
@@ -131,21 +138,59 @@
     'maj7s11':'lydian shimmer',
   };
 
+  const FOCUSED_NAMED = [
+    { pattern:'I-V-vi-IV', name:'Shoegaze lift',
+      describe:(p) => `${p[0].shortName} to ${p[1].shortName} to ${p[2].shortName} to ${p[3].shortName}: stable, lifted, briefly shadowed, then wide. Use a washed rhythm and a narrow vocal so it blooms instead of sounding like generic pop.` },
+    { pattern:'I-iii-IV-V', name:'Jangle verse climb',
+      describe:(p) => `${p[0].shortName} starts plain, ${p[1].shortName} softens it, then ${p[2].shortName} and ${p[3].shortName} push forward. This likes bright arpeggios and a vocal that rises only at the end of the line.` },
+    { pattern:'IV-iv-I', name:'Borrowed-iv sigh',
+      describe:(p) => `${p[0].shortName} opens the window, ${p[1].shortName} darkens the same spot, and ${p[2].shortName} lands home. This is the cleanest bittersweet guitar-pop turn in the palette.` },
+    { pattern:'IV-iv-I-V', name:'Borrowed-iv bridge turn',
+      describe:(p) => `${p[0].shortName} to ${p[1].shortName} gives the emotional dip, ${p[2].shortName} lands, and ${p[3].shortName} reopens the door. Good for a bridge back into a chorus.` },
+    { pattern:'i-♭VII-♭VI-V', name:'Dark descending verse',
+      describe:(p) => `${p[0].shortName} falls through ${p[1].shortName} and ${p[2].shortName}, then ${p[3].shortName} tightens the phrase. This is the classic dark post-punk shape: bass first, vocal low, drums straight.` },
+    { pattern:'i-♭VII-♭VI-♭VII', name:'Aeolian return loop',
+      describe:(p) => `${p[0].shortName} falls, touches the low point at ${p[2].shortName}, then returns to ${p[3].shortName} without fully resolving. Strong for chorus loops that should keep circling.` },
+    { pattern:'I-♭VII-IV', name:'Open Mixolydian folk loop',
+      describe:(p) => `${p[0].shortName}, ${p[1].shortName}, and ${p[2].shortName} keep the harmony open and unsentimental. Use picking, drones, and a simple vocal cell.` },
+    { pattern:'I-♭VII-IV-I', name:'Open-string return',
+      describe:(p) => `${p[0].shortName} leaves home through ${p[1].shortName} and ${p[2].shortName}, then comes back without a dramatic dominant chord. This feels like folk-rock, not classical closure.` },
+    { pattern:'I-♭VI-♭III-♭VII', name:'Slowcore open wound',
+      describe:(p) => `${p[0].shortName} gets pulled into a darker borrowed loop: ${p[1].shortName}, ${p[2].shortName}, ${p[3].shortName}. Keep the drums sparse and let the vocal fall.` },
+    { pattern:'I-II-V-I', name:'Lydian dream-pop float',
+      describe:(p) => `${p[1].shortName} is the bright floating color here. It makes the loop feel suspended, especially with soft 16ths and a high fifth chime.` },
+    { pattern:'i-♭III-IV-i', name:'Minor folk drone',
+      describe:(p) => `${p[0].shortName} to ${p[1].shortName} opens the mode, ${p[2].shortName} lifts it, and ${p[3].shortName} returns to the drone. Works well without drums.` },
+    { pattern:'i-IV', name:'Dorian two-chord motor',
+      describe:(p) => `${p[0].shortName} to ${p[1].shortName}: minor center, brighter fourth chord. Repetition, bass motion, and drum feel decide whether it becomes post-punk or folk.` },
+  ];
+
+  // Combined library: the arranging-focused entries take priority on ties,
+  // then the broad classics. Patterns are normalised once, up front.
+  const ALL_NAMED = FOCUSED_NAMED.concat(NAMED).map(entry => ({
+    ...entry,
+    pattern: normRoman(entry.pattern),
+    span: normRoman(entry.pattern).split('-').length,
+  }));
+
   // ── Main API ─────────────────────────────────────────────────────────────
   function describe(progression, key, scaleId) {
     if (!progression || progression.length === 0) {
-      return 'Pick a starting chord. Every chord in the scale tells a different story — try the I for stability, the vi for emotion, or the V for tension.';
+      return 'Pick a starting chord, then choose a section and press Combo. Start with home for stability, a minor chord for shadow, or a suspended/add9 chord for haze.';
     }
 
-    // 1. Try named-progression match
+    // 1. Named-progression match — always prefer the LONGEST match, so a
+    //    two-chord pattern never shadows the four-chord shape it sits inside.
     const seq = romanSequence(progression);
-    for (const np of NAMED) {
+    let best = null;
+    for (const np of ALL_NAMED) {
       if (seq === np.pattern || seq.endsWith('-' + np.pattern)) {
-        // Slice progression to the matched length
-        const span = np.pattern.split('-').length;
-        const slice = progression.slice(-span);
-        return `${np.name}: ${np.describe(slice)}`;
+        if (!best || np.span > best.span) best = np;
       }
+    }
+    if (best) {
+      const slice = progression.slice(-best.span);
+      return `${best.name}: ${best.describe(slice)}`;
     }
 
     // 2. Narrative generator
@@ -224,5 +269,5 @@
     return `From ${prev.fullName} to ${last.fullName} — ${intervalName}.`;
   }
 
-  global.Descriptions = { describe, narrativeDescription, QUALITY_COLOR };
+  global.Descriptions = { describe, narrativeDescription, QUALITY_COLOR, ALL_NAMED };
 })(typeof window !== 'undefined' ? window : globalThis);

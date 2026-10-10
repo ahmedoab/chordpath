@@ -223,10 +223,50 @@
     { roman:'i-bVII-bVI-bVII', title:"Losing My Religion",     artist:'R.E.M.',                year:1991, genre:'Alt Rock', section:'chorus' },
   ];
 
-  // ── Lookup index, keyed by roman pattern ──────────────────────────────────
+  const FOCUSED_SONGS = [
+    { roman:'I-V-vi7-IVmaj7', title:'Shoegaze verse haze', artist:'ChordPath style study', genre:'Shoegaze', section:'verse' },
+    { roman:'Imaj7-V-vi7-IVmaj7', title:'Shoegaze chorus lift', artist:'ChordPath style study', genre:'Shoegaze', section:'chorus' },
+    { roman:'I-V-vi-IV', title:'Shoegaze chorus lift', artist:'ChordPath style study', genre:'Shoegaze', section:'chorus' },
+    { roman:'I-V-ii-IV', title:'Bright post-punk lift', artist:'ChordPath style study', genre:'Gothic Post-Punk', section:'chorus' },
+    { roman:'i-♭VII-♭VI-V', title:'Dark descending verse', artist:'ChordPath style study', genre:'Gothic Post-Punk', section:'verse' },
+    { roman:'i-bVII-bVI-V', title:'Dark descending verse', artist:'ChordPath style study', genre:'Gothic Post-Punk', section:'verse' },
+    { roman:'i7-IV-♭III-V', title:'Post-punk pre-chorus climb', artist:'ChordPath style study', genre:'Gothic Post-Punk', section:'pre-chorus' },
+    { roman:'i-♭VII-♭VI-♭VII', title:'Aeolian return loop', artist:'ChordPath style study', genre:'Alt Rock / Folk', section:'chorus' },
+    { roman:'i-bVII-bVI-bVII', title:'Aeolian return loop', artist:'ChordPath style study', genre:'Alt Rock / Folk', section:'chorus' },
+    { roman:'I-vi-IV-V', title:'Jangle pop turnaround', artist:'ChordPath style study', genre:'Jangle Indie', section:'verse' },
+    { roman:'I-iii-IV-V', title:'Speech-lift jangle verse', artist:'ChordPath style study', genre:'Jangle Indie', section:'verse' },
+    { roman:'IV-iv-I-V', title:'Borrowed-iv sigh', artist:'ChordPath style study', genre:'Jangle Indie', section:'bridge' },
+    { roman:'IV-iv-I', title:'Borrowed-iv sigh', artist:'ChordPath style study', genre:'Jangle Indie', section:'bridge' },
+    { roman:'I-iii-IV-iv', title:'Slow borrowed-minor ache', artist:'ChordPath style study', genre:'Slowcore', section:'verse' },
+    { roman:'I-♭VI-♭III-♭VII', title:'Slowcore open wound', artist:'ChordPath style study', genre:'Slowcore', section:'verse' },
+    { roman:'I-♭VII-IV-I', title:'Open Mixolydian folk loop', artist:'ChordPath style study', genre:'Alt-Folk', section:'verse' },
+    { roman:'I-bVII-IV', title:'Open Mixolydian folk loop', artist:'ChordPath style study', genre:'Alt-Folk', section:'verse' },
+    { roman:'i-♭III-IV-i', title:'Minor folk drone', artist:'ChordPath style study', genre:'Alt-Folk', section:'intro' },
+    { roman:'i-IV', title:'Dorian two-chord motor', artist:'ChordPath style study', genre:'Post-Punk / Folk', section:'intro' },
+    { roman:'Imaj7-IVmaj7', title:'Dream-pop two-chord float', artist:'ChordPath style study', genre:'Dream Pop', section:'chorus' },
+    { roman:'I-II-V-I', title:'Lydian dream-pop float', artist:'ChordPath style study', genre:'Dream Pop', section:'chorus' },
+    { roman:'Imaj7-Vmaj7-vi7-IVmaj7', title:'Washed major loop', artist:'ChordPath style study', genre:'Shoegaze', section:'chorus' },
+    { roman:'i-♭VI-♭III-♭VII', title:'Wide minor wall', artist:'ChordPath style study', genre:'Shoegaze / Dream Pop', section:'chorus' },
+    { roman:'i-bVI-bIII-bVII', title:'Wide minor wall', artist:'ChordPath style study', genre:'Shoegaze / Dream Pop', section:'chorus' },
+    { roman:'i-bVI-IV', title:'Minor-to-major lift', artist:'ChordPath style study', genre:'Post-Punk', section:'pre-chorus' },
+  ];
+
+  // Combined catalogue: style studies first (they name the *move*), then the
+  // real famous-song references so "you're playing the chords of X" works.
+  const SONGS_ALL = FOCUSED_SONGS.concat(SONGS);
+
+  // Roman numerals arrive from Chords.romanNumeral with unicode accidentals
+  // (♭VII) while the catalogue is written in ASCII (bVII). Normalise both
+  // sides so flat/sharp-degree patterns actually match.
+  function normRoman(rom) {
+    return String(rom || '').replace(/♭/g, 'b').replace(/♯/g, '#');
+  }
+
+  // ── Lookup index, keyed by normalised roman pattern ───────────────────────
   const SONG_INDEX = {};
-  for (const s of SONGS) {
-    (SONG_INDEX[s.roman] = SONG_INDEX[s.roman] || []).push(s);
+  for (const s of SONGS_ALL) {
+    const key = normRoman(s.roman);
+    (SONG_INDEX[key] = SONG_INDEX[key] || []).push(s);
   }
 
   // Strip extensions in the roman numeral down to its bare form for matching
@@ -238,7 +278,7 @@
 
   function romanSequence(progression, stripExt) {
     return progression.map(c => {
-      let r = c.roman || '';
+      let r = normRoman(c.roman || '');
       if (stripExt) r = stripExtensions(r);
       return r;
     }).filter(Boolean).join('-');
@@ -283,7 +323,7 @@
   }
 
   // Total catalogue size, for debug / pride
-  function size() { return SONGS.length; }
+  function size() { return SONGS_ALL.length; }
 
-  global.Songs = { SONGS, matchSongs, romanSequence, stripExtensions, size };
+  global.Songs = { SONGS: SONGS_ALL, STYLE_STUDIES: FOCUSED_SONGS, CLASSICS: SONGS, matchSongs, romanSequence, stripExtensions, size };
 })(typeof window !== 'undefined' ? window : globalThis);

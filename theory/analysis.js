@@ -43,7 +43,7 @@
       return { type:'plagal', label:'Plagal Cadence', detail:'IV → I — the “amen” move. Gentle, hymn-like.' };
     }
     if (lastIsDominant) {
-      return { type:'half', label:'Half Cadence', detail:'Ends on V — open question, asks for more.' };
+      return { type:'half', label:'Unfinished ending', detail:'Ends on V, so it feels like it needs the next chord or next section.' };
     }
     if (prevIsDominant && lastIsSubmediant) {
       return { type:'deceptive', label:'Deceptive Cadence', detail:'V → vi — the surprise turn. Continues the phrase instead of resting.' };
