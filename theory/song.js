@@ -168,20 +168,148 @@
       });
   }
 
+  // ── Sanitising ────────────────────────────────────────────────────────────
+  // Songs arrive from files, old saves, and share links, so nothing about
+  // their shape can be trusted. Every load path runs through migrate(), which
+  // coerces each field to its type and range here; views can then assume
+  // numbers are numbers and strings are bounded.
+  const LIMITS = {
+    sections: 128, chords: 64, roster: 40,
+    title: 120, name: 60, id: 64, token: 40, notes: 8000,
+    repeat: 16, beatsPerChord: 16,
+  };
+  const SPEC_RE = /^[A-G][#b]?:[A-Za-z0-9_/]{1,12}$/;
+  const NOTE_RE = /^[A-G][#b]?$/;
+  const ID_RE = /^[A-Za-z0-9_-]+$/;
+  // Assigning these from parsed JSON would swap the object's prototype.
+  const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+  function cleanNum(v, lo, hi, fallback) {
+    if (typeof v !== 'number' && typeof v !== 'string') return fallback;
+    const n = typeof v === 'string' && v.trim() === '' ? NaN : Number(v);
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : fallback;
+  }
+  function cleanInt(v, lo, hi, fallback) {
+    const n = cleanNum(v, lo, hi, null);
+    return n === null ? fallback : Math.round(n);
+  }
+  function cleanStr(v, max, fallback) {
+    return typeof v === 'string' ? v.slice(0, max) : fallback;
+  }
+  function cleanId(v, prefix) {
+    return typeof v === 'string' && v.length <= LIMITS.id && ID_RE.test(v) ? v : newId(prefix);
+  }
+  function cleanNote(v, fallback) {
+    return typeof v === 'string' && NOTE_RE.test(v) ? v : fallback;
+  }
+  // Fields the model does not know: keep simple values so a newer save
+  // survives a round trip, drop anything structured.
+  function carryUnknown(target, raw, known) {
+    for (const k of Object.keys(raw)) {
+      if (known.has(k) || UNSAFE_KEYS.has(k) || k.length > LIMITS.token) continue;
+      const v = raw[k];
+      if (v === null || typeof v === 'boolean') target[k] = v;
+      else if (typeof v === 'number' && Number.isFinite(v)) target[k] = v;
+      else if (typeof v === 'string') target[k] = v.slice(0, LIMITS.notes);
+    }
+  }
+
+  const SECTION_KEYS = new Set(Object.keys(createSection({})));
+
+  function sanitizeSection(raw) {
+    raw = raw && typeof raw === 'object' ? raw : {};
+    const d = createSection({});
+    const role = ROLES.includes(raw.role) ? raw.role : d.role;
+    const levels = raw.levels && typeof raw.levels === 'object' ? raw.levels : {};
+    const sec = {
+      id: cleanId(raw.id, 'sec'),
+      role,
+      name: cleanStr(raw.name, LIMITS.name, '') || role.charAt(0).toUpperCase() + role.slice(1),
+      feelingId: typeof raw.feelingId === 'string' ? raw.feelingId.slice(0, LIMITS.token) : null,
+      beatsPerChord: cleanInt(raw.beatsPerChord, 1, LIMITS.beatsPerChord, d.beatsPerChord),
+      repeat: cleanInt(raw.repeat, 1, LIMITS.repeat, d.repeat),
+      progSpecs: (Array.isArray(raw.progSpecs) ? raw.progSpecs : [])
+        .filter(sp => typeof sp === 'string' && SPEC_RE.test(sp))
+        .slice(0, LIMITS.chords),
+      rhythmPattern: cleanStr(raw.rhythmPattern, LIMITS.token, d.rhythmPattern),
+      drumPattern: cleanStr(raw.drumPattern, LIMITS.token, d.drumPattern),
+      vocalPattern: cleanStr(raw.vocalPattern, LIMITS.token, d.vocalPattern),
+      underPattern: cleanStr(raw.underPattern, LIMITS.token, d.underPattern),
+      textureTone: cleanStr(raw.textureTone, LIMITS.token, d.textureTone),
+      drumTone: cleanStr(raw.drumTone, LIMITS.token, d.drumTone),
+      melodyTone: cleanStr(raw.melodyTone, LIMITS.token, d.melodyTone),
+      levels: {
+        chords: cleanInt(levels.chords, 0, 100, 100),
+        bass: cleanInt(levels.bass, 0, 100, 100),
+        drums: cleanInt(levels.drums, 0, 100, 100),
+        melody: cleanInt(levels.melody, 0, 100, 100),
+      },
+      melodySeed: cleanInt(raw.melodySeed, 0, 0x7fffffff, d.melodySeed),
+      underSeed: cleanInt(raw.underSeed, 0, 0x7fffffff, d.underSeed),
+      roster: (Array.isArray(raw.roster) ? raw.roster : [])
+        .filter(id => typeof id === 'string' && id.length > 0 && id.length <= LIMITS.token)
+        .slice(0, LIMITS.roster),
+      keyOverride: cleanNote(raw.keyOverride, null),
+      tempoOverride: raw.tempoOverride == null ? null : cleanInt(raw.tempoOverride, 20, 300, null),
+      notes: cleanStr(raw.notes, LIMITS.notes, ''),
+    };
+    carryUnknown(sec, raw, SECTION_KEYS);
+    return sec;
+  }
+
+  const SONG_KEYS = new Set(Object.keys(createSong({})));
+
+  function sanitizeSong(raw) {
+    raw = raw && typeof raw === 'object' ? raw : {};
+    const d = createSong({});
+    const S = global.Scales;
+    const progress = raw.progress && typeof raw.progress === 'object' ? raw.progress : {};
+    const song = {
+      schemaVersion: SCHEMA_VERSION,
+      id: cleanId(raw.id, 'song'),
+      title: cleanStr(raw.title, LIMITS.title, '') || d.title,
+      genreId: cleanStr(raw.genreId, LIMITS.token, d.genreId),
+      feelingId: cleanStr(raw.feelingId, LIMITS.token, d.feelingId),
+      energy: ['low', 'mid', 'high'].includes(raw.energy) ? raw.energy : d.energy,
+      key: cleanNote(raw.key, d.key),
+      scale: typeof raw.scale === 'string' && (!S || S.SCALES[raw.scale]) ? raw.scale : d.scale,
+      tempo: cleanInt(raw.tempo, 20, 300, d.tempo),
+      sections: (Array.isArray(raw.sections) ? raw.sections : [])
+        .slice(0, LIMITS.sections).map(sanitizeSection),
+      progress: {
+        writing: progress.writing === true,
+        arrangement: progress.arrangement === true,
+        recording: progress.recording === true,
+        mixing: progress.mixing === true,
+      },
+      notes: cleanStr(raw.notes, LIMITS.notes, ''),
+      createdAt: cleanStr(raw.createdAt, LIMITS.token, d.createdAt),
+      updatedAt: cleanStr(raw.updatedAt, LIMITS.token, d.updatedAt),
+    };
+    carryUnknown(song, raw, SONG_KEYS);
+    return song;
+  }
+
   // ── Validation / migration / serialisation ────────────────────────────────
   function validate(raw) {
     const errors = [];
     if (!raw || typeof raw !== 'object') return { ok: false, errors: ['not an object'] };
     if (!raw.title || typeof raw.title !== 'string') errors.push('missing title');
     if (!Array.isArray(raw.sections)) errors.push('missing sections array');
-    else {
+    else if (raw.sections.length > LIMITS.sections) {
+      errors.push(`too many sections (${raw.sections.length}, the limit is ${LIMITS.sections})`);
+    } else {
       raw.sections.forEach((sec, i) => {
         if (!sec || typeof sec !== 'object') { errors.push(`section ${i} not an object`); return; }
         if (!Array.isArray(sec.progSpecs)) errors.push(`section ${i} missing progSpecs`);
-        else if (!sec.progSpecs.every(sp => typeof sp === 'string' && sp.length > 0)) {
+        else if (sec.progSpecs.length > LIMITS.chords) {
+          errors.push(`section ${i} has too many chords (${sec.progSpecs.length}, the limit is ${LIMITS.chords})`);
+        } else if (!sec.progSpecs.every(sp => typeof sp === 'string' && sp.length > 0)) {
           errors.push(`section ${i} has invalid chord specs`);
         }
-        if (sec.role && !ROLES.includes(sec.role)) errors.push(`section ${i} unknown role "${sec.role}"`);
+        if (sec.role && !ROLES.includes(sec.role)) {
+          errors.push(`section ${i} unknown role "${String(sec.role).slice(0, LIMITS.token)}"`);
+        }
       });
     }
     if (raw.key && typeof raw.key !== 'string') errors.push('invalid key');
@@ -194,7 +322,7 @@
   // Bring any raw object (v1 legacy flat save, partial v2, future minor
   // additions) up to the current schema. Always returns a fresh object.
   function migrate(raw) {
-    raw = raw || {};
+    raw = raw && typeof raw === 'object' ? raw : {};
 
     // v1 legacy: the flat single-section shape from the old localStorage
     // format ({key, scale, progSpecs, focusStyle, sectionRole, ...}).
@@ -230,21 +358,12 @@
       });
       autoNameSections(song);
       if (raw.savedAt) song.createdAt = raw.savedAt;
-      return song;
+      return sanitizeSong(song);
     }
 
-    // v2 (possibly partial): overlay onto fresh defaults so new fields appear.
-    const song = createSong({});
-    for (const k of Object.keys(raw)) {
-      if (k === 'sections') continue;
-      song[k] = raw[k];
-    }
-    song.schemaVersion = SCHEMA_VERSION;
-    song.sections = (raw.sections || []).map(sec => createSection(sec));
-    song.progress = Object.assign(
-      { writing: false, arrangement: false, recording: false, mixing: false },
-      raw.progress || {});
-    return song;
+    // v2 (possibly partial): rebuilt field by field onto fresh defaults, so
+    // new fields appear and nothing malformed survives the load.
+    return sanitizeSong(raw);
   }
 
   function serialize(song) {

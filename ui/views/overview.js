@@ -72,7 +72,7 @@
           <input id="ovTitle" class="ov-title" type="text" value="${ui.esc(s.title)}" maxlength="60" aria-label="Song title" />
           <div class="ov-head-meta">
             <span class="chip">${ui.esc(s.key)} ${ui.esc((global.Scales.getScaleMeta(s.scale) || {}).name || s.scale)}</span>
-            <label class="chip chip-input">♩ <input id="ovTempo" type="number" min="40" max="200" value="${s.tempo}" /> BPM</label>
+            <label class="chip chip-input">♩ <input id="ovTempo" type="number" min="40" max="200" value="${ui.esc(s.tempo)}" /> BPM</label>
             ${ui.genreChipHTML(s.genreId)}
             <button type="button" class="chip chip-feeling clickable" id="ovFeeling" title="Change the song's overall feeling">${ui.esc((F().getFeeling(s.feelingId) || {}).name || '')}</button>
           </div>

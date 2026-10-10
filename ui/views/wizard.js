@@ -158,7 +158,7 @@
         <div class="wz-summary">
           <input id="wzTitle" type="text" placeholder="Song title…" maxlength="60" value="${ui.esc(s.title === 'Untitled song' ? '' : s.title)}" />
           <span class="chip">${ui.esc(s.key)} ${ui.esc((global.Scales.getScaleMeta(s.scale) || {}).name || s.scale)}</span>
-          <span class="chip">${s.tempo} BPM</span>
+          <span class="chip">${ui.esc(s.tempo)} BPM</span>
           ${ui.genreChipHTML(s.genreId)}${ui.feelingChipHTML(s.feelingId)}
         </div>
         <div class="wz-sections">${rows}</div>

@@ -319,6 +319,64 @@ check('legacy migration keeps the progression',
 check('legacy migration keeps the title', migrated.title === 'My old sketch');
 check('legacy migration keeps chord level', migrated.sections[0].levels.chords === 90);
 
+// Hostile or corrupt files: everything that loads a song goes through
+// migrate(), so it has to hand back sane types whatever it was given.
+{
+  const hostile = JSON.parse(Song.serialize(s1)).song;
+  hostile.title = 'x'.repeat(100000);
+  hostile.key = '<img src=x onerror=alert(1)>';
+  hostile.scale = 'not_a_scale';
+  hostile.energy = { nested: true };
+  hostile.sections[0].repeat = 1e9;
+  hostile.sections[0].beatsPerChord = -5;
+  hostile.sections[0].tempoOverride = '<img src=x onerror=alert(1)>';
+  hostile.sections[0].keyOverride = '<b>';
+  hostile.sections[0].levels = { chords: 9999, bass: 'loud' };
+  hostile.sections[0].roster = ['drums', { evil: 1 }, 'x'.repeat(5000)];
+  hostile.sections[1].progSpecs = ['C:maj', '<script>:maj', 'G:' + 'z'.repeat(500), 'A:m'];
+  hostile.sections[1].role = 'verse';
+  hostile.sections[1].name = { toString: 'nope' };
+  const clean = Song.migrate(hostile);
+  const sec0 = clean.sections[0], sec1 = clean.sections[1];
+
+  check('migrate caps a runaway repeat count', sec0.repeat >= 1 && sec0.repeat <= 16);
+  check('migrate replaces a nonsense beatsPerChord', sec0.beatsPerChord >= 1 && sec0.beatsPerChord <= 16);
+  check('migrate drops a non-numeric tempo override', sec0.tempoOverride === null);
+  check('sectionTempo is always a finite number',
+    clean.sections.every(sec => Number.isFinite(Song.sectionTempo(clean, sec))));
+  check('migrate drops a key override that is not a note name', sec0.keyOverride === null);
+  check('migrate replaces a song key that is not a note name', clean.key === 'C');
+  check('migrate replaces an unknown scale', clean.scale === 'major');
+  check('migrate replaces a non-string energy', clean.energy === 'mid');
+  check('migrate truncates an oversized title', clean.title.length <= 120);
+  check('migrate clamps mix levels to 0-100',
+    sec0.levels.chords === 100 && sec0.levels.bass === 100 && sec0.levels.drums === 100);
+  check('migrate keeps only string roster ids of sane length',
+    sec0.roster.length === 1 && sec0.roster[0] === 'drums');
+  check('migrate drops malformed chord specs but keeps the good ones',
+    sec1.progSpecs.join(',') === 'C:maj,A:m');
+  check('migrate replaces a non-string section name', typeof sec1.name === 'string' && sec1.name.length > 0);
+  check('a sanitised hostile song still plays back',
+    Song.buildPlayback(clean).every(it => it.repeat <= 16 && it.beatsPerChord <= 16));
+
+  const polluted = JSON.parse('{"title":"p","sections":[],"__proto__":{"polluted":true}}');
+  const safe = Song.migrate(polluted);
+  check('migrate never adopts a __proto__ key from the file',
+    Object.getPrototypeOf(safe) === Object.prototype && safe.polluted === undefined);
+
+  const huge = JSON.parse(Song.serialize(s1));
+  huge.song.sections = Array.from({ length: 5000 }, () => ({ role: 'verse', progSpecs: ['C:maj'] }));
+  check('deserialize rejects a file with thousands of sections',
+    Song.deserialize(JSON.stringify(huge)).song === null);
+  const long = JSON.parse(Song.serialize(s1));
+  long.song.sections[0].progSpecs = Array.from({ length: 5000 }, () => 'C:maj');
+  check('deserialize rejects a section with thousands of chords',
+    Song.deserialize(JSON.stringify(long)).song === null);
+  check('migrate leaves a normal generated song untouched',
+    JSON.stringify(Song.migrate(JSON.parse(Song.serialize(s1)).song).sections) ===
+    JSON.stringify(s1.sections));
+}
+
 // buildPlayback
 const pb = Song.buildPlayback(s1);
 check('buildPlayback yields one item per section', pb.length === s1.sections.length);

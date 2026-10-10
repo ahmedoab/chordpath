@@ -59,7 +59,7 @@
       <section class="ho-section">
         <h4>${ui.esc(sec.name)}
           <span class="chip chip-feeling">${ui.esc(feeling ? feeling.name : '')}</span>
-          <span class="meta">${Song().sectionBars(sec)} bars · ${Song().sectionTempo(s, sec)} BPM · ${ui.esc(rhythm ? rhythm.name : '')} / ${ui.esc(drum ? drum.name : '')}</span>
+          <span class="meta">${ui.esc(Song().sectionBars(sec))} bars · ${ui.esc(Song().sectionTempo(s, sec))} BPM · ${ui.esc(rhythm ? rhythm.name : '')} / ${ui.esc(drum ? drum.name : '')}</span>
         </h4>
         ${feeling ? `<p class="meta">${ui.esc(feeling.tip)}</p>` : ''}
         ${parts}
@@ -136,7 +136,7 @@
           <h2>${ui.esc(s.title)}</h2>
           <p class="meta">
             ${ui.esc(s.key)} ${ui.esc((global.Scales.getScaleMeta(s.scale) || {}).name || s.scale)} ·
-            ${s.tempo} BPM · ${ui.esc(genre ? genre.name : '')} ·
+            ${ui.esc(s.tempo)} BPM · ${ui.esc(genre ? genre.name : '')} ·
             feeling: ${ui.esc(feeling ? feeling.name : '')} ·
             ~${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, '0')}
           </p>

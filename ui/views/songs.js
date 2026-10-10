@@ -50,7 +50,7 @@
         <div class="song-card-chips">${ui.genreChipHTML(p.genreId)}${ui.feelingChipHTML(p.feelingId)}</div>
         <div class="song-card-meta meta">
           ${ui.esc(p.key || '')} ${ui.esc((global.Scales.getScaleMeta(p.scale) || {}).name || p.scale || '')}
-          · ${p.tempo || '?'} BPM · ${p.sectionCount || 0} sections
+          · ${ui.esc(p.tempo || '?')} BPM · ${ui.esc(p.sectionCount || 0)} sections
         </div>
         <div class="song-card-foot">
           <span class="meta">${ui.esc(ui.timeAgo(p.updatedAt))}</span>
