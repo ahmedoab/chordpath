@@ -115,10 +115,9 @@
         });
       } else {
         const total = host.audioSeconds(clip.audioId);
-        const P = global.DawProject;
-        const lasts = P.beatToSeconds(st.project, clip.start + clip.length) - P.beatToSeconds(st.project, clip.start);
+        const span = global.DawProject.clipSpan(st.project, clip);      // seconds of the recording this clip shows
         const buckets = Math.max(8, Math.min(2000, Math.round(w / 2)));
-        const peaks = total > 0 ? host.audioPeaks(clip.audioId, Math.max(8, Math.round(buckets * total / Math.max(0.01, lasts)))) : null;
+        const peaks = total > 0 ? host.audioPeaks(clip.audioId, Math.max(8, Math.round(buckets * total / Math.max(0.01, span)))) : null;
         if (peaks) {
           const first = Math.floor(clip.offset / total * peaks.length);
           const mid = bodyTop + bodyH / 2;

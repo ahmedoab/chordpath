@@ -382,13 +382,19 @@
     else (VOICES[strip.instrument] || VOICES.piano)(this, strip, hz(midi), when, seconds, velocity);
   };
 
+  // The name a stretched copy of a recording is kept under.
+  function fitKey(audioId, rate) { return audioId + '@' + rate; }
+
   // Starts (part of) an audio clip. `lasts` is how long the clip's place on
-  // the timeline is in seconds, `skip` how far into it to begin.
-  Mixer.prototype.playClip = function (trackId, clip, when, skip, lasts) {
+  // the timeline is in seconds, `skip` how far into it to begin, and `rate`
+  // how much its audio is stretched to follow the tempo (1 = not at all).
+  // Until a stretched copy has been made the take plays as it was recorded.
+  Mixer.prototype.playClip = function (trackId, clip, when, skip, lasts, rate) {
     const strip = this.strips.get(trackId);
-    const buffer = this.buffers.get(clip.audioId);
+    const fitted = rate && rate !== 1 ? this.buffers.get(fitKey(clip.audioId, rate)) : null;
+    const buffer = fitted || this.buffers.get(clip.audioId);
     if (!strip || !buffer) return;
-    const offset = clip.offset + skip;
+    const offset = clip.offset * (fitted ? rate : 1) + skip;
     const seconds = Math.min(lasts - skip, buffer.duration - offset);
     if (seconds <= 0.001) return;
     const src = this.ctx.createBufferSource();
@@ -543,6 +549,50 @@
       if (this.mixer) this.mixer.buffers.delete(id);
     });
   };
+
+  // ── Takes that follow the tempo ──────────────────────────────────────────
+  // A take that follows the tempo plays from a stretched copy, kept beside
+  // the recording under the recording's name and the rate. Making one takes
+  // a moment, so it is done ahead of playing.
+  function wantedFits(project) {
+    const wanted = new Map();
+    project.tracks.forEach(track => track.clips.forEach(clip => {
+      const rate = clip.audioId ? P().clipRate(project, clip) : 1;
+      const limits = global.Stretch.LIMITS;
+      if (rate !== 1 && rate >= limits.least && rate <= limits.most) {
+        wanted.set(fitKey(clip.audioId, rate), { key: fitKey(clip.audioId, rate), audioId: clip.audioId, rate });
+      }
+    }));
+    return wanted;
+  }
+
+  // The stretched copies the project needs and does not have yet: [{ key, audioId, rate }].
+  Engine.prototype.unfitted = function () {
+    if (!this.project) return [];
+    return Array.from(wantedFits(this.project).values()).filter(w => !this.audio.has(w.key) && this.audio.has(w.audioId));
+  };
+
+  // Makes them, and lets go of copies no clip uses any more. `between` is
+  // called with progress from 0 to 1 and may return a promise. Resolves to
+  // how many were made.
+  Engine.prototype.prepare = async function (between) {
+    if (!this.project) return 0;
+    const wanted = wantedFits(this.project);
+    this.audio.forEach((a, id) => {
+      if (id.includes('@') && !wanted.has(id)) {
+        this.audio.delete(id);
+        if (this.mixer) this.mixer.buffers.delete(id);
+      }
+    });
+    const todo = this.unfitted();
+    for (let i = 0; i < todo.length; i++) {
+      const raw = this.audio.get(todo[i].audioId);
+      const channels = await global.Stretch.stretch(raw.channels, raw.sampleRate, todo[i].rate,
+        part => (between ? between((i + part) / todo.length) : new Promise(resolve => setTimeout(resolve, 0))));
+      if (this.audio.has(todo[i].audioId)) this.setAudio(todo[i].key, raw.sampleRate, channels);
+    }
+    return todo.length;
+  };
   Engine.prototype.audioPeaks = function (audioId, buckets) {
     const a = this.audio.get(audioId);
     return a ? global.Wav.peaks(a.channels[0], buckets) : null;
@@ -589,7 +639,8 @@
   Engine.prototype.startRunningClips = function (beat, when) {
     this.flat.clips.forEach(c => {
       if (c.beat < beat && c.end > beat) {
-        this.mixer.playClip(c.trackId, c.clip, when, this.secondsBetween(c.beat, beat), this.secondsBetween(c.beat, c.end));
+        this.mixer.playClip(c.trackId, c.clip, when, this.secondsBetween(c.beat, beat), this.secondsBetween(c.beat, c.end),
+          P().clipRate(this.project, c.clip));
       }
     });
   };
@@ -661,7 +712,9 @@
     const clips = this.flat.clips;
     while (this.clipCursor < clips.length && clips[this.clipCursor].beat < to) {
       const c = clips[this.clipCursor++];
-      if (c.beat >= from) this.mixer.playClip(c.trackId, c.clip, this.timeOf(c.beat), 0, this.secondsBetween(c.beat, c.end));
+      if (c.beat >= from) {
+        this.mixer.playClip(c.trackId, c.clip, this.timeOf(c.beat), 0, this.secondsBetween(c.beat, c.end), P().clipRate(this.project, c.clip));
+      }
     }
     if (this.clickOn) {
       P().clicksBetween(this.project, from, to).forEach(click => this.tick(this.timeOf(click.beat), click.accent));
@@ -908,11 +961,19 @@
     const Offline = global.OfflineAudioContext || global.webkitOfflineAudioContext;
     const ctx = new Offline(2, Math.ceil(seconds * sampleRate), sampleRate);
     const mixer = new Mixer(ctx, false);
-    (audio || new Map()).forEach((a, id) => mixer.setAudio(id, a.sampleRate, a.channels));
+    // Takes that follow the tempo are stretched first, unless a copy is already to hand.
+    const sounds = new Map(audio || []);
+    for (const want of wantedFits(source).values()) {
+      const raw = sounds.get(want.audioId);
+      if (raw && !sounds.has(want.key)) {
+        sounds.set(want.key, { sampleRate: raw.sampleRate, channels: await global.Stretch.stretch(raw.channels, raw.sampleRate, want.rate) });
+      }
+    }
+    sounds.forEach((a, id) => mixer.setAudio(id, a.sampleRate, a.channels));
     mixer.sync(source, false);
 
     const flat = flatten(source);
-    flat.clips.forEach(c => mixer.playClip(c.trackId, c.clip, timeOf(c.beat), 0, timeOf(c.end) - timeOf(c.beat)));
+    flat.clips.forEach(c => mixer.playClip(c.trackId, c.clip, timeOf(c.beat), 0, timeOf(c.end) - timeOf(c.beat), P().clipRate(source, c.clip)));
     // Notes are created a couple of seconds at a time while the render is
     // paused, so the graph never holds more than what is currently sounding.
     const CHUNK = 2;

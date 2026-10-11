@@ -32,10 +32,10 @@ function section(name) { console.log('\n== ' + name + ' =='); }
   'theory/arrangements.js', 'theory/emotions.js', 'theory/descriptions.js',
   'theory/songs.js', 'theory/melody.js', 'theory/song.js', 'theory/feelings.js',
   'theory/tabs.js', 'theory/instruments.js', 'theory/midi.js',
-  'theory/parts.js', 'daw/wav.js', 'daw/project.js',
+  'theory/parts.js', 'daw/wav.js', 'daw/project.js', 'daw/stretch.js',
 ].forEach(f => require(path.join(ROOT, f)));
 
-const { Arrangements, Song, Feelings, Chords, Parts, Wav, DawProject } = globalThis;
+const { Arrangements, Song, Feelings, Chords, Parts, Wav, DawProject, Stretch } = globalThis;
 
 // ── WAV files ──────────────────────────────────────────────────────────────
 section('WAV');
@@ -497,6 +497,132 @@ section('Several notes at once');
   const audio = { id: 'c1', start: 0, length: 4, audioId: 'aud_1' };
   eq('a recording has no notes to pick, copy or paste',
     [P.notesWithin(audio, 0, 4, every), P.copyNotes(audio, ['x']), P.pasteNotes(audio, copied, 0), P.removeNotes(audio, ['x'])], [[], null, [], 0]);
+}
+
+// ── Stretching audio without changing its pitch ────────────────────────────
+section('Stretching audio');
+{
+  const SR = 22050;
+  const tone = (hz, seconds, level) => {
+    const out = new Float32Array(Math.round(SR * seconds));
+    for (let i = 0; i < out.length; i++) out[i] = (level || 0.5) * Math.sin(2 * Math.PI * hz * i / SR);
+    return out;
+  };
+  const rms = (d, from, to) => { let s = 0; for (let i = from; i < to; i++) s += d[i] * d[i]; return Math.sqrt(s / (to - from)); };
+  // Pitch, read from how often the wave crosses zero going up, away from the ends.
+  const pitch = d => {
+    const from = Math.round(d.length * 0.1), to = Math.round(d.length * 0.9);
+    let ups = 0;
+    for (let i = from + 1; i < to; i++) if (d[i - 1] < 0 && d[i] >= 0) ups++;
+    return ups / ((to - from) / SR);
+  };
+
+  const a440 = tone(440, 2);
+  const longer = Stretch.fit([a440], SR, 1.25)[0];
+  check(`a quarter longer is a quarter longer (${(longer.length / SR).toFixed(3)} s)`, Math.abs(longer.length / SR - 2.5) < 0.002);
+  check(`and still the same note (${pitch(longer).toFixed(1)} Hz)`, Math.abs(pitch(longer) - 440) < 2);
+  check('at the same loudness', Math.abs(rms(longer, 2000, longer.length - 2000) / rms(a440, 2000, a440.length - 2000) - 1) < 0.05);
+  const shorter = Stretch.fit([a440], SR, 0.8)[0];
+  check(`a fifth shorter likewise (${(shorter.length / SR).toFixed(3)} s, ${pitch(shorter).toFixed(1)} Hz)`,
+    Math.abs(shorter.length / SR - 1.6) < 0.002 && Math.abs(pitch(shorter) - 440) < 2);
+  check('no clicks are added: the wave stays as smooth as a sine', (() => {
+    let worst = 0;
+    for (let i = 1500; i < longer.length - 1500; i++) worst = Math.max(worst, Math.abs(longer[i] - longer[i - 1]));
+    return worst < 0.5 * 2 * Math.PI * 440 / SR * 1.6;      // the steepest a 440 Hz sine of this level can be, with some leave
+  })());
+
+  const same = Stretch.fit([a440], SR, 1)[0];
+  check('asked for the same length, it hands back the same audio', same.length === a440.length && same.every((v, i) => v === a440[i]) && same !== a440);
+
+  const pair = Stretch.fit([tone(330, 2, 0.5), tone(495, 2, 0.25)], SR, 1.2);
+  check('both sides of a stereo take come out the same length', pair.length === 2 && pair[0].length === pair[1].length);
+  check('each still playing its own note at its own level',
+    Math.abs(pitch(pair[0]) - 330) < 2 && Math.abs(pitch(pair[1]) - 495) < 3 && Math.abs(rms(pair[1], 2000, 40000) / rms(pair[0], 2000, 40000) - 0.5) < 0.05);
+
+  // Four short knocks, half a second apart: after stretching they must still be four, and where they belong.
+  const knocks = new Float32Array(SR * 2);
+  [0.25, 0.75, 1.25, 1.75].forEach(at => {
+    const start = Math.round(at * SR);
+    for (let i = 0; i < 400; i++) knocks[start + i] = 0.8 * Math.sin(2 * Math.PI * 1800 * i / SR) * Math.exp(-i / 60);
+  });
+  const found = d => {
+    const hits = [];
+    for (let i = 0; i < d.length; i++) {
+      if (Math.abs(d[i]) > 0.3 && (!hits.length || i - hits[hits.length - 1] > SR * 0.1)) hits.push(i);
+    }
+    return hits.map(i => i / SR);
+  };
+  const slow = found(Stretch.fit([knocks], SR, 1.2)[0]);
+  check(`knocks stay single and in place when slowed (${slow.map(t => t.toFixed(3)).join(', ')})`,
+    slow.length === 4 && slow.every((t, i) => Math.abs(t - [0.3, 0.9, 1.5, 2.1][i]) < 0.03));
+  const quick = found(Stretch.fit([knocks], SR, 0.85)[0]);
+  check(`and when sped up (${quick.map(t => t.toFixed(3)).join(', ')})`,
+    quick.length === 4 && quick.every((t, i) => Math.abs(t - [0.2125, 0.6375, 1.0625, 1.4875][i]) < 0.03));
+
+  check('silence stays silence', Stretch.fit([new Float32Array(SR)], SR, 1.3)[0].every(v => v === 0));
+  check('something too short to stretch is returned whole', Stretch.fit([new Float32Array([0.1, 0.2, 0.3])], SR, 1.5)[0].length >= 3);
+  throws('a nonsense ratio is refused', () => Stretch.fit([a440], SR, 0), /ratio/);
+  throws('so is one beyond what sounds like music', () => Stretch.fit([a440], SR, 9), /ratio/);
+}
+
+// ── Recordings that follow the tempo ───────────────────────────────────────
+section('Recordings that follow the tempo');
+{
+  const P = DawProject;
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  const p = P.createProject({ tempo: 120 });
+  const track = P.addTrack(p, 'audio', {});
+  const clip = P.addClip(track, { start: 4, length: 8, audioId: 'aud_1', offset: 0.1, tempo: 120, stretch: true });
+  eq('a take remembers the tempo it was played at', [clip.tempo, clip.stretch], [120, true]);
+  eq('at that tempo nothing needs stretching', P.clipRate(p, clip), 1);
+  p.tempo = 100;
+  eq('slower, it is stretched by the ratio of the two tempos', P.clipRate(p, clip), 1.2);
+  eq('and still covers the same beats', clip.length, 8);
+  p.tempo = 150;
+  eq('faster, it is squeezed', P.clipRate(p, clip), 0.8);
+  P.setChange(p, 4, { tempo: 96 });
+  eq('the tempo that counts is the one where the clip starts', P.clipRate(p, clip), 1.25);
+  p.changes = [];
+  p.tempo = 100;
+
+  P.setStretch(p, clip, false);                 // its four seconds of audio are 6.67 beats at 100
+  check('switched off, the clip is as long as its audio lasts at the present tempo',
+    !clip.stretch && near(clip.length, 4 * 100 / 60) && P.clipRate(p, clip) === 1);
+  P.setStretch(p, clip, true);
+  check('switched back on, it covers its own eight beats again', clip.stretch && near(clip.length, 8) && P.clipRate(p, clip) === 1.2);
+
+  const loop = P.addClip(track, { start: 0, length: 5, audioId: 'aud_2' });      // five beats at 100: three seconds of audio
+  eq('audio brought in does not follow the tempo until asked', [loop.tempo, loop.stretch, P.clipRate(p, loop)], [0, false, 1]);
+  P.setStretch(p, loop, true);
+  eq('asked to, it is taken to be at the tempo of the song there', [loop.tempo, loop.length, P.clipRate(p, loop)], [100, 5, 1]);
+  P.setClipTempo(p, loop, 80);                  // three seconds at 80 are four beats; played at 100 it runs faster
+  check('told the audio is really at 80, it becomes four beats long and is squeezed to fit', near(loop.length, 4) && P.clipRate(p, loop) === 0.8);
+  P.setClipTempo(p, loop, 9999);
+  eq('a tempo is kept within reason', loop.tempo, 400);
+  const still = P.addClip(track, { start: 20, length: 4, audioId: 'aud_2' });
+  P.setClipTempo(p, still, 90);
+  eq('a clip that is not following the tempo keeps its length when its tempo is noted', [still.tempo, still.length], [90, 4]);
+
+  const q = P.createProject({ tempo: 100 });
+  const t2 = P.addTrack(q, 'audio', {});
+  const whole = P.addClip(t2, { start: 0, length: 8, audioId: 'aud_3', offset: 0.5, tempo: 120, stretch: true });
+  const halves = P.splitClip(q, whole.id, 2);    // two beats in: one second of a recording made at 120
+  check('the second part of a split, stretched clip starts where the first left off in the recording',
+    near(halves[1].offset, 1.5) && halves[1].stretch && halves[1].tempo === 120);
+  const plainClip = P.addClip(t2, { start: 16, length: 8, audioId: 'aud_3', offset: 0 });
+  check('an unstretched one, by the time that has gone by', near(P.splitClip(q, plainClip.id, 18)[1].offset, 1.2));
+  const mapped = P.createProject({ tempo: 120 });
+  P.setChange(mapped, 4, { tempo: 60 });
+  const across = P.addClip(P.addTrack(mapped, 'audio', {}), { start: 0, length: 8, audioId: 'aud_4' });
+  check('even across a tempo change', near(P.splitClip(mapped, across.id, 6)[1].offset, 4));
+  const copy = P.duplicateClip(q, halves[1].id);
+  eq('a copy follows the tempo the same way', [copy.tempo, copy.stretch], [120, true]);
+  const back = P.sanitize(JSON.parse(JSON.stringify(q)));
+  eq('all of it survives saving', back.tracks[0].clips.map(c => [c.tempo, c.stretch]), q.tracks[0].clips.map(c => [c.tempo, c.stretch]));
+  eq('nonsense in a file is set right',
+    P.sanitize({ tempo: 100, tracks: [{ kind: 'audio', clips: [{ start: 0, length: 4, audioId: 'aud_9', tempo: 'fast', stretch: 'yes' }] }] })
+      .tracks[0].clips.map(c => [c.tempo, c.stretch]), [[0, false]]);
+  eq('notes have no tempo of their own', P.clipRate(p, { start: 0, length: 4, notes: [] }), 1);
 }
 
 // ── What may be imported ───────────────────────────────────────────────────

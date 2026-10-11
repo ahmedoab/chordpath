@@ -470,6 +470,31 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     check('the take is described in plain terms', /^Take 1 on Audio 1: \d+(\.\d\d?)? beats$/.test((await page.textContent('#dawClipInfo')).trim()));
     await shot(page, '14-daw-recorded');
 
+    // A take follows the tempo: slow the song and it is stretched to fit, pitch unchanged.
+    await page.click('#dawPanelTabs [data-panel="notes"]');
+    check('a new take is set to keep time, and remembers the tempo it was played at',
+      (await page.isChecked('#dawStretch')) && (await page.inputValue('#dawClipTempo')) === String(st.tempo));
+    const fittedKeys = () => page.evaluate(() => [...DawEngine.get().mixer.buffers.keys()].filter(k => k.includes('@')));
+    await page.fill('#dawTempo', String(st.tempo - 14));
+    await page.locator('#dawTempo').dispatchEvent('change');
+    await page.waitForFunction(() => DawEngine.get().unfitted().length === 0 && [...DawEngine.get().mixer.buffers.keys()].some(k => k.includes('@')),
+      null, { timeout: 30000 }).catch(() => {});
+    const slowedRate = Math.round(st.tempo / (st.tempo - 14) * 10000) / 10000;
+    check('slowing the song stretches the take to fit', (await fittedKeys()).join() === take.audioId + '@' + slowedRate);
+    check('and it still covers the same beats', Math.abs((await state()).tracks[5].clips[0].length - take.length) < 1e-9);
+    check('the panel says what was done', new RegExp('Stretched to ' + Math.round(slowedRate * 100) + '% of its length').test(await page.textContent('#dawStretchNote')));
+    await page.uncheck('#dawStretch');
+    const loose = (await state()).tracks[5].clips[0].length;
+    check('switched off, the take runs at its own speed again: fewer beats at the slower tempo',
+      Math.abs(loose - take.length * (st.tempo - 14) / st.tempo) < 0.01 && /own speed/.test(await page.textContent('#dawStretchNote')));
+    await page.check('#dawStretch');
+    await page.fill('#dawTempo', String(st.tempo));
+    await page.locator('#dawTempo').dispatchEvent('change');
+    await page.waitForFunction(() => ![...DawEngine.get().mixer.buffers.keys()].some(k => k.includes('@')), null, { timeout: 10000 }).catch(() => {});
+    check('back at the tempo it was played at, the stretched copy is let go and the take is as it was',
+      (await fittedKeys()).length === 0 && Math.abs((await state()).tracks[5].clips[0].length - take.length) < 1e-9);
+    await page.click('#dawPanelTabs [data-panel="mixer"]');
+
     // A take cannot grow for ever. The limit is twenty minutes; it is shortened here to keep the test quick.
     await page.evaluate(() => { DawProject.LIMITS.audioSeconds = 1.5; });
     await page.click('#dawRec');

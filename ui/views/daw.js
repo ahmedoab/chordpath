@@ -29,6 +29,7 @@
     input: '', inputs: [],           // the input recording listens to ('' = system default), and those on offer
     clipboard: null,                 // copied notes, as DawProject.copyNotes gives them
     shownStretch: '',                // the tempo and time signature the transport bar is showing
+    fitting: false,                  // takes are being stretched to the tempo right now
   };
 
   function root() { return doc.getElementById('dawRoot'); }
@@ -89,6 +90,7 @@
     S.engine.sync(S.project);
     S.history.push(S.project);
     scheduleSave();
+    fitTakes();
     if (opts.structure) { render(); return; }
     if (!opts.keepPanel) refreshPanel();
     refreshHeads();
@@ -105,6 +107,7 @@
     S.sel.noteIds = [];
     S.engine.sync(S.project);
     scheduleSave();
+    fitTakes();
     render();
   }
 
@@ -175,6 +178,7 @@
       S.engine.sync(S.project);
     }
     render();
+    fitTakes();
     cancelAnimationFrame(S.raf);
     S.raf = requestAnimationFrame(frame);
   }
@@ -499,6 +503,37 @@
     return clip && clip.notes ? clip.notes.filter(n => S.sel.noteIds.includes(n.id)) : [];
   }
 
+  // What following the tempo is doing to a recording, in a sentence.
+  function stretchNote(clip) {
+    if (!clip.stretch) return 'Off: the audio plays at its own speed whatever the tempo, so it will drift if the tempo changes.';
+    const rate = P().clipRate(S.project, clip);
+    if (rate === 1) return 'The song is at this tempo here, so the audio plays exactly as it is.';
+    const gentle = global.Stretch.LIMITS.gentle;
+    const limits = global.Stretch.LIMITS;
+    if (rate < limits.least || rate > limits.most) return 'The tempos are too far apart to stretch between; the audio plays at its own speed.';
+    return `Stretched to ${Math.round(rate * 100)}% of its length to follow ${P().tempoAt(S.project, clip.start)} bpm. The pitch stays the same.` +
+      (rate < gentle[0] || rate > gentle[1] ? ' A change this large can sound grainy.' : '');
+  }
+
+  // Makes the stretched copies that takes following the tempo need. Until one
+  // is ready its take plays as it was recorded.
+  function fitTakes() {
+    if (S.fitting) return;
+    const work = S.engine.unfitted().length > 0;
+    S.fitting = true;
+    if (work) setStatus('Fitting takes to the tempo…');
+    S.engine.prepare(part => {
+      setStatus(`Fitting takes to the tempo… ${Math.round(part * 100)}%`);
+      return new Promise(resolve => setTimeout(resolve, 0));
+    }).catch(() => UI().toast('A take could not be fitted to the tempo; it plays as recorded'))
+      .then(() => {
+        S.fitting = false;
+        if (work) setStatus('');
+        S.dirty = true;
+        if (S.project && S.engine.unfitted().length) fitTakes();       // an edit came in meanwhile
+      });
+  }
+
   // Opens the note editor zoomed so the whole clip fills its width.
   function fitRoll(wrap, clip) {
     const room = wrap.offsetWidth - global.DawRoll.KEYS_W - 44;      // less the keys and a scrollbar's worth
@@ -536,13 +571,25 @@
     if (!clip.notes) {
       S.roll = null; S.rollClipId = null;
       body.innerHTML = `
-        <div class="daw-hint">
+        <div class="daw-hint daw-audio">
           <p>Recorded audio. Drag it on the timeline to move it, drag its right edge to trim it, press S to split it at the playhead.</p>
           <label class="daw-field">Clip gain <input type="range" id="dawGain" min="0" max="2" step="0.01" value="${esc(clip.gain)}" /></label>
+          <label class="daw-check"><input type="checkbox" id="dawStretch"${clip.stretch ? ' checked' : ''} /> Keep in time when the tempo changes</label>
+          <label class="daw-field" title="The tempo the audio was played at. For a loop from elsewhere, type its own tempo.">Played at
+            <input type="number" id="dawClipTempo" min="20" max="400" value="${esc(clip.tempo || P().tempoAt(S.project, clip.start))}" /> bpm</label>
+          <p class="meta" id="dawStretchNote">${esc(stretchNote(clip))}</p>
         </div>`;
       const gain = $('dawGain');
       gain.addEventListener('input', () => { clip.gain = parseFloat(gain.value); S.engine.sync(S.project); S.dirty = true; });
       gain.addEventListener('change', () => commit({ keepPanel: true }));
+      $('dawStretch').addEventListener('change', () => {
+        P().setStretch(S.project, clip, $('dawStretch').checked);
+        commit();
+      });
+      $('dawClipTempo').addEventListener('change', () => {
+        P().setClipTempo(S.project, clip, parseFloat($('dawClipTempo').value));
+        commit();
+      });
       return;
     }
     // Note editor: rebuilt when another clip is chosen, otherwise just resized.
@@ -771,9 +818,11 @@
     } catch (e) {
       UI().toast('The take could not be saved; it will be lost when the app closes');
     }
+    // A take belongs to the beats it was played over, so it follows the tempo from the start.
     const clip = P().addClip(track, {
       start: take.startBeat, length: take.beats, audioId, offset: take.latency,
       name: 'Take ' + (track.clips.length + 1),
+      tempo: P().tempoAt(S.project, take.startBeat), stretch: true,
     });
     if (clip) S.sel = { trackId: track.id, clipId: clip.id, noteIds: [] };
     commit();
@@ -828,6 +877,7 @@
     // As long on the timeline as the audio lasts, at the tempo (or tempos) it will play over.
     const start = snapBeat(S.engine.position());
     const end = P().secondsToBeat(S.project, P().beatToSeconds(S.project, start) + seconds);
+    // Nothing is known about the tempo of a file, so it plays at its own speed until told otherwise.
     const clip = P().addClip(track, { start, length: end - start, audioId, name: track.name });
     S.sel = { trackId: track.id, clipId: clip ? clip.id : null, noteIds: [] };
     commit({ structure: true });
@@ -1098,7 +1148,7 @@
       const tempo = Math.max(40, Math.min(240, Math.round(parseFloat(input.value) || here.tempo)));
       input.value = tempo;
       input.blur();
-      if (tempo !== here.tempo) { P().setChange(S.project, here.beat, { tempo }); commit({ keepPanel: true }); }
+      if (tempo !== here.tempo) { P().setChange(S.project, here.beat, { tempo }); commit(); }   // the panel may describe a take that now needs fitting
     });
     on('dawSnap', 'change', () => {
       S.snap = parseFloat($('dawSnap').value) || 0;

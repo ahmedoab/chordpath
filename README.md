@@ -86,6 +86,10 @@ markers along the top. From there the project is yours to change.
   on "Hear it" to hear yourself through the app while you play (with
   headphones). Or bring in an audio file (WAV, MP3, OGG, FLAC) with Import
   or by dropping it on the window.
+- **Takes keep time.** Change the tempo and a recording is stretched or
+  squeezed to stay on its beats, with its pitch unchanged. For a loop from
+  somewhere else, tell its clip what tempo it is at and tick "Keep in time".
+  It sounds best within about a quarter of the original tempo either way.
 - **Export.** A mixdown as 16- or 24-bit WAV, stems (one file per track),
   or the notes as MIDI.
 
@@ -93,10 +97,12 @@ Edits can be undone, a hundred steps back, and the project saves itself next
 to the song on your computer. "Rebuild" refreshes the note tracks after you
 change the song elsewhere in ChordPath; your recordings stay.
 
-What it does not do: host VST or AU plugins, or stretch recorded audio to a
-new tempo. For those, export the stems or the MIDI and carry on in another
-DAW. Tempo changes happen at bar lines; there are no gradual speed-ups. A
-single take or imported file can be up to twenty minutes long.
+What it does not do: host VST or AU plugins. Those are native programs that
+this app, built on web technology, cannot load; export the stems or the MIDI
+and carry on in a DAW that can. Smaller limits: tempo changes happen at bar
+lines, with no gradual speed-ups; a take is fitted to the tempo where it
+starts, so one that runs across a tempo change drifts after it; and a single
+take or imported file can be up to twenty minutes long.
 
 ## The workflow
 
@@ -165,9 +171,10 @@ Vanilla JS, no build step. Each file is an IIFE exporting one global;
 - `daw/` — the DAW underneath the screen: **wav** (reading and writing WAV),
   **project** (tracks, clips and notes, the editing operations, undo, MIDI
   export), **store** (projects and recordings in the app's local database),
-  **engine** (instruments, mixer, effects, transport, recording and offline
-  bouncing, written on the Web Audio API). `theory/parts.js` turns a song
-  into the notes each track starts with.
+  **stretch** (making a recording longer or shorter without changing its
+  pitch), **engine** (instruments, mixer, effects, transport, recording and
+  offline bouncing, written on the Web Audio API). `theory/parts.js` turns a
+  song into the notes each track starts with.
 - `ui/` — components, viz (piano/fretboard/chord diagrams), nav (hash
   router), and one view module per screen. `ui/daw/` holds the DAW's
   timeline, note editor and mixer.

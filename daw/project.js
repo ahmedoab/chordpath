@@ -86,6 +86,9 @@
       clip.audioId = opts.audioId;
       clip.offset = num(opts.offset, 0, 36000, 0);     // seconds into the recording
       clip.gain = num(opts.gain, 0, 4, 1);
+      const played = Math.round(num(opts.tempo, 0, 400, 0));
+      clip.tempo = played >= 20 ? played : 0;          // the tempo the audio was played at; 0 = not known
+      clip.stretch = opts.stretch === true;            // whether it is stretched to follow the song's tempo
     } else {
       clip.notes = (opts.notes || []).map(createNote);
     }
@@ -348,6 +351,42 @@
     return grid > 0 ? Math.round(beat / grid) * grid : beat;
   }
 
+  // ── Recordings that follow the tempo ─────────────────────────────────────
+  // A clip that follows the tempo keeps its length in beats; its audio is
+  // stretched to fit. The rate is how much longer (above 1) or shorter the
+  // audio has to become: the tempo it was played at over the tempo where the
+  // clip now starts.
+  function clipRate(project, clip) {
+    if (!clip.audioId || !clip.stretch || !(clip.tempo > 0)) return 1;
+    return Math.round(clip.tempo / tempoAt(project, clip.start) * 10000) / 10000;
+  }
+  // Seconds of the recording that the clip covers.
+  function clipSpan(project, clip) {
+    if (clip.stretch && clip.tempo > 0) return clip.length * 60 / clip.tempo;
+    return beatToSeconds(project, clip.start + clip.length) - beatToSeconds(project, clip.start);
+  }
+  // Switches following on or off. The clip goes on covering the same stretch
+  // of the recording, so its length in beats is worked out afresh.
+  function setStretch(project, clip, on) {
+    if (!clip.audioId || clip.stretch === !!on) return;
+    const span = clipSpan(project, clip);
+    if (on) {
+      if (!(clip.tempo > 0)) clip.tempo = tempoAt(project, clip.start);     // taken to have been played at the song's tempo
+      clip.stretch = true;
+      clip.length = Math.max(MIN_LENGTH, span * clip.tempo / 60);
+    } else {
+      clip.stretch = false;
+      clip.length = Math.max(MIN_LENGTH, secondsToBeat(project, beatToSeconds(project, clip.start) + span) - clip.start);
+    }
+  }
+  // Notes the tempo the audio was really played at.
+  function setClipTempo(project, clip, bpm) {
+    if (!clip.audioId) return;
+    const span = clipSpan(project, clip);
+    clip.tempo = Math.round(num(bpm, 20, 400, clip.tempo || tempoAt(project, clip.start)));
+    if (clip.stretch) clip.length = Math.max(MIN_LENGTH, span * clip.tempo / 60);
+  }
+
   // ── What may be imported ─────────────────────────────────────────────────
   const TOO_LONG = 'That file is too long to import. Trim it to under 20 minutes first.';
 
@@ -431,9 +470,14 @@
     if (cut <= 0 || cut >= clip.length || track.clips.length >= LIMITS.clips) return null;
     const right = { id: uid('c'), name: clip.name, start: beat, length: clip.length - cut };
     if (clip.audioId) {
+      // The second part starts as far into the recording as the first part runs.
+      const passed = clip.stretch && clip.tempo > 0 ? cut * 60 / clip.tempo
+        : beatToSeconds(project, beat) - beatToSeconds(project, clip.start);
       right.audioId = clip.audioId;
-      right.offset = clip.offset + cut * 60 / project.tempo;
+      right.offset = clip.offset + passed;
       right.gain = clip.gain;
+      right.tempo = clip.tempo;
+      right.stretch = clip.stretch;
     } else {
       right.notes = clip.notes.filter(n => n.t >= cut).map(n =>
         createNote({ t: n.t - cut, d: Math.min(n.d, right.length - (n.t - cut)), n: n.n, v: n.v }));
@@ -451,7 +495,7 @@
     const src = found.clip;
     const copy = createClip({
       name: src.name, start: src.start + src.length, length: src.length,
-      audioId: src.audioId, offset: src.offset, gain: src.gain,
+      audioId: src.audioId, offset: src.offset, gain: src.gain, tempo: src.tempo, stretch: src.stretch,
       notes: src.notes ? src.notes.map(n => ({ t: n.t, d: n.d, n: n.n, v: n.v })) : undefined,
     });
     found.track.clips.splice(found.track.clips.indexOf(src) + 1, 0, copy);
@@ -628,7 +672,9 @@
         const base = { id: keepId(rc.id, 'c', seen), name: rc.name, start: rc.start, length: rc.length };
         if (track.kind === 'audio') {
           if (typeof rc.audioId !== 'string' || !ID_RE.test(rc.audioId)) return;
-          track.clips.push(createClip(Object.assign(base, { audioId: rc.audioId, offset: rc.offset, gain: rc.gain })));
+          track.clips.push(createClip(Object.assign(base, {
+            audioId: rc.audioId, offset: rc.offset, gain: rc.gain, tempo: rc.tempo, stretch: rc.stretch,
+          })));
         } else {
           const clip = createClip(base);
           clip.notes = (Array.isArray(rc.notes) ? rc.notes : []).filter(validNote).slice(0, LIMITS.notes)
@@ -767,6 +813,7 @@
     findTrack, findClip, endBeat, snap,
     DENOMINATORS, stretches, stretchAt, tempoAt, beatToSeconds, secondsToBeat, positionAt, barsBetween, nearestBar, clipBars, clicksBetween,
     setChange, removeChange,
+    clipRate, clipSpan, setStretch, setClipTempo,
     audioFileProblem, audioLengthProblem,
     addTrack, removeTrack,
     addClip, removeClip, moveClip, resizeClip, splitClip, duplicateClip,

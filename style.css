@@ -1302,6 +1302,11 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .daw-roll { height: 100%; overflow: auto; scrollbar-gutter: stable; background: var(--bg); }
 .daw-hint { padding: 1rem 1.1rem; max-width: 62ch; font-size: 0.84rem; line-height: 1.55; }
 .daw-hint p { margin: 0 0 0.6rem; }
+/* An audio clip's own settings, one to a line. */
+.daw-audio { display: flex; flex-direction: column; align-items: flex-start; gap: 0.45rem; }
+.daw-audio p { margin: 0; }
+.daw-check { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--ink-2); }
+.daw-check input { accent-color: var(--accent); }
 .daw-tab { height: 100%; max-height: none; margin: 0; border: 0; border-radius: 0; font-size: 0.74rem; background: var(--bg); }
 
 /* Mixer: each strip is a name over two columns, the fader with its meter as

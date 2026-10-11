@@ -283,6 +283,47 @@ const { check, section, tempDataDir, launch, crashed, finish, cleanup } = requir
     check(`it plays at the right speed whatever rate it was recorded at (${audio.hz.toFixed(1)} Hz)`, Math.abs(audio.hz - 440) < 3);
     check('a clip whose recording is missing is skipped quietly', audio.missingPeak < 1e-6);
 
+    // A take that follows the tempo: two seconds of audio "played at 120" with a knock one second in.
+    const follows = await page.evaluate(async () => {
+      const T = window.__t;
+      const sr = 44100, data = new Float32Array(sr * 2);
+      for (let i = 0; i < 600; i++) data[sr + i] = 0.8 * Math.sin(2 * Math.PI * 1500 * i / sr) * Math.exp(-i / 90);
+      const audio = new Map([['aud_knock', { sampleRate: sr, channels: [data] }]]);
+      const song = (tempo, stretch) => {
+        const p = DawProject.createProject({ tempo });
+        DawProject.addClip(DawProject.addTrack(p, 'audio', { volume: 0 }), { start: 0, length: 4, audioId: 'aud_knock', tempo: 120, stretch });
+        return p;
+      };
+      const asPlayed = await DawEngine.render(song(120, true), audio, { tail: 0.5 });
+      const slower = await DawEngine.render(song(100, true), audio, { tail: 0.5 });
+      const quicker = await DawEngine.render(song(150, true), audio, { tail: 0.5 });
+      const leftAlone = await DawEngine.render(song(100, false), audio, { tail: 0.5 });
+
+      // Live, the engine says what needs fitting, fits it, and then has the copy to play from.
+      const eng = DawEngine.get();
+      eng.setAudio('aud_knock', sr, [data]);
+      eng.sync(song(100, true));
+      const needed = eng.unfitted().map(n => n.key);
+      const fittedNow = await eng.prepare();
+      const ready = eng.unfitted().length === 0 && eng.mixer.buffers.has('aud_knock@1.2');
+      eng.sync(song(150, true));
+      await eng.prepare();
+      const swapped = eng.mixer.buffers.has('aud_knock@0.8') && !eng.mixer.buffers.has('aud_knock@1.2') && eng.hasAudio('aud_knock');
+      eng.keepOnlyAudio([]);
+      return {
+        asPlayed: T.onset(asPlayed, 0.05), slower: T.onset(slower, 0.05), quicker: T.onset(quicker, 0.05), leftAlone: T.onset(leftAlone, 0.05),
+        needed, fittedNow, ready, swapped, cleared: !eng.mixer.buffers.has('aud_knock@0.8') && !eng.hasAudio('aud_knock'),
+        delay: DawEngine.CHAIN_DELAY,
+      };
+    });
+    check(`at the tempo it was played at, a take plays as it is (knock at ${follows.asPlayed.toFixed(3)} s)`, Math.abs(follows.asPlayed - 1 - follows.delay) < 0.01);
+    check(`slowed from 120 to 100, the knock comes a fifth later (${follows.slower.toFixed(3)} s)`, Math.abs(follows.slower - 1.2 - follows.delay) < 0.03);
+    check(`sped up to 150, a fifth sooner (${follows.quicker.toFixed(3)} s)`, Math.abs(follows.quicker - 0.8 - follows.delay) < 0.03);
+    check('a take that is not following the tempo is left as it was', Math.abs(follows.leftAlone - 1 - follows.delay) < 0.01);
+    check('played live, the engine says which takes need fitting and fits them',
+      follows.needed.join() === 'aud_knock@1.2' && follows.fittedNow === 1 && follows.ready);
+    check('a fitted copy is dropped once the tempo moves on', follows.swapped && follows.cleared);
+
     // ── A whole song ───────────────────────────────────────────────────────
     section('Bouncing a song');
     const bounce = await page.evaluate(async () => {
