@@ -345,6 +345,80 @@ section('MIDI export');
   eq('a track with no notes is left out', (DawProject.toMidi(edited)[10] << 8) | DawProject.toMidi(edited)[11], ntrks - 1);
 }
 
+// ── Working on several notes together ──────────────────────────────────────
+section('Several notes at once');
+{
+  const P = DawProject;
+  const fresh = () => {
+    const clip = P.addClip(P.addTrack(P.createProject({ tempo: 120 }), 'instrument', {}), { start: 0, length: 8 });
+    const made = [[0, 1, 60, 0.8], [1, 1, 64, 0.6], [2, 2, 67, 0.4], [6, 1, 72, 0.9]]
+      .map(([t, d, n, v]) => P.addNote(clip, { t, d, n, v }).id);
+    return { clip, a: made[0], b: made[1], c: made[2], d: made[3] };
+  };
+  const shape = clip => clip.notes.map(n => [n.t, n.d, n.n]);
+  const snapshot = (clip, ids) => clip.notes.filter(n => ids.includes(n.id)).map(n => ({ id: n.id, t: n.t, d: n.d, n: n.n }));
+
+  let w = fresh();
+  const every = Array.from({ length: 128 }, (unused, i) => i);
+  eq('a box picks up every note it touches', P.notesWithin(w.clip, 0.5, 2.5, [60, 64, 67]), [w.a, w.b, w.c]);
+  eq('only on the rows it covers', P.notesWithin(w.clip, 0, 8, [64, 72]), [w.b, w.d]);
+  eq('a note that only ends where the box begins is not in it', P.notesWithin(w.clip, 1, 2, every), [w.b]);
+  eq('a box drawn backwards works the same', P.notesWithin(w.clip, 2.5, 0.5, [67, 64, 60]), [w.a, w.b, w.c]);
+  eq('an empty stretch picks up nothing', P.notesWithin(w.clip, 4, 5, every), []);
+  eq('drum hits count as one step wide however long they ring', [P.notesWithin(w.clip, 0.3, 0.4, every), P.notesWithin(w.clip, 0.3, 0.4, every, 0.25)], [[w.a], []]);
+
+  let base = snapshot(w.clip, [w.a, w.b]);
+  eq('a group moves together in time and pitch', [P.shiftNotes(w.clip, base, 2, 3), shape(w.clip)],
+    [{ dt: 2, dn: 3 }, [[2, 1, 63], [2, 2, 67], [3, 1, 67], [6, 1, 72]]]);
+  eq('moving again from the same starting point does not add up', [P.shiftNotes(w.clip, base, 1, 0).dt, shape(w.clip)[0], shape(w.clip)[1]],
+    [1, [1, 1, 60], [2, 1, 64]]);
+  eq('the group stops at the start of the clip as one', [P.shiftNotes(w.clip, base, -5, 0).dt, shape(w.clip).slice(0, 2)],
+    [0, [[0, 1, 60], [1, 1, 64]]]);
+  w = fresh();
+  base = snapshot(w.clip, [w.c, w.d]);
+  eq('and at the end, keeping its shape', [P.shiftNotes(w.clip, base, 9, 0, { step: 0.25 }).dt, shape(w.clip).slice(2)],
+    [1.75, [[3.75, 2, 67], [7.75, 1, 72]]]);
+  w = fresh();
+  base = snapshot(w.clip, [w.a, w.d]);
+  eq('pitch is held inside the range given', [P.shiftNotes(w.clip, base, 0, 40, { low: 24, high: 96 }).dn, shape(w.clip)[0][2], shape(w.clip)[3][2]],
+    [24, 84, 96]);
+  eq('downwards too', P.shiftNotes(w.clip, base, 0, -99, { low: 24, high: 96 }).dn, -36);
+
+  w = fresh();
+  base = snapshot(w.clip, [w.a, w.c]);
+  P.stretchNotes(w.clip, base, 0.5, 0.25);
+  eq('a group lengthens together', shape(w.clip).map(n => n[1]), [1.5, 1, 2.5, 1]);
+  P.stretchNotes(w.clip, base, -5, 0.25);
+  eq('and shortens no further than one step', shape(w.clip).map(n => n[1]), [0.25, 1, 0.25, 1]);
+  P.stretchNotes(w.clip, snapshot(w.clip, [w.d]), 9, 0.25);
+  eq('nor past the end of the clip', shape(w.clip)[3], [6, 2, 72]);
+
+  w = fresh();
+  P.setVelocity(w.clip, [w.a, w.b], 0.33);
+  eq('velocity is set on all of them', w.clip.notes.map(n => n.v), [0.33, 0.33, 0.4, 0.9]);
+  P.transpose(w.clip, 12, [w.a]);
+  P.quantize(w.clip, 4, [w.c]);
+  eq('transpose and quantize can be kept to the chosen notes', shape(w.clip), [[0, 1, 72], [1, 1, 64], [4, 2, 67], [6, 1, 72]]);
+  P.transpose(w.clip, -12);
+  eq('or, with none chosen, take the whole clip', shape(w.clip).map(n => n[2]), [60, 52, 55, 60]);
+
+  w = fresh();
+  const copied = P.copyNotes(w.clip, [w.b, w.c]);
+  eq('a copy keeps the notes relative to the first of them', copied, { span: 3, notes: [{ t: 0, d: 1, n: 64, v: 0.6 }, { t: 1, d: 2, n: 67, v: 0.4 }] });
+  eq('copying nothing gives nothing', P.copyNotes(w.clip, []), null);
+  const pasted = P.pasteNotes(w.clip, copied, 4);
+  eq('paste puts them down where asked', [pasted.length, shape(w.clip)], [2, [[0, 1, 60], [1, 1, 64], [2, 2, 67], [4, 1, 64], [5, 2, 67], [6, 1, 72]]]);
+  check('and hands back the new notes, not the old ones', pasted.every(id => ![w.a, w.b, w.c, w.d].includes(id)) && new Set(pasted).size === 2);
+  const late = P.pasteNotes(w.clip, copied, 6.5);
+  eq('what would start after the clip is left out, what overhangs is trimmed',
+    [late.length, w.clip.notes.filter(n => late.includes(n.id)).map(n => [n.t, n.d, n.n])], [2, [[6.5, 1, 64], [7.5, 0.5, 67]]]);
+  eq('pasting past the end adds nothing', P.pasteNotes(w.clip, copied, 8).length, 0);
+  eq('several notes are removed in one go', [P.removeNotes(w.clip, pasted.concat(late, ['no-such-note'])), w.clip.notes.length], [4, 4]);
+  const audio = { id: 'c1', start: 0, length: 4, audioId: 'aud_1' };
+  eq('a recording has no notes to pick, copy or paste',
+    [P.notesWithin(audio, 0, 4, every), P.copyNotes(audio, ['x']), P.pasteNotes(audio, copied, 0), P.removeNotes(audio, ['x'])], [[], null, [], 0]);
+}
+
 // ── What may be imported ───────────────────────────────────────────────────
 section('Audio file limits');
 {

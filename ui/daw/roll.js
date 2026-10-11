@@ -6,6 +6,9 @@
  * Click an empty cell to add a note (drag to set its length), drag a note to
  * move it or its right edge to resize it, right-click or double-click to
  * delete. On the drum grid a click simply toggles a hit.
+ *
+ * Several notes: hold Shift and drag a box over them, or Shift-click notes
+ * one by one. Dragging any selected note then moves or resizes them all.
  */
 (function (global) {
   'use strict';
@@ -120,12 +123,27 @@
         g.roundRect(x, y, w, rowH - 2, 2);
         g.fill();
         g.globalAlpha = 1;
-        if (n.id === st.sel.noteId) {
+        if (st.sel.noteIds.includes(n.id)) {
           g.lineWidth = 1.5;
           g.strokeStyle = c.ink;
           g.stroke();
         }
       });
+
+      // The box being dragged out to select notes.
+      if (drag && drag.kind === 'box') {
+        const x = KEYS_W + Math.min(drag.beat, drag.toBeat) * ppb;
+        const y = RULER_H + Math.min(drag.index, drag.toIndex) * rowH;
+        const w = Math.abs(drag.toBeat - drag.beat) * ppb;
+        const h = (Math.abs(drag.toIndex - drag.index) + 1) * rowH;
+        g.globalAlpha = 0.14;
+        g.fillStyle = c.accent;
+        g.fillRect(x, y, w, h);
+        g.globalAlpha = 1;
+        g.lineWidth = 1;
+        g.strokeStyle = c.accent;
+        g.strokeRect(x + 0.5, y + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
+      }
 
       // Playhead (clip-relative).
       const rel = st.playhead - clip.start;
@@ -185,7 +203,17 @@
           if (n.n === row.note && beat >= n.t && beat < n.t + Math.max(reach || n.d, 3 / L.ppb)) { note = n; break; }
         }
       }
-      return { L, x, y, row, beat, overKeys, note };
+      return { L, x, y, index, row, beat, overKeys, note };
+    }
+
+    // Where the notes of a group are when a drag on them begins.
+    function hold(kind, clip, ids, note, grab, moved) {
+      return {
+        kind, grab, moved, dt: 0, dn: 0, dd: 0,
+        anchor: { id: note.id, t: note.t, d: note.d, n: note.n },
+        base: clip.notes.filter(n => ids.includes(n.id)).map(n => ({ id: n.id, t: n.t, d: n.d, n: n.n })),
+        alone: ids.length > 1 ? note.id : null,          // a plain click on one of several selects just that one
+      };
     }
 
     canvas.addEventListener('pointerdown', e => {
@@ -196,18 +224,34 @@
       if (!h.row || h.y - h.L.st.scroll.top < RULER_H) return;
       if (h.overKeys) { host.actions.audition(h.row.note); return; }
       canvas.setPointerCapture(e.pointerId);
+      const picked = h.L.st.sel.noteIds;
+      const more = e.ctrlKey || e.metaKey;
+
+      // With Shift (or Ctrl) held nothing is added or moved: notes are chosen.
+      if (e.shiftKey || more) {
+        if (h.note) {
+          host.actions.selectNotes(picked.includes(h.note.id) ? picked.filter(id => id !== h.note.id) : picked.concat(h.note.id));
+        } else {
+          const keep = e.shiftKey && more ? picked.slice() : [];
+          drag = { kind: 'box', beat: h.beat, index: h.index, toBeat: h.beat, toIndex: h.index, keep };
+          host.actions.selectNotes(keep);
+        }
+        host.actions.redraw();
+        return;
+      }
 
       if (h.note) {
         if (h.L.drums) {
           P.removeNote(clip, h.note.id);
-          host.actions.selectNote(null);
+          host.actions.selectNotes(picked.filter(id => id !== h.note.id));
           host.actions.commit();
           return;
         }
-        host.actions.selectNote(h.note.id);
+        const group = picked.includes(h.note.id) ? picked : [h.note.id];
+        host.actions.selectNotes(group);
         host.actions.audition(h.note.n);
         const edge = KEYS_W + (h.note.t + h.note.d) * h.L.ppb - h.x <= 6;
-        drag = { kind: edge ? 'resize' : 'move', note: h.note, grab: h.beat - h.note.t, moved: false };
+        drag = hold(edge ? 'resize' : 'move', clip, group, h.note, h.beat - h.note.t, false);
         host.actions.redraw();
         return;
       }
@@ -222,9 +266,9 @@
       }
       const made = P.addNote(clip, { t, d: Math.min(lastLength, clip.length - t), n: h.row.note, v: 0.8 });
       if (!made) return;
-      host.actions.selectNote(made.id);
+      host.actions.selectNotes([made.id]);
       host.actions.audition(made.n);
-      drag = { kind: 'resize', note: made, grab: 0, moved: true };
+      drag = hold('resize', clip, [made.id], made, 0, true);
       host.actions.redraw();
     });
 
@@ -239,20 +283,29 @@
       const P = global.DawProject;
       const clip = h.L.st.clip;
       const snap = b => (h.L.st.snap > 0 ? Math.round(b / h.L.st.snap) * h.L.st.snap : b);
-      if (drag.kind === 'move') {
-        const t = Math.max(0, Math.min(clip.length - h.L.step, snap(h.beat - drag.grab)));
-        const n = h.row ? h.row.note : drag.note.n;
-        if (t !== drag.note.t || n !== drag.note.n) {
-          const pitchChanged = n !== drag.note.n;
-          P.updateNote(clip, drag.note.id, { t, n });
-          if (pitchChanged) host.actions.audition(n);
+      if (drag.kind === 'box') {
+        drag.toBeat = h.beat;
+        drag.toIndex = Math.max(0, Math.min(h.L.list.length - 1, h.index));
+        const rows = h.L.list.slice(Math.min(drag.index, drag.toIndex), Math.max(drag.index, drag.toIndex) + 1).map(r => r.note);
+        const inside = P.notesWithin(clip, drag.beat, drag.toBeat, rows, h.L.drums ? h.L.step : 0);
+        host.actions.selectNotes(drag.keep.concat(inside.filter(id => !drag.keep.includes(id))));
+        host.actions.redraw();
+      } else if (drag.kind === 'move') {
+        const pitch = h.row ? h.row.note : drag.anchor.n + drag.dn;
+        const went = P.shiftNotes(clip, drag.base, snap(h.beat - drag.grab) - drag.anchor.t, pitch - drag.anchor.n,
+          { low: LOW, high: HIGH, step: h.L.step });
+        if (went.dt !== drag.dt || went.dn !== drag.dn) {
+          if (went.dn !== drag.dn) host.actions.audition(drag.anchor.n + went.dn);
+          drag.dt = went.dt;
+          drag.dn = went.dn;
           drag.moved = true;
           host.actions.redraw();
         }
       } else {
-        const d = Math.max(h.L.step, Math.min(clip.length, snap(h.beat)) - drag.note.t);
-        if (d !== drag.note.d) {
-          P.updateNote(clip, drag.note.id, { d });
+        const d = Math.max(h.L.step, Math.min(clip.length, snap(h.beat)) - drag.anchor.t);
+        if (d - drag.anchor.d !== drag.dd) {
+          drag.dd = d - drag.anchor.d;
+          P.stretchNotes(clip, drag.base, drag.dd, h.L.step);
           lastLength = d;
           drag.moved = true;
           host.actions.redraw();
@@ -262,9 +315,11 @@
 
     function release() {
       if (!drag) return;
-      const moved = drag.moved;
+      const was = drag;
       drag = null;
-      if (moved) host.actions.commit();
+      if (was.kind === 'box') host.actions.redraw();
+      else if (was.moved) host.actions.commit();
+      else if (was.alone) { host.actions.selectNotes([was.alone]); host.actions.redraw(); }
     }
     canvas.addEventListener('pointerup', release);
     canvas.addEventListener('pointercancel', release);
@@ -273,7 +328,7 @@
       const h = at(e);
       if (!h.note) return false;
       global.DawProject.removeNote(h.L.st.clip, h.note.id);
-      host.actions.selectNote(null);
+      host.actions.selectNotes(h.L.st.sel.noteIds.filter(id => id !== h.note.id));
       host.actions.commit();
       return true;
     }
@@ -283,5 +338,5 @@
     return { draw, resize, focusY };
   }
 
-  global.DawRoll = { create, KEYS_W, RULER_H, ROW_H };
+  global.DawRoll = { create, KEYS_W, RULER_H, ROW_H, LOW, HIGH };
 })(typeof window !== 'undefined' ? window : globalThis);

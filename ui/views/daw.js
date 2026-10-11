@@ -19,7 +19,7 @@
 
   const S = {
     active: false, songId: null, project: null, history: null, engine: null,
-    sel: { trackId: null, clipId: null, noteId: null },
+    sel: { trackId: null, clipId: null, noteIds: [] },
     pxPerBeat: 22, scrollBeat: 0, snap: 0.25, rollPx: 56,
     panel: 'notes', click: false, status: '',
     arrange: null, roll: null, rollClipId: null, rollFitId: null,
@@ -27,6 +27,7 @@
     theme: '', observer: null, wired: false,
     panelH: 0,                       // editor panel height in px; 0 = the default share of the window
     input: '', inputs: [],           // the input recording listens to ('' = system default), and those on offer
+    clipboard: null,                 // copied notes, as DawProject.copyNotes gives them
   };
 
   function root() { return doc.getElementById('dawRoot'); }
@@ -92,7 +93,7 @@
     S.project = P().sanitize(state);
     if (!P().findTrack(S.project, S.sel.trackId)) S.sel.trackId = S.project.tracks[0] ? S.project.tracks[0].id : null;
     if (S.sel.clipId && !P().findClip(S.project, S.sel.clipId)) S.sel.clipId = null;
-    S.sel.noteId = null;
+    S.sel.noteIds = [];
     S.engine.sync(S.project);
     scheduleSave();
     render();
@@ -155,7 +156,7 @@
       S.project = project;
       S.history = new (P().History)(100);
       S.history.push(project);
-      S.sel = { trackId: project.tracks[0] ? project.tracks[0].id : null, clipId: null, noteId: null };
+      S.sel = { trackId: project.tracks[0] ? project.tracks[0].id : null, clipId: null, noteIds: [] };
       S.scrollBeat = 0;
       S.engine.stop();
       S.engine.sync(project);
@@ -347,7 +348,7 @@
         const track = P().findTrack(S.project, trackId);
         const clip = P().addClip(track, { start: beat, length: 4, name: sectionAt(beat) || track.name });
         if (!clip) return;
-        S.sel = { trackId, clipId: clip.id, noteId: null };
+        S.sel = { trackId, clipId: clip.id, noteIds: [] };
         S.panel = 'notes';
         commit();
         markPanelTab();
@@ -371,7 +372,7 @@
 
   function select(trackId, clipId) {
     const changed = S.sel.trackId !== trackId || S.sel.clipId !== clipId;
-    S.sel = { trackId, clipId: clipId || null, noteId: null };
+    S.sel = { trackId, clipId: clipId || null, noteIds: [] };
     if (!changed) return;
     refreshHeads();
     refreshPanel();
@@ -399,17 +400,18 @@
   function toolsHTML(track, clip) {
     if (!clip) return '';
     const midi = !!clip.notes;
-    const note = midi && S.sel.noteId ? clip.notes.find(n => n.id === S.sel.noteId) : null;
+    const picked = pickedNotes(clip);
+    const some = picked.length ? ' the selected notes' : ' every note';
     return `
       <button type="button" class="ghost small" data-tool="split" title="Split at the playhead (S)">Split</button>
       <button type="button" class="ghost small" data-tool="dup" title="Duplicate (Ctrl+D)">Duplicate</button>
       <button type="button" class="ghost small danger" data-tool="del" title="Delete (Del)">Delete</button>
       ${midi ? `
       <span class="daw-sep"></span>
-      <button type="button" class="ghost small" data-tool="quant" title="Move every note onto the snap grid">Quantize</button>
+      <button type="button" class="ghost small" data-tool="quant" title="Move${some} onto the snap grid">Quantize</button>
       ${track.kind === 'drums' ? '' : [-12, -1, 1, 12].map(n =>
-        `<button type="button" class="ghost small" data-tool="tr" data-n="${n}" title="Transpose">${n > 0 ? '+' : ''}${n}</button>`).join('')}
-      ${note ? `<label class="daw-field">Velocity <input type="range" id="dawVel" min="0.05" max="1" step="0.01" value="${esc(note.v)}" /></label>` : ''}
+        `<button type="button" class="ghost small" data-tool="tr" data-n="${n}" title="Transpose${some}">${n > 0 ? '+' : ''}${n}</button>`).join('')}
+      ${picked.length ? `<label class="daw-field">Velocity <input type="range" id="dawVel" min="0.05" max="1" step="0.01" value="${esc(picked[0].v)}" /></label>` : ''}
       <span class="daw-sep"></span>
       <button type="button" class="ghost small" data-tool="rollOut" title="Zoom the note editor out">−</button>
       <button type="button" class="ghost small" data-tool="rollIn" title="Zoom the note editor in">+</button>` : ''}`;
@@ -451,8 +453,14 @@
   function clipInfo(track, clip) {
     const count = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
     const beats = Math.round(clip.length * 100) / 100;
+    const picked = pickedNotes(clip).length;
     return `${clip.name || 'Clip'} on ${track.name}: ${count(beats, 'beat')}` +
-      (clip.notes ? ', ' + count(clip.notes.length, 'note') : '');
+      (clip.notes ? ', ' + count(clip.notes.length, 'note') : '') + (picked > 1 ? `, ${picked} selected` : '');
+  }
+
+  // The selected notes that are still in the clip.
+  function pickedNotes(clip) {
+    return clip && clip.notes ? clip.notes.filter(n => S.sel.noteIds.includes(n.id)) : [];
   }
 
   // Opens the note editor zoomed so the whole clip fills its width.
@@ -527,18 +535,71 @@
       };
     },
     actions: {
-      selectNote(id) {
-        if (S.sel.noteId === id) return;
-        S.sel.noteId = id;
-        const { track, clip } = selection();
-        $('dawTools').innerHTML = toolsHTML(track, clip);
-        wireTools();
-      },
+      selectNotes(ids) { selectNotes(ids); },
       audition(midi) { S.engine.sync(S.project); S.engine.audition(S.sel.trackId, midi, 0.8); },
       redraw() { if (S.roll) S.roll.draw(); S.dirty = true; },
       commit() { commit(); },
     },
   };
+
+  // ── Notes: selection and clipboard ───────────────────────────────────────
+  function selectNotes(ids) {
+    const same = ids.length === S.sel.noteIds.length && ids.every(id => S.sel.noteIds.includes(id));
+    if (same) return;
+    S.sel.noteIds = ids.slice();
+    const { track, clip } = selection();
+    $('dawClipInfo').textContent = clip ? clipInfo(track, clip) : '';
+    $('dawTools').innerHTML = toolsHTML(track, clip);
+    wireTools();
+  }
+
+  // The clip open in the note editor, when that is what the keyboard is for.
+  function editedClip() {
+    const { clip } = selection();
+    return S.panel === 'notes' && clip && clip.notes ? clip : null;
+  }
+
+  function copySelectedNotes(cut) {
+    const clip = editedClip();
+    const copied = clip ? P().copyNotes(clip, S.sel.noteIds) : null;
+    if (!copied) return false;
+    S.clipboard = copied;
+    if (cut) {
+      P().removeNotes(clip, S.sel.noteIds);
+      S.sel.noteIds = [];
+      commit();
+    }
+    return true;
+  }
+
+  // Pasted notes land at the playhead, or at the start of the clip when the
+  // playhead is somewhere else, and become the selection.
+  function pasteNotes() {
+    const clip = editedClip();
+    if (!clip || !S.clipboard) return false;
+    const at = snapBeat(S.engine.position()) - clip.start;
+    const made = P().pasteNotes(clip, S.clipboard, at >= 0 && at < clip.length ? at : 0);
+    if (!made.length) { UI().toast('No room in this clip for the copied notes'); return true; }
+    S.sel.noteIds = made;
+    commit();
+    return true;
+  }
+
+  // Arrow keys: a step along, or a semitone (an octave with Shift) up or down.
+  function nudgeNotes(dt, dn) {
+    const clip = editedClip();
+    const { track } = selection();
+    const picked = pickedNotes(clip);
+    if (!picked.length) return false;
+    const base = picked.map(n => ({ id: n.id, t: n.t, n: n.n }));
+    const went = P().shiftNotes(clip, base, dt, track.kind === 'drums' ? 0 : dn,
+      { low: global.DawRoll.LOW, high: global.DawRoll.HIGH, step: S.snap > 0 ? S.snap : 0.25 });
+    if (went.dt || went.dn) {
+      if (went.dn) S.engine.audition(track.id, picked[0].n, 0.7);
+      commit();
+    }
+    return true;
+  }
 
   // ── Clip tools ───────────────────────────────────────────────────────────
   function splitSelected() {
@@ -546,7 +607,7 @@
     const parts = P().splitClip(S.project, S.sel.clipId, snapBeat(S.engine.position()));
     if (!parts) { UI().toast('Put the playhead inside the clip to split it'); return; }
     S.sel.clipId = parts[1].id;
-    S.sel.noteId = null;
+    S.sel.noteIds = [];
     commit();
   }
   function duplicateSelected() {
@@ -554,14 +615,16 @@
     const copy = P().duplicateClip(S.project, S.sel.clipId);
     if (!copy) return;
     S.sel.clipId = copy.id;
-    S.sel.noteId = null;
+    S.sel.noteIds = [];
     commit();
   }
   function deleteSelected() {
     const { clip } = selection();
     if (!clip) return;
-    if (S.sel.noteId && clip.notes && P().removeNote(clip, S.sel.noteId)) {
-      S.sel.noteId = null;
+    const picked = pickedNotes(clip);
+    if (picked.length) {
+      P().removeNotes(clip, picked.map(n => n.id));
+      S.sel.noteIds = [];
     } else {
       P().removeClip(S.project, clip.id);
       S.sel.clipId = null;
@@ -577,8 +640,8 @@
       if (tool === 'split') splitSelected();
       else if (tool === 'dup') duplicateSelected();
       else if (tool === 'del') deleteSelected();
-      else if (tool === 'quant' && clip) { P().quantize(clip, S.snap > 0 ? S.snap : 0.25); commit(); }
-      else if (tool === 'tr' && clip) { P().transpose(clip, parseInt(btn.dataset.n, 10)); commit(); }
+      else if (tool === 'quant' && clip) { P().quantize(clip, S.snap > 0 ? S.snap : 0.25, S.sel.noteIds); commit(); }
+      else if (tool === 'tr' && clip) { P().transpose(clip, parseInt(btn.dataset.n, 10), S.sel.noteIds); commit(); }
       else if (tool === 'rollIn' || tool === 'rollOut') {
         S.rollPx = Math.max(14, Math.min(220, S.rollPx * (tool === 'rollIn' ? 1.3 : 1 / 1.3)));
         refreshPanel();
@@ -588,7 +651,7 @@
     if (vel) {
       vel.addEventListener('input', () => {
         const { clip } = selection();
-        if (clip && S.sel.noteId) { P().updateNote(clip, S.sel.noteId, { v: parseFloat(vel.value) }); S.engine.sync(S.project); if (S.roll) S.roll.draw(); }
+        if (clip && S.sel.noteIds.length) { P().setVelocity(clip, S.sel.noteIds, parseFloat(vel.value)); S.engine.sync(S.project); if (S.roll) S.roll.draw(); }
       });
       vel.addEventListener('change', () => commit({ keepPanel: true }));
     }
@@ -624,7 +687,7 @@
       if (!track) { UI().toast('No room for another track'); return; }
       S.project.tracks.forEach(t => { t.armed = false; });
       track.armed = true;
-      S.sel = { trackId: track.id, clipId: null, noteId: null };
+      S.sel = { trackId: track.id, clipId: null, noteIds: [] };
       commit({ structure: true });
     }
     S.recTrackId = track.id;
@@ -657,7 +720,7 @@
       start: take.startBeat, length: take.beats, audioId, offset: take.latency,
       name: 'Take ' + (track.clips.length + 1),
     });
-    if (clip) S.sel = { trackId: track.id, clipId: clip.id, noteId: null };
+    if (clip) S.sel = { trackId: track.id, clipId: clip.id, noteIds: [] };
     commit();
     flushSave();                                      // a take is not left waiting on the autosave timer
   }
@@ -710,7 +773,7 @@
     const clip = P().addClip(track, {
       start: snapBeat(S.engine.position()), length: seconds * S.project.tempo / 60, audioId, name: track.name,
     });
-    S.sel = { trackId: track.id, clipId: clip ? clip.id : null, noteId: null };
+    S.sel = { trackId: track.id, clipId: clip ? clip.id : null, noteIds: [] };
     commit({ structure: true });
     flushSave();
     UI().toast('Audio imported');
@@ -802,7 +865,7 @@
         fresh.master = S.project.master;
         S.project.tracks.filter(t => t.kind === 'audio').forEach(t => fresh.tracks.push(t));
         S.project = P().sanitize(fresh);
-        S.sel = { trackId: S.project.tracks[0] ? S.project.tracks[0].id : null, clipId: null, noteId: null };
+        S.sel = { trackId: S.project.tracks[0] ? S.project.tracks[0].id : null, clipId: null, noteIds: [] };
         commit({ structure: true });
         UI().toast('Rebuilt from the song');
       });
@@ -970,7 +1033,7 @@
           UI().confirmBox(`Remove the track "${track.name}" and everything on it?`).then(ok => {
             if (!ok) return;
             P().removeTrack(S.project, id);
-            if (S.sel.trackId === id) S.sel = { trackId: S.project.tracks[0] ? S.project.tracks[0].id : null, clipId: null, noteId: null };
+            if (S.sel.trackId === id) S.sel = { trackId: S.project.tracks[0] ? S.project.tracks[0].id : null, clipId: null, noteIds: [] };
             commit({ structure: true });
           });
         } else if (act !== 'instrument') {
@@ -998,7 +1061,7 @@
       const kind = btn.dataset.add;
       const track = P().addTrack(S.project, kind, kind === 'audio' ? { name: nextAudioName() } : {});
       if (!track) { UI().toast('No room for another track'); return; }
-      S.sel = { trackId: track.id, clipId: null, noteId: null };
+      S.sel = { trackId: track.id, clipId: null, noteIds: [] };
       commit({ structure: true });
     }));
   }
@@ -1054,7 +1117,20 @@
     else if (mod && k === 'z') { e.preventDefault(); restore(e.shiftKey ? S.history.redo() : S.history.undo()); }
     else if (mod && k === 'y') { e.preventDefault(); restore(S.history.redo()); }
     else if (mod && k === 'd') { e.preventDefault(); duplicateSelected(); }
+    else if (mod && k === 'a') {
+      e.preventDefault();                               // never "select all the text on the page"
+      const clip = editedClip();
+      if (clip) { selectNotes(clip.notes.map(n => n.id)); if (S.roll) S.roll.draw(); }
+    }
+    // Copying text someone has highlighted, such as a tab, is left to the system.
+    else if (mod && (k === 'c' || k === 'x')) { if (!String(global.getSelection()) && copySelectedNotes(k === 'x')) e.preventDefault(); }
+    else if (mod && k === 'v') { if (pasteNotes()) e.preventDefault(); }
     else if (mod) return;
+    else if (k === 'ArrowLeft' || k === 'ArrowRight') {
+      if (nudgeNotes((k === 'ArrowLeft' ? -1 : 1) * (S.snap > 0 ? S.snap : 0.25), 0)) e.preventDefault();
+    } else if (k === 'ArrowUp' || k === 'ArrowDown') {
+      if (nudgeNotes(0, (k === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 12 : 1))) e.preventDefault();
+    }
     else if (k === 'r') toggleRecord();
     else if (k === 'l') { S.project.loop.on = !S.project.loop.on; commit({ keepPanel: true }); }
     else if (k === 's') splitSelected();

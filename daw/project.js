@@ -325,15 +325,97 @@
     sortNotes(clip);
     return note;
   }
-  function quantize(clip, grid) {
+  // The notes an edit applies to: the ones named, or the whole clip when none are.
+  function chosen(clip, ids) {
+    if (!clip.notes) return [];
+    return ids && ids.length ? clip.notes.filter(n => ids.includes(n.id)) : clip.notes;
+  }
+  function quantize(clip, grid, ids) {
     if (!clip.notes || !(grid > 0)) return;
-    clip.notes.forEach(n => { n.t = Math.max(0, Math.min(snap(n.t, grid), Math.max(0, clip.length - grid))); });
+    chosen(clip, ids).forEach(n => { n.t = Math.max(0, Math.min(snap(n.t, grid), Math.max(0, clip.length - grid))); });
     sortNotes(clip);
   }
-  function transpose(clip, semitones) {
+  function transpose(clip, semitones, ids) {
     if (!clip.notes) return;
-    clip.notes.forEach(n => { n.n = Math.max(0, Math.min(127, n.n + Math.round(semitones))); });
+    chosen(clip, ids).forEach(n => { n.n = Math.max(0, Math.min(127, n.n + Math.round(semitones))); });
     sortNotes(clip);
+  }
+  function setVelocity(clip, ids, velocity) {
+    if (!clip.notes || !ids || !ids.length) return;
+    chosen(clip, ids).forEach(n => { n.v = num(velocity, 0.01, 1, n.v); });
+  }
+
+  // ── Several notes at once ────────────────────────────────────────────────
+  // Ids of the notes on the given pitches that sound within a span of time
+  // (given either way round). `width` makes every note count as that long,
+  // which is how the drum grid draws its hits.
+  function notesWithin(clip, t0, t1, pitches, width) {
+    if (!clip.notes) return [];
+    const from = Math.min(t0, t1), to = Math.max(t0, t1);
+    const rows = new Set(pitches);
+    return clip.notes.filter(n => rows.has(n.n) && n.t < to && n.t + (width > 0 ? width : n.d) > from).map(n => n.id);
+  }
+
+  // Moves a group as one. `base` is where its notes were when the move began,
+  // [{ id, t, n }], so a drag can be applied again and again without drifting.
+  // The whole group stops at the edges of the clip and of the pitch range
+  // (limits: { low, high, step }). Returns the { dt, dn } actually applied.
+  function shiftNotes(clip, base, dt, dn, limits) {
+    if (!clip.notes || !base.length) return { dt: 0, dn: 0 };
+    limits = limits || {};
+    const low = limits.low == null ? 0 : limits.low, high = limits.high == null ? 127 : limits.high;
+    const lastStart = Math.max(0, clip.length - (limits.step > 0 ? limits.step : 0.25));
+    const times = base.map(b => b.t), pitches = base.map(b => b.n);
+    const time = Math.max(-Math.min.apply(null, times), Math.min(dt, lastStart - Math.max.apply(null, times)));
+    const pitch = Math.max(low - Math.min.apply(null, pitches), Math.min(Math.round(dn), high - Math.max.apply(null, pitches)));
+    base.forEach(b => {
+      const note = clip.notes.find(n => n.id === b.id);
+      if (note) { note.t = Math.max(0, b.t + time); note.n = Math.max(0, Math.min(127, b.n + pitch)); }
+    });
+    sortNotes(clip);
+    return { dt: time, dn: pitch };
+  }
+
+  // Lengthens or shortens a group by the same amount, from [{ id, t, d }].
+  function stretchNotes(clip, base, dd, shortest) {
+    if (!clip.notes) return;
+    const least = shortest > 0 ? shortest : 1 / 64;
+    base.forEach(b => {
+      const note = clip.notes.find(n => n.id === b.id);
+      if (note) note.d = Math.max(least, Math.min(b.d + dd, Math.max(least, clip.length - b.t)));
+    });
+  }
+
+  function removeNotes(clip, ids) {
+    if (!clip.notes) return 0;
+    const before = clip.notes.length;
+    clip.notes = clip.notes.filter(n => !ids.includes(n.id));
+    return before - clip.notes.length;
+  }
+
+  // What Copy holds: the notes, timed from the first of them. Null for none.
+  function copyNotes(clip, ids) {
+    const picked = clip.notes && ids && ids.length ? clip.notes.filter(n => ids.includes(n.id)) : [];
+    if (!picked.length) return null;
+    const first = Math.min.apply(null, picked.map(n => n.t));
+    const last = Math.max.apply(null, picked.map(n => n.t + n.d));
+    return { span: last - first, notes: picked.map(n => ({ t: n.t - first, d: n.d, n: n.n, v: n.v })) };
+  }
+
+  // Puts copied notes down starting at `at`. Notes that would begin after the
+  // clip are left out and ones that overhang are trimmed. Returns the new ids.
+  function pasteNotes(clip, copied, at) {
+    if (!clip.notes || !copied || !Array.isArray(copied.notes)) return [];
+    const made = [];
+    copied.notes.forEach(c => {
+      const t = at + c.t;
+      if (!(t >= 0) || t >= clip.length || clip.notes.length >= LIMITS.notes) return;
+      const note = createNote({ t, d: Math.min(c.d, clip.length - t), n: c.n, v: c.v });
+      clip.notes.push(note);
+      made.push(note.id);
+    });
+    sortNotes(clip);
+    return made;
   }
 
   // ── Loading untrusted data ───────────────────────────────────────────────
@@ -510,7 +592,8 @@
     audioFileProblem, audioLengthProblem,
     addTrack, removeTrack,
     addClip, removeClip, moveClip, resizeClip, splitClip, duplicateClip,
-    addNote, removeNote, updateNote, quantize, transpose,
+    addNote, removeNote, updateNote, quantize, transpose, setVelocity,
+    notesWithin, shiftNotes, stretchNotes, removeNotes, copyNotes, pasteNotes,
     sanitize, serialize, deserialize, History, toMidi,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

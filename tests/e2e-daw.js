@@ -247,13 +247,70 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
 
     await page.click('#dawTools [data-tool="tr"][data-n="12"]');
     notes = await notesOf(made.id);
-    check('+12 transposes the clip an octave', notes.some(n => n.n === 76) && notes.some(n => n.n === 74));
+    check('+12 takes the selected note up an octave and leaves the other', notes.some(n => n.n === 76) && notes.some(n => n.n === 62));
+    await page.click('#dawTools [data-tool="tr"][data-n="-12"]');
+    // Shift-click on empty space lets go of the selection; the tools then take the whole clip.
+    const nowhere = await cell(3.5, 58);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(nowhere.x, nowhere.y);
+    await page.keyboard.up('Shift');
+    check('with no note selected there is no velocity control', (await page.locator('#dawVel').count()) === 0);
+    await page.click('#dawTools [data-tool="tr"][data-n="12"]');
+    notes = await notesOf(made.id);
+    check('and +12 transposes the whole clip', notes.some(n => n.n === 76) && notes.some(n => n.n === 74) && notes.length === 2);
     await page.click('#dawTools [data-tool="tr"][data-n="-12"]');
 
     const c3 = await cell(2, 62);
     await page.mouse.click(c3.x, c3.y, { button: 'right' });
     notes = await notesOf(made.id);
     check('right-clicking a note deletes it', notes.length === 1);
+
+    // Several notes at once. Two more notes, then a box drawn round them with Shift held.
+    for (const [beat, midi] of [[1, 60], [2, 62]]) { const spot = await cell(beat, midi); await page.mouse.click(spot.x, spot.y); }
+    const info = async () => (await page.textContent('#dawClipInfo')).trim();
+    const places = list => JSON.stringify(list.map(n => [n.t, n.n]).sort((a, b) => a[0] - b[0] || a[1] - b[1]));
+    const shiftDrag = async (a, b) => {
+      await page.keyboard.down('Shift');
+      await page.mouse.move(a.x, a.y);
+      await page.mouse.down();
+      await page.mouse.move(b.x, b.y, { steps: 5 });
+      await page.mouse.up();
+      await page.keyboard.up('Shift');
+    };
+    await shiftDrag(await cell(0.8, 63), await cell(2.6, 59));
+    check('Shift-dragging a box selects the notes inside it', /, 2 selected$/.test(await info()));
+
+    const grab = await cell(1.2, 60), drop = await cell(2.2, 62);
+    await page.mouse.move(grab.x, grab.y);
+    await page.mouse.down();
+    await page.mouse.move(drop.x, drop.y, { steps: 6 });
+    await page.mouse.up();
+    check('dragging one of them moves them all', places(await notesOf(made.id)) === '[[0,64],[2,62],[3,64]]');
+
+    await page.evaluate(beat => DawEngine.get().seek(beat), made.start);
+    await page.keyboard.press('Control+c');
+    await page.keyboard.press('Control+v');
+    check('copy and paste put a second copy at the playhead', places(await notesOf(made.id)) === '[[0,62],[0,64],[1,64],[2,62],[3,64]]');
+    check('and the pasted notes are the ones now selected', /, 2 selected$/.test(await info()));
+    await page.keyboard.press('Delete');
+    check('Delete removes the selected notes and leaves the clip', places(await notesOf(made.id)) === '[[0,64],[2,62],[3,64]]');
+
+    await page.keyboard.press('Control+a');
+    check('Ctrl+A selects every note in the clip', /, 3 selected$/.test(await info()));
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowUp');
+    check('the arrow keys nudge the selection a step along and a semitone up', places(await notesOf(made.id)) === '[[0.25,65],[2.25,63],[3.25,65]]');
+    await page.locator('#dawVel').fill('0.5');
+    await page.locator('#dawVel').dispatchEvent('change');
+    await page.locator('#dawVel').blur();
+    check('the velocity control sets all of them', (await notesOf(made.id)).every(n => Math.abs(n.v - 0.5) < 0.001));
+    await page.keyboard.press('Control+x');
+    check('cut takes them out', (await notesOf(made.id)).length === 0);
+    await page.keyboard.press('Control+v');
+    check('and paste puts them back', (await notesOf(made.id)).length === 3);
+    await page.keyboard.press('Control+z');
+    await page.keyboard.press('Control+z');
+    check('each of those steps can be undone', (await notesOf(made.id)).length === 3 && (await notesOf(made.id)).every(n => Math.abs(n.v - 0.5) < 0.001));
     await shot(page, '11-daw-notes');
 
     // Drum grid.
@@ -270,6 +327,16 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     check('clicking the drum grid adds a hit', notes.length === before + 1 && notes.some(n => n.n === 49 && n.t === 2.5));
     await page.mouse.click(crashRow.x, crashRow.y);
     check('clicking it again removes the hit', (await notesOf(drumClip.id)).length === before);
+    // A box over the first bar of every lane, then Delete.
+    const LANES = [49, 46, 42, 45, 39, 38, 36];
+    const inFirstBar = list => list.filter(n => n.t < 4 && LANES.includes(n.n)).length;
+    const firstBar = inFirstBar(await notesOf(drumClip.id));
+    await shiftDrag({ x: r.x + KEYS_W + 3, y: r.y + RULER + 4 }, { x: r.x + KEYS_W + 4 * PX - 4, y: r.y + RULER + 7 * 24 - 4 });
+    check('a box on the drum grid selects that bar\'s hits', firstBar > 3 && new RegExp(', ' + firstBar + ' selected$').test(await info()));
+    await page.keyboard.press('Delete');
+    check('Delete clears them', inFirstBar(await notesOf(drumClip.id)) === 0);
+    await page.keyboard.press('Control+z');
+    check('and undo brings the bar back', (await notesOf(drumClip.id)).length === before);
 
     // ── Tab ────────────────────────────────────────────────────────────────
     section('Tab');
