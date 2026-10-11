@@ -1,0 +1,353 @@
+/* ChordPath — DAW test harness (the parts that need no sound card).
+ * Run with: node tests/daw-test.js
+ * Covers WAV encoding, turning a song into note events, and the DAW project
+ * model with its editing operations. The audio engine and the screen are
+ * exercised by tests/e2e.js in the real app.
+ */
+'use strict';
+
+const path = require('path');
+const ROOT = path.join(__dirname, '..');
+
+let passed = 0, failed = 0;
+const failures = [];
+function check(label, cond) {
+  if (cond) passed++;
+  else { failed++; failures.push(label); console.error('  FAIL: ' + label); }
+}
+function eq(label, got, want) {
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  if (!ok) console.error(`    got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
+  check(label, ok);
+}
+function throws(label, fn, pattern) {
+  try { fn(); check(label, false); }
+  catch (e) { check(label, !pattern || pattern.test(e.message)); }
+}
+function section(name) { console.log('\n== ' + name + ' =='); }
+
+[
+  'theory/scales.js', 'theory/chords.js', 'theory/voicings.js',
+  'theory/progressions.js', 'theory/analysis.js', 'theory/genres.js',
+  'theory/arrangements.js', 'theory/emotions.js', 'theory/descriptions.js',
+  'theory/songs.js', 'theory/melody.js', 'theory/song.js', 'theory/feelings.js',
+  'theory/tabs.js', 'theory/instruments.js', 'theory/midi.js',
+  'theory/parts.js', 'daw/wav.js', 'daw/project.js',
+].forEach(f => require(path.join(ROOT, f)));
+
+const { Arrangements, Song, Feelings, Chords, Parts, Wav, DawProject } = globalThis;
+
+// ── WAV files ──────────────────────────────────────────────────────────────
+section('WAV');
+{
+  const mono = Wav.encode([new Float32Array([0, 0.5, -0.5, 1])], 44100, 16);
+  const str = (b, i, n) => String.fromCharCode(...b.slice(i, i + n));
+  const u16 = (b, i) => b[i] | (b[i + 1] << 8);
+  const u32 = (b, i) => (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)) >>> 0;
+  check('encode returns bytes', mono instanceof Uint8Array);
+  eq('RIFF/WAVE/fmt/data markers', [str(mono, 0, 4), str(mono, 8, 4), str(mono, 12, 4), str(mono, 36, 4)], ['RIFF', 'WAVE', 'fmt ', 'data']);
+  eq('header describes mono 16-bit 44.1k PCM',
+    [u16(mono, 20), u16(mono, 22), u32(mono, 24), u32(mono, 28), u16(mono, 32), u16(mono, 34)],
+    [1, 1, 44100, 88200, 2, 16]);
+  eq('file and data sizes are right', [mono.length, u32(mono, 4), u32(mono, 40)], [52, 44, 8]);
+
+  const loud = Wav.decode(Wav.encode([new Float32Array([2, -2])], 8000, 16));
+  check('samples beyond full scale are clipped, not wrapped',
+    loud.channels[0][0] > 0.999 && loud.channels[0][1] < -0.999);
+
+  const L = new Float32Array([0.1, 0.2, 0.3]), R = new Float32Array([-0.1, -0.2, -0.3]);
+  const stereo = Wav.decode(Wav.encode([L, R], 48000, 16));
+  eq('stereo round trip keeps rate, depth and channel count', [stereo.sampleRate, stereo.bitDepth, stereo.channels.length], [48000, 16, 2]);
+  check('16-bit round trip is accurate to one step',
+    [0, 1, 2].every(i => Math.abs(stereo.channels[0][i] - L[i]) < 1 / 32000 && Math.abs(stereo.channels[1][i] - R[i]) < 1 / 32000));
+  const deep = Wav.decode(Wav.encode([L], 44100, 24));
+  check('24-bit round trip is finer', deep.bitDepth === 24 && [0, 1, 2].every(i => Math.abs(deep.channels[0][i] - L[i]) < 1 / 8000000));
+  eq('channels of unequal length are cut to the shortest',
+    Wav.decode(Wav.encode([new Float32Array(5), new Float32Array(3)], 44100, 16)).channels[0].length, 3);
+
+  // A file with an extra chunk before the audio, as other programs write.
+  const withList = (() => {
+    const base = Wav.encode([new Float32Array([0.25, -0.25])], 44100, 16);
+    const extra = new Uint8Array([0x4c, 0x49, 0x53, 0x54, 4, 0, 0, 0, 1, 2, 3, 4]);   // "LIST" + 4 bytes
+    const out = new Uint8Array(base.length + extra.length);
+    out.set(base.slice(0, 36)); out.set(extra, 36); out.set(base.slice(36), 36 + extra.length);
+    const size = out.length - 8;
+    out[4] = size & 255; out[5] = (size >> 8) & 255; out[6] = (size >> 16) & 255; out[7] = (size >> 24) & 255;
+    return out;
+  })();
+  check('unknown chunks before the audio are skipped', Math.abs(Wav.decode(withList).channels[0][0] - 0.25) < 0.001);
+  eq('decode accepts an ArrayBuffer as well', Wav.decode(mono.buffer.slice(0)).channels[0].length, 4);
+
+  throws('decode refuses a file that is not a WAV', () => Wav.decode(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])), /WAV/);
+  throws('decode refuses a truncated file', () => Wav.decode(mono.slice(0, 30)), /WAV|truncated/i);
+  throws('encode refuses an unsupported bit depth', () => Wav.encode([new Float32Array(2)], 44100, 12), /bit depth/i);
+  throws('encode refuses no channels', () => Wav.encode([], 44100, 16), /channel/i);
+
+  const pk = Wav.peaks(new Float32Array([0, 0.5, -0.9, 0.1, 0.2, -0.3, 0, 0]), 4);
+  check('peaks reports the loudest sample in each slice',
+    pk.length === 4 && Math.abs(pk[0] - 0.5) < 1e-6 && Math.abs(pk[1] - 0.9) < 1e-6 && Math.abs(pk[2] - 0.3) < 1e-6 && pk[3] === 0);
+  eq('peaks of nothing is all zeros', Array.from(Wav.peaks(new Float32Array(0), 3)), [0, 0, 0]);
+}
+
+// ── Song → note events ─────────────────────────────────────────────────────
+section('Parts');
+const demo = Feelings.generateSongSpec({ feelingId: 'yearning', genreId: 'jangle_indie', energy: 'mid', seed: 11 });
+const items = Song.buildPlayback(demo);
+{
+  const item = items.find(it => it.role === 'verse');
+  const p = Parts.fromItem(item);
+  const total = item.chords.length * item.beatsPerChord;
+  eq('a section lasts its chords times beats per chord', p.beats, total);
+  for (const name of ['chords', 'bass', 'drums', 'vocal']) {
+    check(`the ${name} part has notes`, p[name].length > 0);
+    check(`${name} notes are valid MIDI with positive length and velocity`,
+      p[name].every(n => Number.isInteger(n.n) && n.n >= 24 && n.n <= 108 && n.d > 0 && n.v > 0 && n.v <= 1));
+    check(`${name} notes start inside the section`, p[name].every(n => n.t >= 0 && n.t < total));
+    check(`${name} notes are in time order`, p[name].every((n, i) => i === 0 || n.t >= p[name][i - 1].t));
+  }
+  check('every chord gets chord notes',
+    item.chords.every((_, ci) => p.chords.some(n => n.t >= ci * 4 && n.t < ci * 4 + 4)));
+  eq('the vocal part is the generated melody, note for note',
+    p.vocal.map(n => [n.t, n.n]), item.melody.map(ev => [ev.beatStart, ev.midi]));
+  check('drum notes use the standard kit numbers', p.drums.every(n => [36, 38, 42, 46].includes(n.n)));
+  eq('the same section always gives the same notes', Parts.fromItem(item), p);
+}
+{
+  // Every chord rhythm and bass style in the catalogue must produce notes.
+  const chords = ['C:maj', 'A:m', 'F:maj', 'G:maj'].map(sp => Chords.chordFromSpec(sp));
+  const styles = [...new Set(Arrangements.RHYTHMS.map(r => r.chords))];
+  const base = { chords, melody: [], under: [], tempo: 100, beatsPerChord: 4, repeat: 1 };
+  for (const style of styles) {
+    const p = Parts.fromItem(Object.assign({}, base, { pattern: { chords: style, bass: 'root', drums: {}, swing: 0 } }));
+    check(`chord rhythm "${style}" plays on every chord`,
+      [0, 1, 2, 3].every(ci => p.chords.some(n => n.t >= ci * 4 && n.t < ci * 4 + 4)) && p.chords.every(n => n.t < 16));
+  }
+  for (const style of [...new Set(Arrangements.RHYTHMS.map(r => r.bass))]) {
+    const p = Parts.fromItem(Object.assign({}, base, { pattern: { chords: 'block', bass: style, drums: {}, swing: 0 } }));
+    check(`bass style "${style}" produces a line`, p.bass.length > 0 && p.bass.every(n => n.n < 60));
+  }
+  const kit = { kick: [0, 8], snare: [4, 12], hhClosed: [1, 3], hhOpen: [] };
+  const straight = Parts.fromItem(Object.assign({}, base, { pattern: { chords: 'block', bass: 'root', drums: kit, swing: 0 } }));
+  const swung = Parts.fromItem(Object.assign({}, base, { pattern: { chords: 'block', bass: 'root', drums: kit, swing: 0.2 } }));
+  eq('a plain kit puts each hit on its sixteenth', straight.drums.filter(n => n.t < 4).map(n => n.t), [0, 0.25, 0.75, 1, 2, 3]);
+  check('swing pushes the off-sixteenths late and leaves the beats alone',
+    swung.drums.find(n => n.n === 42).t > 0.25 && swung.drums.find(n => n.n === 36).t === 0);
+  eq('a kit pattern repeats every bar', straight.drums.length, 6 * 4);
+  eq('an empty kit is silent', Parts.fromItem(Object.assign({}, base, { pattern: { chords: 'block', bass: 'root', drums: { kick: [], snare: [], hhClosed: [], hhOpen: [] } } })).drums, []);
+  const long = Parts.fromItem(Object.assign({}, base, { beatsPerChord: 8, pattern: { chords: 'block', bass: 'root', drums: kit, swing: 0 } }));
+  check('eight beats per chord fills both bars of each chord',
+    long.beats === 32 && long.chords.some(n => n.t >= 4 && n.t < 8) && long.drums.some(n => n.t >= 28));
+}
+const whole = Parts.fromSong(demo);
+{
+  eq('song tempo carries over', whole.tempo, demo.tempo);
+  eq('sections follow one another without gaps',
+    whole.sections.map(s => s.start), whole.sections.map((s, i) => whole.sections.slice(0, i).reduce((sum, x) => sum + x.beats, 0)));
+  eq('the song length is the sum of its sections', whole.totalBeats, demo.sections.reduce((sum, sec) => sum + Song.sectionBeats(sec), 0));
+  eq('section names and roles carry over', whole.sections.map(s => s.name), demo.sections.map(s => s.name));
+  const rep = JSON.parse(JSON.stringify(demo));
+  rep.sections[1].repeat = 2;
+  const twice = Parts.fromSong(Song.migrate(rep));
+  eq('a repeated section appears once per repeat', twice.sections.length, demo.sections.length + 1);
+  eq('and makes the song longer by exactly that section', twice.totalBeats - whole.totalBeats, Song.sectionBeats(demo.sections[1]));
+}
+
+// ── DAW project ────────────────────────────────────────────────────────────
+section('Project from a song');
+const proj = DawProject.fromSong(demo);
+{
+  eq('the project takes the song title, tempo and key', [proj.title, proj.tempo, proj.key, proj.scale], [demo.title, demo.tempo, demo.key, demo.scale]);
+  eq('it remembers which song it came from', proj.songId, demo.id);
+  eq('tracks are chords, bass, drums and the melodies',
+    proj.tracks.map(t => t.name).slice(0, 4), ['Chords', 'Bass', 'Drums', 'Vocal melody']);
+  eq('the drum track is a drum track', proj.tracks.find(t => t.name === 'Drums').kind, 'drums');
+  check('every other generated track is an instrument', proj.tracks.filter(t => t.name !== 'Drums').every(t => t.kind === 'instrument'));
+  eq('one marker per section', proj.markers.map(m => [m.beat, m.name]), whole.sections.map(s => [s.start, s.name]));
+  const chordsTrack = proj.tracks[0];
+  eq('one clip per section, placed at the section start',
+    chordsTrack.clips.map(c => [c.start, c.length]), whole.sections.map(s => [s.start, s.beats]));
+  eq('clips are named after their sections', chordsTrack.clips.map(c => c.name), whole.sections.map(s => s.name));
+  check('notes are stored relative to their clip',
+    proj.tracks.every(t => t.clips.every(c => c.notes.every(n => n.t >= 0 && n.t < c.length))));
+  const ids = [];
+  proj.tracks.forEach(t => { ids.push(t.id); t.clips.forEach(c => { ids.push(c.id); c.notes.forEach(n => ids.push(n.id)); }); });
+  eq('every track, clip and note has a unique id', new Set(ids).size, ids.length);
+  eq('the project ends where the song ends', DawProject.endBeat(proj), whole.totalBeats);
+  check('tracks start with sane mixer settings',
+    proj.tracks.every(t => t.volume <= 0 && t.volume >= -30 && t.pan >= -1 && t.pan <= 1 && t.mute === false && t.solo === false));
+  check('each track has its own colour', new Set(proj.tracks.map(t => t.color)).size === proj.tracks.length);
+  check('sections without drums leave no drum clip',
+    proj.tracks.find(t => t.name === 'Drums').clips.every(c => c.notes.length > 0));
+  eq('the loop starts off, spanning the first section', [proj.loop.on, proj.loop.start, proj.loop.end], [false, 0, whole.sections[0].beats]);
+}
+
+section('Editing');
+{
+  const p = DawProject.fromSong(demo);
+  const track = p.tracks[1];
+  const clip = track.clips[1];
+  const found = DawProject.findClip(p, clip.id);
+  check('findClip returns the clip and its track', found.clip === clip && found.track === track);
+  eq('findClip of nothing is null', DawProject.findClip(p, 'nope'), null);
+
+  DawProject.moveClip(p, clip.id, 100);
+  eq('a clip can be moved in time', clip.start, 100);
+  DawProject.moveClip(p, clip.id, -5);
+  eq('but never before the start', clip.start, 0);
+  DawProject.moveClip(p, clip.id, 40, p.tracks[0].id);
+  check('a clip can move to another instrument track', p.tracks[0].clips.includes(clip) && !track.clips.includes(clip));
+  const drums = p.tracks.find(t => t.kind === 'drums');
+  DawProject.moveClip(p, clip.id, 40, drums.id);
+  check('but notes written for an instrument do not move onto the drum kit', !drums.clips.includes(clip));
+
+  DawProject.resizeClip(p, clip.id, 2);
+  eq('a clip can be shortened', clip.length, 2);
+  DawProject.resizeClip(p, clip.id, 0);
+  check('but not to nothing', clip.length >= 0.25);
+  DawProject.resizeClip(p, clip.id, 8);
+
+  const c2 = DawProject.addClip(p.tracks[0], { start: 200, length: 8, name: 'Scratch' });
+  const a = DawProject.addNote(c2, { t: 0, d: 2, n: 60, v: 0.8 });
+  const b = DawProject.addNote(c2, { t: 3, d: 2, n: 64, v: 0.8 });
+  const c = DawProject.addNote(c2, { t: 6, d: 1, n: 67, v: 0.8 });
+  eq('notes are kept in time order', c2.notes.map(n => n.n), [60, 64, 67]);
+  const clamped = DawProject.addNote(c2, { t: -3, d: 0, n: 300, v: 9 });
+  eq('a wild note is pulled into range', [clamped.t, clamped.d > 0, clamped.n, clamped.v], [0, true, 127, 1]);
+  DawProject.removeNote(c2, clamped.id);
+  DawProject.updateNote(c2, b.id, { n: 65, d: 0.5 });
+  eq('a note can be changed', [b.n, b.d], [65, 0.5]);
+  check('removing a note that is not there does nothing', DawProject.removeNote(c2, 'nope') === false && c2.notes.length === 3);
+
+  const [left, right] = DawProject.splitClip(p, c2.id, 204);
+  eq('splitting gives two clips that meet at the cut', [left.start, left.length, right.start, right.length], [200, 4, 204, 4]);
+  eq('notes go to the side they start on', [left.notes.map(n => n.n), right.notes.map(n => n.n)], [[60, 65], [67]]);
+  eq('notes on the right are re-timed to their new clip', right.notes[0].t, 2);
+  eq('splitting outside the clip does nothing', DawProject.splitClip(p, left.id, 999), null);
+  const long = DawProject.addNote(left, { t: 3, d: 4, n: 72, v: 0.5 });
+  const cut = DawProject.splitClip(p, left.id, 202);
+  check('a note that crosses the cut is trimmed to it', cut[1].notes.find(n => n.n === 72).d === 1 || cut[0].notes.every(n => n.t + n.d <= 2 + 1e-9));
+  void long; void a; void c;
+
+  const dupe = DawProject.duplicateClip(p, right.id);
+  eq('a duplicate lands straight after the original', [dupe.start, dupe.length], [right.start + right.length, right.length]);
+  check('and shares nothing with it', dupe.id !== right.id && dupe.notes[0].id !== right.notes[0].id && dupe.notes[0] !== right.notes[0]);
+  dupe.notes[0].n = 1;
+  check('editing the duplicate leaves the original alone', right.notes[0].n === 67);
+
+  const q = DawProject.addClip(p.tracks[0], { start: 300, length: 4 });
+  DawProject.addNote(q, { t: 0.13, d: 0.5, n: 60, v: 0.7 });
+  DawProject.addNote(q, { t: 0.9, d: 0.5, n: 62, v: 0.7 });
+  DawProject.quantize(q, 0.25);
+  eq('quantize pulls notes onto the grid', q.notes.map(n => n.t), [0.25, 1]);
+  DawProject.transpose(q, 12);
+  eq('transpose moves every note', q.notes.map(n => n.n), [72, 74]);
+  DawProject.transpose(q, 100);
+  check('transpose stops at the top of the range', q.notes.every(n => n.n === 127));
+  eq('snap rounds to the grid', [DawProject.snap(1.13, 0.25), DawProject.snap(1.13, 1), DawProject.snap(1.13, 0)], [1.25, 1, 1.13]);
+
+  check('removeClip removes it', DawProject.removeClip(p, q.id) === true && DawProject.findClip(p, q.id) === null);
+
+  const audio = DawProject.addTrack(p, 'audio', { name: 'Guitar take' });
+  eq('an audio track can be added', [audio.kind, audio.name, audio.clips.length, audio.armed], ['audio', 'Guitar take', 0, false]);
+  const take = DawProject.addClip(audio, { start: 8, length: 16, audioId: 'aud_abc123', offset: 0.05 });
+  eq('audio clips point at a recording', [take.audioId, take.offset, take.notes], ['aud_abc123', 0.05, undefined]);
+  DawProject.moveClip(p, take.id, 12, p.tracks[0].id);
+  check('a recording cannot be dropped on an instrument track', audio.clips.includes(take));
+  const inst = DawProject.addTrack(p, 'instrument', { instrument: 'pad' });
+  eq('an instrument track can be added', [inst.kind, inst.instrument], ['instrument', 'pad']);
+  eq('an unknown instrument falls back to piano', DawProject.addTrack(p, 'instrument', { instrument: 'kazoo' }).instrument, 'piano');
+  check('removeTrack removes it', DawProject.removeTrack(p, inst.id) === true && !p.tracks.includes(inst));
+  eq('the end follows the last clip', DawProject.endBeat(p), 212);
+}
+
+section('Saving and loading');
+{
+  const text = DawProject.serialize(proj);
+  const back = DawProject.deserialize(text);
+  check('a project round-trips through its file format', back.errors.length === 0 && JSON.stringify(back.project) === JSON.stringify(proj));
+  check('garbage is refused', DawProject.deserialize('not json').project === null && DawProject.deserialize('{"x":1}').project === null);
+
+  const hostile = JSON.parse(text).project;
+  hostile.title = '<img src=x onerror=alert(1)>' + 'x'.repeat(9000);
+  hostile.tempo = 'fast';
+  hostile.key = '<b>';
+  hostile.loop = { on: 'yes', start: -50, end: 'later' };
+  hostile.markers = [{ beat: 'x', name: 5 }, { beat: 4, name: 'ok' }, 'nope'];
+  hostile.master = 500;
+  hostile.tracks[0].volume = 9999;
+  hostile.tracks[0].pan = 'left';
+  hostile.tracks[0].kind = 'nonsense';
+  hostile.tracks[1].instrument = { evil: 1 };
+  hostile.tracks[1].color = 'url(javascript:alert(1))';
+  hostile.tracks[1].fx = { low: 900, reverb: -4, comp: 'on' };
+  hostile.tracks[1].clips[0].notes = [{ t: 'a', d: -1, n: 1e9, v: 'loud' }, 'x', { t: 1, d: 1, n: 60, v: 0.5 }];
+  hostile.tracks[1].clips[0].start = -100;
+  hostile.tracks[1].clips.push({ start: 4, length: 4, audioId: '../../etc/passwd' });
+  hostile.tracks.push('nope');
+  const clean = DawProject.sanitize(hostile);
+  check('titles are bounded', clean.title.length <= 120);
+  eq('a nonsense tempo and key fall back', [clean.tempo, clean.key], [100, 'C']);
+  eq('the loop is made sane', [clean.loop.on, clean.loop.start >= 0, clean.loop.end > clean.loop.start], [false, true, true]);
+  eq('bad markers are dropped', clean.markers.map(m => m.name), ['ok']);
+  eq('the master fader is clamped', clean.master, 6);
+  check('a track of an unknown kind is dropped', clean.tracks.every(t => ['instrument', 'drums', 'audio'].includes(t.kind)));
+  const t1 = clean.tracks.find(t => t.name === 'Bass');
+  eq('mixer values are clamped', [t1.fx.low, t1.fx.reverb, t1.fx.comp], [18, 0, false]);
+  eq('instrument and colour fall back to known values', [t1.instrument, /^#[0-9a-f]{6}$/.test(t1.color)], ['piano', true]);
+  check('bad notes are dropped and good ones kept', t1.clips[0].notes.length === 1 && t1.clips[0].notes[0].n === 60);
+  check('clip positions are clamped', t1.clips[0].start === 0);
+  check('an audio reference that is not a plain id is dropped', t1.clips.every(c => c.audioId === undefined));
+  const polluted = DawProject.sanitize(JSON.parse('{"title":"p","tracks":[],"__proto__":{"polluted":true}}'));
+  check('sanitize never adopts __proto__', polluted.polluted === undefined && Object.getPrototypeOf(polluted) === Object.prototype);
+  const huge = { title: 'big', tracks: Array.from({ length: 500 }, () => ({ kind: 'instrument', clips: [] })) };
+  check('the number of tracks is capped', DawProject.sanitize(huge).tracks.length <= 64);
+}
+
+section('Undo');
+{
+  const p = DawProject.fromSong(demo);
+  const h = new DawProject.History(3);
+  h.push(p);
+  check('nothing to undo at the start', !h.canUndo() && !h.canRedo());
+  p.tempo = 111; h.push(p);
+  p.tempo = 122; h.push(p);
+  eq('undo steps back', h.undo().tempo, 111);
+  eq('and back again', h.undo().tempo, demo.tempo);
+  check('no further', h.undo() === null);
+  eq('redo steps forward', h.redo().tempo, 111);
+  const fork = h.redo(); fork.tempo = 133; h.push(fork);
+  check('a new edit after undo discards the redo branch', !h.canRedo());
+  p.tempo = 144; h.push(p); p.tempo = 155; h.push(p);
+  let steps = 0;
+  while (h.undo()) steps++;
+  eq('history keeps only its limit of states', steps, 2);
+  check('undo hands back a copy, not the live project', h.redo() !== h.redo());
+}
+
+section('MIDI export');
+{
+  const bytes = DawProject.toMidi(proj);
+  const str = (i, n) => String.fromCharCode(...bytes.slice(i, i + n));
+  check('toMidi writes a standard MIDI file', bytes instanceof Uint8Array && str(0, 4) === 'MThd');
+  const ntrks = (bytes[10] << 8) | bytes[11];
+  eq('format 1 with a conductor track plus one per track with notes',
+    [(bytes[8] << 8) | bytes[9], ntrks], [1, 1 + proj.tracks.filter(t => t.clips.some(c => c.notes && c.notes.length)).length]);
+  check('drums go out on channel 10', Array.from(bytes).some((b, i) => b === 0x99 && bytes[i + 1] === 36));
+  let off = 14, chunks = 0;
+  while (off < bytes.length) {
+    if (str(off, 4) !== 'MTrk') break;
+    off += 8 + (((bytes[off + 4] << 24) | (bytes[off + 5] << 16) | (bytes[off + 6] << 8) | bytes[off + 7]) >>> 0);
+    chunks++;
+  }
+  check('every track chunk is well formed', chunks === ntrks && off === bytes.length);
+  const edited = DawProject.fromSong(demo);
+  edited.tracks[1].clips.forEach(c => { c.notes = []; });
+  eq('a track with no notes is left out', (DawProject.toMidi(edited)[10] << 8) | DawProject.toMidi(edited)[11], ntrks - 1);
+}
+
+console.log(`\n${passed} passed, ${failed} failed`);
+if (failed) {
+  console.error('\nFailed checks:');
+  failures.forEach(f => console.error('  - ' + f));
+  process.exit(1);
+}

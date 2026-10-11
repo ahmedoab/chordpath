@@ -33,6 +33,12 @@ const LOCAL_SCHEMES = new Set(['app', 'devtools', 'blob', 'data']);
 // Tests point the app at a throwaway data folder.
 if (process.env.CHORDPATH_USER_DATA) app.setPath('userData', process.env.CHORDPATH_USER_DATA);
 
+// Tests record from Chromium's built-in fake microphone instead of a real one.
+if (E2E) {
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+  app.commandLine.appendSwitch('use-fake-ui-for-media-stream');
+}
+
 // Play should make sound on the first press.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 

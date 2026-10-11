@@ -6,42 +6,10 @@
  */
 'use strict';
 
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
-const { _electron: electron } = require('playwright-core');
-
-const ROOT = path.join(__dirname, '..');
-const SHOTS = process.env.CHORDPATH_SHOTS || '';
-
-let passed = 0, failed = 0;
-const failures = [];
-function check(label, cond) {
-  if (cond) { passed++; console.log('  ok: ' + label); }
-  else { failed++; failures.push(label); console.error('  FAIL: ' + label); }
-}
-function section(name) { console.log('\n== ' + name + ' =='); }
-
-async function launch(userData) {
-  const app = await electron.launch({
-    args: ['.'], cwd: ROOT,
-    env: Object.assign({}, process.env, { CHORDPATH_USER_DATA: userData, CHORDPATH_E2E: '1' }),
-  });
-  const page = await app.firstWindow();
-  const log = { errors: [], requests: [] };
-  page.on('console', msg => { if (msg.type() === 'error') log.errors.push(msg.text()); });
-  page.on('pageerror', err => log.errors.push(String(err)));
-  page.on('request', req => log.requests.push(req.url()));
-  await page.waitForSelector('#navTabs [data-nav="songs"].active');
-  return { app, page, log };
-}
-
-async function shot(page, name) {
-  if (SHOTS) await page.screenshot({ path: path.join(SHOTS, name + '.png') });
-}
+const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = require('./e2e-helpers');
 
 (async () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'chordpath-e2e-'));
+  const userData = tempDataDir();
   let { app, page, log } = await launch(userData);
 
   try {
@@ -222,19 +190,11 @@ async function shot(page, name) {
       /Night Shapes/.test(await page.textContent('#museMemory')) && /You've taught me 1 song/.test(await page.textContent('.muse-thread')));
     check('the drafted song survives a restart', await page.evaluate(() => window.Storage.listProjects().length === 1));
   } catch (err) {
-    failed++;
-    failures.push('crashed: ' + err.message);
-    console.error(err);
+    crashed(err);
     try { await shot(page, 'crash'); } catch (e) { /* window may be gone */ }
   } finally {
     try { await app.close(); } catch (e) { /* already closed */ }
-    try { fs.rmSync(userData, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+    cleanup(userData);
   }
-
-  console.log(`\n${passed} passed, ${failed} failed`);
-  if (failed) {
-    console.error('\nFailed checks:');
-    failures.forEach(f => console.error('  - ' + f));
-    process.exit(1);
-  }
+  finish();
 })();
