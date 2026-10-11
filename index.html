@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ChordPath — feeling-driven song studio</title>
   <meta name="description" content="Turn a feeling into a full song: chords, structure, arrangement, guitar tabs for every part, and a complete DAW guide for recording and mixing it." />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <!-- ChordPath is fully self-contained: everything loads from this folder
+       and the page is not allowed to contact any other host. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -17,6 +17,7 @@
   <div class="brand"><h1>ChordPath</h1></div>
   <div class="nav-tabs" id="navTabs" role="tablist">
     <button type="button" data-nav="songs">Songs</button>
+    <button type="button" data-nav="muse">Muse</button>
     <button type="button" data-nav="overview" disabled title="Open a song first">Overview</button>
     <button type="button" data-nav="section" disabled title="Open a song first">Section</button>
     <button type="button" data-nav="studio" disabled title="Open a song first">Studio</button>
@@ -52,6 +53,11 @@
 <!-- ─── View: Wizard ───────────────────────────────────────────────── -->
 <section class="view" id="view-wizard" hidden>
   <div class="view-inner" id="wizardRoot"></div>
+</section>
+
+<!-- ─── View: Muse (the built-in AI) ───────────────────────────────── -->
+<section class="view" id="view-muse" hidden>
+  <div class="view-inner" id="museRoot"></div>
 </section>
 
 <!-- ─── View: Song overview ────────────────────────────────────────── -->
@@ -372,8 +378,8 @@
 <!-- Toast -->
 <div id="toast" class="toast hidden" role="status"></div>
 
-<!-- Tone.js -->
-<script src="https://unpkg.com/tone@14.8.49/build/Tone.js"></script>
+<!-- Tone.js 14.8.49, bundled (see vendor/tone for its licence) -->
+<script src="vendor/tone/Tone.js"></script>
 
 <!-- ChordPath theory modules -->
 <script src="theory/scales.js"></script>
@@ -395,6 +401,10 @@
 <script src="theory/song.js"></script>
 <script src="theory/feelings.js"></script>
 <script src="theory/storage.js"></script>
+<script src="theory/chordparse.js"></script>
+<script src="theory/lexicon.js"></script>
+<script src="theory/musedata.js"></script>
+<script src="theory/muse.js"></script>
 <script src="theory/midi.js"></script>
 <script src="theory/learn.js"></script>
 <script src="audio.js"></script>
@@ -405,6 +415,7 @@
 <script src="ui/nav.js"></script>
 <script src="ui/views/songs.js"></script>
 <script src="ui/views/wizard.js"></script>
+<script src="ui/views/muse.js"></script>
 <script src="ui/views/overview.js"></script>
 <script src="ui/views/section.js"></script>
 <script src="ui/views/studio.js"></script>

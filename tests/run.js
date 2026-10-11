@@ -377,6 +377,20 @@ check('legacy migration keeps chord level', migrated.sections[0].levels.chords =
     JSON.stringify(s1.sections));
 }
 
+// Chord spelling: a stored chord keeps the accidental it was written with,
+// so a Bb typed into a song in C does not come back as A#.
+{
+  const spell = (key, spec) => {
+    const sng = Song.createSong({ key, scale: 'major' });
+    const sec = Song.createSection({ progSpecs: [spec] });
+    return Song.chordsOf(sng, sec)[0].shortName;
+  };
+  check('a flat chord in a sharp-side key keeps its flat', spell('C', 'Bb:maj') === 'Bb');
+  check('a sharp chord in a flat key keeps its sharp', spell('F', 'F#:m') === 'F#m');
+  check('a sharp-spelled chord in a neutral key is unchanged', spell('C', 'A#:maj') === 'A#');
+  check('natural chords are unaffected', spell('Bb', 'C:m') === 'Cm' && spell('C', 'G:7') === 'G7');
+}
+
 // buildPlayback
 const pb = Song.buildPlayback(s1);
 check('buildPlayback yields one item per section', pb.length === s1.sections.length);

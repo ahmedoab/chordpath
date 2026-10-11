@@ -98,6 +98,12 @@
       window.Views.Wizard.enter();
       return;
     }
+    if (r.view === 'muse') {
+      flushSave();
+      Nav.setSongOpen(App.state.songId, App.state.song ? App.state.song.title : '');
+      window.Views.Muse.enter();
+      return;
+    }
     const song = ensureSong(r.songId);
     if (!song) {
       UI.toast('Song not found');
@@ -191,9 +197,27 @@
     window.addEventListener('pointerdown', warmAudio, { once: true, capture: true });
 
     window.Views.Songs.wire();
-    Nav.init(() => ({ songId: App.state.songId, sectionId: App.state.sectionId }));
+    // The Section tab opens the last section worked on, or the first one.
+    Nav.init(() => {
+      const song = App.state.song;
+      const known = song && Song.getSection(song, App.state.sectionId);
+      return {
+        songId: App.state.songId,
+        sectionId: known ? known.id : (song && song.sections[0] ? song.sections[0].id : null),
+      };
+    });
     Nav.onRoute(onRoute);
     Nav.apply();
+
+    // Desktop app: the window's menu bar drives the same navigation.
+    if (window.Desktop && window.Desktop.onMenu) {
+      window.Desktop.onMenu(command => {
+        if (command === 'new-song') Nav.go('wizard');
+        else if (command === 'songs') Nav.go('songs');
+        else if (command === 'muse') Nav.go('muse');
+        else if (command === 'guides') UI.openModal(window.Learn.renderPrimer());
+      });
+    }
   }
 
   if (document.readyState === 'loading') {

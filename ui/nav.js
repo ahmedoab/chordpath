@@ -2,6 +2,7 @@
  * Hash router + top navigation. Routes:
  *   #/songs                          project browser
  *   #/wizard                         new-song wizard
+ *   #/muse                           Muse, the built-in AI
  *   #/song/<id>                      song overview
  *   #/song/<id>/section/<sectionId>  section editor
  *   #/song/<id>/studio               studio guide
@@ -13,13 +14,16 @@
   'use strict';
 
   const doc = global.document;
-  const VIEWS = ['songs', 'wizard', 'overview', 'section', 'studio', 'handoff'];
+  const VIEWS = ['songs', 'wizard', 'muse', 'overview', 'section', 'studio', 'handoff'];
+  // Tabs that work without a song open.
+  const FREE_TABS = ['songs', 'muse'];
   const listeners = [];
 
   function route() {
     const h = (global.location.hash || '').replace(/^#\/?/, '');
     const parts = h.split('/').filter(Boolean);
     if (parts[0] === 'wizard') return { view: 'wizard' };
+    if (parts[0] === 'muse') return { view: 'muse' };
     if (parts[0] === 'song' && parts[1]) {
       const songId = parts[1];
       if (parts[2] === 'section' && parts[3]) return { view: 'section', songId, sectionId: parts[3] };
@@ -33,6 +37,7 @@
   function go(view, songId, sectionId) {
     let hash = '#/songs';
     if (view === 'wizard') hash = '#/wizard';
+    else if (view === 'muse') hash = '#/muse';
     else if (view === 'overview' && songId) hash = '#/song/' + songId;
     else if (view === 'section' && songId && sectionId) hash = '#/song/' + songId + '/section/' + sectionId;
     else if (view === 'studio' && songId) hash = '#/song/' + songId + '/studio';
@@ -61,7 +66,7 @@
   function setSongOpen(songId, title) {
     doc.querySelectorAll('#navTabs [data-nav]').forEach(btn => {
       const nav = btn.dataset.nav;
-      if (nav !== 'songs') btn.disabled = !songId;
+      if (!FREE_TABS.includes(nav)) btn.disabled = !songId;
     });
     const titleEl = doc.getElementById('navSongTitle');
     if (titleEl) titleEl.textContent = title || '';
@@ -72,7 +77,7 @@
       btn.addEventListener('click', () => {
         const nav = btn.dataset.nav;
         const ctx = getSongContext ? getSongContext() : {};
-        if (nav === 'songs') go('songs');
+        if (FREE_TABS.includes(nav)) go(nav);
         else if (ctx.songId) go(nav, ctx.songId, ctx.sectionId);
       });
     });

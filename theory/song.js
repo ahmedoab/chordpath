@@ -89,7 +89,9 @@
     const key = sectionKey(song, section);
     const preferFlats = key.includes('b');
     return (section.progSpecs || []).map(spec => {
-      const ch = C.chordFromSpec(spec, preferFlats);
+      // A chord written with its own accidental keeps that spelling.
+      const own = spec.charAt(1);
+      const ch = C.chordFromSpec(spec, own === 'b' ? true : own === '#' ? false : preferFlats);
       ch.roman = C.romanNumeral(ch, key, song.scale);
       return ch;
     });
