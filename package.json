@@ -1,18 +1,58 @@
 {
   "name": "chordpath",
   "productName": "ChordPath",
-  "version": "0.3.0-experimental",
-  "description": "Feeling-driven song studio and DAW with its own built-in, offline AI.",
+  "version": "0.4.0-experimental",
+  "description": "Feeling-driven song studio and DAW with its own built-in AI.",
   "private": true,
   "author": "ahmedoab",
   "main": "desktop/main.js",
   "scripts": {
     "start": "electron .",
     "test": "node tests/run.js && node tests/audio-test.js && node tests/muse-test.js && node tests/daw-test.js && node tests/research-test.js",
-    "test:e2e": "node tests/e2e.js && node tests/e2e-engine.js && node tests/e2e-daw.js"
+    "test:e2e": "node tests/e2e.js && node tests/e2e-engine.js && node tests/e2e-daw.js",
+    "dist": "electron-builder --win --x64",
+    "test:packaged": "node tests/e2e-packaged.js"
   },
   "devDependencies": {
     "electron": "44.7.0",
+    "electron-builder": "26.15.3",
     "playwright-core": "1.64.0"
+  },
+  "build": {
+    "appId": "io.github.ahmedoab.chordpath",
+    "productName": "ChordPath",
+    "copyright": "ahmedoab",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "index.html",
+      "style.css",
+      "app.js",
+      "audio.js",
+      "theory/**",
+      "ui/**",
+      "daw/**",
+      "vendor/**",
+      "desktop/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "desktop/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "ChordPath",
+      "artifactName": "ChordPath-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "ChordPath-${version}-portable.${ext}"
+    }
   }
 }

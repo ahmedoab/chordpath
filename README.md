@@ -20,17 +20,31 @@ to that one site, with the song's title and artist and nothing else.
 
 ## Running it
 
-As a desktop application (needs [Node.js](https://nodejs.org) 22.12 or newer,
-once, to fetch the shell):
+**As a Windows program.** Build the installer once (needs
+[Node.js](https://nodejs.org) 22.12 or newer):
 
 ```
 npm install
-npm start
+npm run dist
 ```
 
-Or with nothing installed: open `index.html` in a browser. Either way your
-songs and Muse's memory are stored on your computer. The DAW is built and
-tested for the desktop application.
+That leaves two files in `dist/`:
+
+- `ChordPath-Setup-<version>.exe` installs ChordPath for you, with Start
+  menu and desktop shortcuts and an uninstaller.
+- `ChordPath-<version>-portable.exe` runs without installing anything.
+
+Neither is code-signed, so the first time you run one Windows SmartScreen
+will warn about an unrecognised app: choose "More info", then "Run anyway".
+`npm run test:packaged` checks the built program.
+
+**From source.** `npm install`, then `npm start`.
+
+**In a browser.** Open `index.html`. The song tools work there; the DAW and
+Muse's lookup are built and tested for the desktop program.
+
+However you run it, your songs and Muse's memory are stored on your
+computer, and the installed program and `npm start` share them.
 
 ## Muse — ChordPath's own AI
 
@@ -194,6 +208,7 @@ Vanilla JS, no build step. Each file is an IIFE exporting one global;
 - `ui/` — components, viz (piano/fretboard/chord diagrams), nav (hash
   router), and one view module per screen. `ui/daw/` holds the DAW's
   timeline, note editor and mixer.
+- `tools/make-icon.js` redraws the program's icon from `desktop/icon.svg`.
 - `desktop/` — the Electron shell: one window, a private `app://` address
   for the app's files, and the rule that the page may request nothing else.
   `lookup.js` is the one way out: it builds the only addresses the shell

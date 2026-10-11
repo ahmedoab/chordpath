@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- ChordPath: three chords and the path between them, in the app's ink, burnt orange and paper. -->
+  <rect width="256" height="256" rx="58" fill="#1a1916"/>
+  <path d="M66 184 L128 142 L190 74" fill="none" stroke="#d97a4a" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="66" cy="184" r="26" fill="#d97a4a"/>
+  <circle cx="128" cy="142" r="26" fill="#d97a4a"/>
+  <circle cx="190" cy="74" r="31" fill="#faf8f3"/>
+</svg>
