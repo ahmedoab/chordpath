@@ -80,6 +80,49 @@ const { check, section, tempDataDir, launch, crashed, finish, cleanup } = requir
     check('there is silence before the first note', timing.quietBefore < 1e-5);
     check('the render runs to the end of the last clip plus its tail', Math.abs(timing.fastSeconds - 5) < 0.01);
 
+    // A tempo change part-way: 120 for the first bar, 60 from the second.
+    const changing = await page.evaluate(async () => {
+      const T = window.__t;
+      const hitAt = beat => {
+        const p = T.project(120, [{ kind: 'drums', clips: [{ start: 0, length: 12, notes: [[beat, 0.25, 36, 0.9]] }] }]);
+        p.changes = [{ beat: 4, tempo: 60, num: 4, den: 4 }];
+        return p;
+      };
+      const onChange = await T.render(hitAt(4)), after = await T.render(hitAt(6)), later = await T.render(hitAt(8));
+      // An organ note held from beat 3 to beat 5: half a second before the change, a whole second after it.
+      const held = T.project(120, [{ instrument: 'organ', clips: [{ start: 0, length: 8, notes: [[3, 2, 60, 0.6]] }] }]);
+      held.changes = [{ beat: 4, tempo: 60, num: 4, den: 4 }];
+      const heldOut = await T.render(held);
+
+      // Live: the playhead keeps to the map as it crosses the change.
+      const eng = DawEngine.get();
+      const live = hitAt(0);
+      eng.sync(live);
+      await eng.seek(2);
+      await eng.play();
+      const began = eng.anchors[0].time;
+      await T.wait(2600);
+      const now = eng.ctx.currentTime;
+      const reached = eng.position();
+      eng.stop();
+      await eng.seek(0);
+      return {
+        onChange: T.onset(onChange, 0.002), after: T.onset(after, 0.002), later: T.onset(later, 0.002),
+        seconds: T.measure(later).seconds,
+        heldStart: T.onset(heldOut, 0.002), heldBody: T.measure(heldOut, 2.6, 2.9).rms[0], heldGone: T.measure(heldOut, 3.6, 3.9).rms[0],
+        reached, expected: DawProject.secondsToBeat(live, DawProject.beatToSeconds(live, 2) + (now - began)),
+        untimed: 2 + (now - began) * 2, delay: DawEngine.CHAIN_DELAY,
+      };
+    });
+    check(`a hit on the bar where the tempo halves lands at 2.0 s (${changing.onChange.toFixed(4)} s)`, Math.abs(changing.onChange - 2 - changing.delay) < 0.006);
+    check(`two beats later it lands at 4.0 s, not 3.0 (${changing.after.toFixed(4)} s)`, Math.abs(changing.after - 4 - changing.delay) < 0.006);
+    check(`and a bar later at 6.0 s (${changing.later.toFixed(4)} s)`, Math.abs(changing.later - 6 - changing.delay) < 0.006);
+    check(`the bounce is as long as the slower bars make it (${changing.seconds.toFixed(2)} s)`, Math.abs(changing.seconds - 11) < 0.02);
+    check('a note held across the change lasts its beats at both tempos',
+      Math.abs(changing.heldStart - 1.5 - changing.delay) < 0.006 && changing.heldBody > 0.01 && changing.heldGone < changing.heldBody * 0.05);
+    check(`played live, the playhead slows where the tempo does (at beat ${changing.reached.toFixed(2)}, expected ${changing.expected.toFixed(2)})`,
+      Math.abs(changing.reached - changing.expected) < 0.02 && changing.untimed - changing.reached > 1);
+
     // ── Determinism ────────────────────────────────────────────────────────
     section('Determinism');
     const same = await page.evaluate(async () => {
@@ -442,6 +485,36 @@ const { check, section, tempDataDir, launch, crashed, finish, cleanup } = requir
     });
     check(`the count-in is heard (${countIn.first.toFixed(0)} dB)`, countIn.first > -40);
     check(`and stops when recording is stopped (${countIn.after.toFixed(0)} dB)`, countIn.after < -60);
+
+    // The count-in is one bar of whatever time the song is in, and a take that
+    // runs across a tempo change is measured in beats by the tempo map.
+    const metered = await page.evaluate(async () => {
+      const T = window.__t;
+      const eng = DawEngine.get();
+      const countIn = async meter => {
+        eng.sync(DawProject.createProject({ tempo: 200, meter }));
+        await eng.seek(0);
+        await eng.startRecording();
+        const clicks = eng.recording.countIn.length;
+        eng.stopRecording();
+        return clicks;
+      };
+      const three = await countIn({ num: 3, den: 4 });
+      const six = await countIn({ num: 6, den: 8 });
+
+      const p = DawProject.createProject({ tempo: 240 });
+      p.changes = [{ beat: 4, tempo: 120, num: 4, den: 4 }];
+      eng.sync(p);
+      await eng.seek(0);
+      await eng.startRecording();
+      await T.wait(1000 + 2000);                                   // a bar of count-in at 240, then two seconds of take
+      const take = eng.stopRecording();
+      const seconds = take ? take.channels[0].length / take.sampleRate : 0;
+      return { three, six, beats: take ? take.beats : 0, byMap: DawProject.secondsToBeat(p, seconds), flat: seconds * 4 };
+    });
+    check('the count-in is three clicks in 3/4 and six in 6/8', metered.three === 3 && metered.six === 6);
+    check(`a take across a tempo change is as many beats as the map says (${metered.beats.toFixed(2)}, not ${metered.flat.toFixed(2)})`,
+      metered.beats > 4 && Math.abs(metered.beats - metered.byMap) < 0.02 && metered.flat - metered.beats > 1);
 
     // Which input is recorded. The test shell offers several pretend ones.
     const inputs = await page.evaluate(async () => {

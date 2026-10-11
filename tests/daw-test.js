@@ -345,6 +345,86 @@ section('MIDI export');
   eq('a track with no notes is left out', (DawProject.toMidi(edited)[10] << 8) | DawProject.toMidi(edited)[11], ntrks - 1);
 }
 
+// ── Tempo and time signature along the song ────────────────────────────────
+section('Tempo and time signature');
+{
+  const P = DawProject;
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  const plain = P.createProject({ tempo: 120 });
+  eq('a new project is in 4/4 with nothing changing later', [plain.meter, plain.changes], [{ num: 4, den: 4 }, []]);
+  check('one tempo: a beat is the same length everywhere', near(P.beatToSeconds(plain, 8), 4) && near(P.secondsToBeat(plain, 4), 8));
+  eq('bars count in fours', [P.positionAt(plain, 0).bar, P.positionAt(plain, 9).bar, P.positionAt(plain, 9).beat], [1, 3, 2]);
+
+  // 120 for two bars, 60 from bar 3, then 3/4 at 90 from bar 5.
+  const p = P.createProject({ tempo: 120 });
+  eq('a change is made at the start of the bar it is asked for in', P.setChange(p, 9.5, { tempo: 60 }), 8);
+  P.setChange(p, 16, { tempo: 90, num: 3, den: 4 });
+  eq('changes are kept in order, each with tempo and time signature',
+    p.changes, [{ beat: 8, tempo: 60, num: 4, den: 4 }, { beat: 16, tempo: 90, num: 3, den: 4 }]);
+  eq('the tempo at any point is that of the stretch it falls in',
+    [0, 7.9, 8, 15.9, 16, 99].map(b => P.tempoAt(p, b)), [120, 120, 60, 60, 90, 90]);
+  check('time adds up stretch by stretch', near(P.beatToSeconds(p, 8), 4) && near(P.beatToSeconds(p, 16), 12) && near(P.beatToSeconds(p, 19), 14));
+  check('and back again', [0, 3, 8, 12.5, 16, 19, 40].every(b => near(P.secondsToBeat(p, P.beatToSeconds(p, b)), b)));
+  eq('bar numbers follow the time signature', [15.9, 16, 18.9, 19, 22].map(b => P.positionAt(p, b).bar), [4, 5, 5, 6, 7]);
+  eq('so does the beat within the bar', [16, 17, 18.5].map(b => P.positionAt(p, b).beat), [1, 2, 3.5]);
+  eq('bar lines are spaced by the bar in force', P.barsBetween(p, 12, 23).map(b => [b.beat, b.bar]), [[12, 4], [16, 5], [19, 6], [22, 7]]);
+  eq('the nearest bar line respects it too', [13, 14.1, 17.4, 17.6, 0.5].map(b => P.nearestBar(p, b)), [12, 16, 16, 19, 0]);
+  eq('clicks fall on the beats of the bar, the first of each accented',
+    P.clicksBetween(p, 14, 20).map(c => [c.beat, c.accent]), [[14, false], [15, false], [16, true], [17, false], [18, false], [19, true]]);
+
+  const q = P.createProject({ tempo: 120 });
+  P.setChange(q, 8, { num: 3, den: 4 });
+  eq('the bars a clip lies across are cut to the clip', P.clipBars(q, { start: 6, length: 8 }), [
+    { bar: 2, start: 0, length: 2, num: 4, den: 4, skip: 2 },
+    { bar: 3, start: 2, length: 3, num: 3, den: 4, skip: 0 },
+    { bar: 4, start: 5, length: 3, num: 3, den: 4, skip: 0 },
+  ]);
+  eq('a clip on the bar lines gets whole bars', P.clipBars(q, { start: 0, length: 8 }).map(b => [b.bar, b.start, b.length, b.skip]), [[1, 0, 4, 0], [2, 4, 4, 0]]);
+
+  const six = P.createProject({ tempo: 100, meter: { num: 6, den: 8 } });
+  eq('in 6/8 a bar is three quarter-notes long and has six beats', [P.positionAt(six, 3).bar, P.positionAt(six, 2.5).beat, P.barsBetween(six, 0, 7).map(b => b.beat)],
+    [2, 6, [0, 3, 6]]);
+  eq('with a click on every eighth', P.clicksBetween(six, 0, 1.6).map(c => [c.beat, c.accent]), [[0, true], [0.5, false], [1, false], [1.5, false]]);
+
+  eq('asking again at the same bar edits that change', [P.setChange(p, 8, { num: 2, den: 2 }), p.changes[0]], [8, { beat: 8, tempo: 60, num: 2, den: 2 }]);
+  eq('at the first bar it sets where the song starts from', [P.setChange(p, 2, { tempo: 132, num: 4, den: 4 }), p.tempo, p.meter, p.changes.length], [0, 132, { num: 4, den: 4 }, 2]);
+  eq('a change can be taken out', [P.removeChange(p, 8), p.changes.map(c => c.beat), P.removeChange(p, 8)], [true, [16], false]);
+  P.setChange(p, 16, { tempo: 999, num: 99, den: 3 });
+  eq('values are kept inside what a song can use', p.changes[0], { beat: 16, tempo: 240, num: 16, den: 4 });
+  eq('a change can start out the same as what came before, ready to be edited',
+    [P.setChange(plain, 8, {}), plain.changes], [8, [{ beat: 8, tempo: 120, num: 4, den: 4 }]]);
+
+  const saved = P.sanitize(JSON.parse(JSON.stringify(p)));
+  eq('changes survive saving and loading', [saved.tempo, saved.meter, saved.changes], [p.tempo, p.meter, p.changes]);
+  const messy = P.sanitize({ tempo: 100, meter: { num: 0, den: 5 }, changes: [
+    { beat: 32, tempo: 80, num: 4, den: 4 }, { beat: 8, tempo: 70, num: 3, den: 4 }, { beat: 8, tempo: 75, num: 3, den: 4 },
+    { beat: -4, tempo: 90, num: 4, den: 4 }, { beat: 12, tempo: 'fast' }, null, 'x', { beat: 0, tempo: 60, num: 4, den: 4 },
+  ] });
+  eq('a damaged file comes back sorted, de-duplicated and within range',
+    [messy.meter, messy.changes], [{ num: 4, den: 4 }, [{ beat: 8, tempo: 75, num: 3, den: 4 }, { beat: 32, tempo: 80, num: 4, den: 4 }]]);
+  eq('a file from before tempo changes existed still loads', [P.sanitize({ tempo: 90 }).meter, P.sanitize({ tempo: 90 }).changes], [{ num: 4, den: 4 }, []]);
+
+  // MIDI carries the tempo map and the time signatures.
+  const mid = P.toMidi(Object.assign(P.createProject({ tempo: 120 }), { changes: [{ beat: 8, tempo: 60, num: 3, den: 4 }] }));
+  const find = seq => { outer: for (let i = 0; i + seq.length <= mid.length; i++) { for (let j = 0; j < seq.length; j++) if (mid[i + j] !== seq[j]) continue outer; return i; } return -1; };
+  check('MIDI export opens in 4/4 at the first tempo', find([0xff, 0x58, 4, 4, 2, 24, 8]) > 0 && find([0xff, 0x51, 3, 0x07, 0xa1, 0x20]) > 0);
+  check('and writes each change where it happens', find([0xff, 0x51, 3, 0x0f, 0x42, 0x40]) > find([0xff, 0x51, 3, 0x07, 0xa1, 0x20]) &&
+    find([0xff, 0x58, 4, 3, 2, 24, 8]) > find([0xff, 0x58, 4, 4, 2, 24, 8]) &&
+    mid[find([0xff, 0x51, 3, 0x0f, 0x42, 0x40]) - 2] === 0x9e && mid[find([0xff, 0x51, 3, 0x0f, 0x42, 0x40]) - 1] === 0x00);
+
+  // A song whose sections have tempos of their own arrives with those changes.
+  const paced = Feelings.generateSongSpec({ feelingId: 'yearning', genreId: 'jangle_indie', energy: 'mid', seed: 11 });
+  paced.sections[2].tempoOverride = paced.tempo - 20;
+  const fromPaced = P.fromSong(paced);
+  const laid = Parts.fromSong(paced).sections;
+  const slow = laid.filter(s => s.id === paced.sections[2].id);
+  const next = laid[laid.indexOf(slow[slow.length - 1]) + 1];
+  eq('a section with its own tempo becomes a change there, and one back afterwards',
+    fromPaced.changes.map(c => [c.beat, c.tempo, c.num, c.den]), [[slow[0].start, paced.tempo - 20, 4, 4], [next.start, paced.tempo, 4, 4]]);
+  check('and the first bar still starts at the song\'s own tempo', fromPaced.tempo === paced.tempo);
+  eq('a song at one tempo has none', P.fromSong(Feelings.generateSongSpec({ feelingId: 'yearning', genreId: 'jangle_indie', energy: 'mid', seed: 11 })).changes, []);
+}
+
 // ── Working on several notes together ──────────────────────────────────────
 section('Several notes at once');
 {
@@ -524,6 +604,25 @@ section('Tab from notes');
   check('a triplet is rounded and the tab says so', /nearest sixteenth/.test(
     Tabs.renderNotesTab([0, 1 / 3, 2 / 3].map(t => ({ midi: 64, beatStart: t })), { totalBeats: 4, tempo: 120 })));
   eq('no notes, a plain message', Tabs.renderNotesTab([], { totalBeats: 4 }), '(no notes)');
+
+  // Other time signatures: the bars are handed in, each with its own length and count.
+  eq('the count for a bar follows its time signature', [Tabs.countLabels(3, 4).join(''), Tabs.countLabels(6, 8).join(''), Tabs.countLabels(2, 2).join('|')],
+    ['1e+a2e+a3e+a', '1+2+3+4+5+6+', '1||||+||||2||||+|||']);
+  const waltz = Tabs.renderNotesTab([{ midi: 64, beatStart: 0 }, { midi: 65, beatStart: 3 }],
+    { totalBeats: 6, tempo: 120, bars: [{ start: 0, length: 3, num: 3, den: 4 }, { start: 3, length: 3, num: 3, den: 4 }] });
+  check('in 3/4 a bar is twelve steps wide', /^0-{23}\|1-{23}\|$/.test(lines(waltz).e));
+  check('and is counted in three', /1 e \+ a 2 e \+ a 3 e \+ a +1 e \+ a 2 e \+ a 3 e \+ a$/m.test(waltz) && !/4 e/.test(waltz));
+  const sixEight = Tabs.renderNotesTab([{ midi: 64, beatStart: 0 }, { midi: 67, beatStart: 1.5 }],
+    { totalBeats: 3, tempo: 120, bars: [{ start: 0, length: 3, num: 6, den: 8 }] });
+  check('6/8 is counted in six, with the second half of the bar where it belongs',
+    /1 \+ 2 \+ 3 \+ 4 \+ 5 \+ 6 \+/.test(sixEight) && /^0-{11}3-{11}\|$/.test(lines(sixEight).e));
+  const pickup = Tabs.renderNotesTab([{ midi: 64, beatStart: 0 }, { midi: 65, beatStart: 1 }],
+    { totalBeats: 5, tempo: 120, bars: [{ start: 0, length: 1, num: 4, den: 4, skip: 3 }, { start: 1, length: 4, num: 4, den: 4 }] });
+  check('a clip that begins inside a bar starts with what is left of that bar',
+    /^0-{7}\|1-{31}\|$/.test(lines(pickup).e) && /^ {3}4 e \+ a +1 e \+ a/m.test(pickup));
+  const mixed = Tabs.renderNotesTab([{ midi: 64, beatStart: 4 }],
+    { totalBeats: 7, tempo: 120, bars: [{ start: 0, length: 4, num: 4, den: 4 }, { start: 4, length: 3, num: 3, den: 4 }] });
+  check('a change of time signature inside a clip is followed bar by bar', /^-{32}\|0-{23}\|$/.test(lines(mixed).e));
 
   // Every clip of a real song: the tab must be readable whatever the part plays.
   const proj = DawProject.fromSong(Feelings.generateSongSpec({ feelingId: 'yearning', genreId: 'jangle_indie', energy: 'mid', seed: 11 }));

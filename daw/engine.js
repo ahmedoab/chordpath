@@ -382,13 +382,14 @@
     else (VOICES[strip.instrument] || VOICES.piano)(this, strip, hz(midi), when, seconds, velocity);
   };
 
-  // Starts (part of) an audio clip. `skip` is how far into the clip to begin.
-  Mixer.prototype.playClip = function (trackId, clip, when, skip, spb) {
+  // Starts (part of) an audio clip. `lasts` is how long the clip's place on
+  // the timeline is in seconds, `skip` how far into it to begin.
+  Mixer.prototype.playClip = function (trackId, clip, when, skip, lasts) {
     const strip = this.strips.get(trackId);
     const buffer = this.buffers.get(clip.audioId);
     if (!strip || !buffer) return;
     const offset = clip.offset + skip;
-    const seconds = Math.min(clip.length * spb - skip, buffer.duration - offset);
+    const seconds = Math.min(lasts - skip, buffer.duration - offset);
     if (seconds <= 0.001) return;
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
@@ -490,11 +491,26 @@
     }
   };
 
-  Engine.prototype.spb = function () { return 60 / this.project.tempo; };
+  // Seconds per beat where `beat` falls: the song may change tempo as it goes.
+  Engine.prototype.spbAt = function (beat) { return 60 / P().tempoAt(this.project, beat); };
+  // How long the stretch from one beat to another lasts.
+  Engine.prototype.secondsBetween = function (from, to) {
+    return P().beatToSeconds(this.project, to) - P().beatToSeconds(this.project, from);
+  };
+  // The beat of the next tempo change after `beat`, or Infinity.
+  Engine.prototype.nextChange = function (beat) {
+    const change = (this.project.changes || []).find(c => c.beat > beat + 1e-9);
+    return change ? change.beat : Infinity;
+  };
+
+  // Everything about a project that decides when its beats happen.
+  function timingOf(project) {
+    return [project.tempo].concat((project.changes || []).map(c => c.beat + ':' + c.tempo)).join(',');
+  }
 
   // Brings the engine in line with the project after any edit.
   Engine.prototype.sync = function (project) {
-    const retimed = this.project && this.project.tempo !== project.tempo;
+    const retimed = this.project && timingOf(this.project) !== timingOf(project);
     const here = this.playing ? this.position() : this.paused;
     this.project = project;
     this.flat = flatten(project);
@@ -504,7 +520,7 @@
       // Re-anchor at the playhead so a tempo change takes effect at once.
       const now = this.ctx.currentTime;
       this.mixer.cutAll();
-      this.anchors = [{ time: now + 0.03, beat: here, spb: this.spb() }];
+      this.anchors = [{ time: now + 0.03, beat: here, spb: this.spbAt(here) }];
       this.until = here;
       this.startRunningClips(here, now + 0.03);
     }
@@ -571,9 +587,10 @@
 
   // Audio clips that are already under way at `beat` start part-way through.
   Engine.prototype.startRunningClips = function (beat, when) {
-    const spb = this.spb();
     this.flat.clips.forEach(c => {
-      if (c.beat < beat && c.end > beat) this.mixer.playClip(c.trackId, c.clip, when, (beat - c.beat) * spb, spb);
+      if (c.beat < beat && c.end > beat) {
+        this.mixer.playClip(c.trackId, c.clip, when, this.secondsBetween(c.beat, beat), this.secondsBetween(c.beat, c.end));
+      }
     });
   };
 
@@ -584,7 +601,7 @@
     if (this.ctx.state !== 'running') await this.ctx.resume();
     if (this.playing || !this.project) return;
     const when = at || this.ctx.currentTime + 0.06;
-    this.anchors = [{ time: when, beat: this.paused, spb: this.spb() }];
+    this.anchors = [{ time: when, beat: this.paused, spb: this.spbAt(this.paused) }];
     this.until = this.paused;
     this.noteCursor = firstAtOrAfter(this.flat.notes, this.until);
     this.clipCursor = firstAtOrAfter(this.flat.clips, this.until);
@@ -634,48 +651,52 @@
   };
 
   // Schedules everything between `from` and `to` beats on the current anchor.
+  // The span never runs past a tempo change: pump() ends it there.
   Engine.prototype.scheduleSpan = function (from, to) {
-    const spb = this.anchors[this.anchors.length - 1].spb;
     const notes = this.flat.notes;
     while (this.noteCursor < notes.length && notes[this.noteCursor].beat < to) {
       const ev = notes[this.noteCursor++];
-      if (ev.beat >= from) this.mixer.note(ev.trackId, ev.n, this.timeOf(ev.beat), ev.d * spb, ev.v);
+      if (ev.beat >= from) this.mixer.note(ev.trackId, ev.n, this.timeOf(ev.beat), this.secondsBetween(ev.beat, ev.beat + ev.d), ev.v);
     }
     const clips = this.flat.clips;
     while (this.clipCursor < clips.length && clips[this.clipCursor].beat < to) {
       const c = clips[this.clipCursor++];
-      if (c.beat >= from) this.mixer.playClip(c.trackId, c.clip, this.timeOf(c.beat), 0, spb);
+      if (c.beat >= from) this.mixer.playClip(c.trackId, c.clip, this.timeOf(c.beat), 0, this.secondsBetween(c.beat, c.end));
     }
     if (this.clickOn) {
-      for (let b = Math.ceil(from - 1e-9); b < to; b++) this.tick(this.timeOf(b), b % 4 === 0);
+      P().clicksBetween(this.project, from, to).forEach(click => this.tick(this.timeOf(click.beat), click.accent));
     }
     this.until = to;
   };
 
-  // Called every 25 ms while playing: keeps LOOKAHEAD seconds scheduled, and
-  // jumps back to the loop start when the loop end comes into view.
+  // Called every 25 ms while playing: keeps LOOKAHEAD seconds scheduled. When
+  // the end of the loop comes into view it jumps back to the loop start, and
+  // when a tempo change does it carries on from there at the new tempo.
   Engine.prototype.pump = function () {
     if (!this.playing) return;
     this.mixer.sweep(this.ctx.currentTime);
     const horizon = this.ctx.currentTime + LOOKAHEAD;
-    if (this.anchors.length > 4) this.anchors = this.anchors.slice(-2);
+    if (this.anchors.length > 8) this.anchors = this.anchors.slice(-4);
     for (let guard = 0; guard < 64; guard++) {
       const a = this.anchors[this.anchors.length - 1];
       const to = a.beat + (horizon - a.time) / a.spb;
       if (to <= this.until) return;
       const loop = this.project.loop;
-      if (loop.on && loop.end > loop.start && this.until < loop.end && to >= loop.end) {
-        this.scheduleSpan(this.until, loop.end);
-        const jumpTime = this.timeOf(loop.end);
-        this.anchors.push({ time: jumpTime, beat: loop.start, spb: this.spb() });
-        this.until = loop.start;
-        this.noteCursor = firstAtOrAfter(this.flat.notes, loop.start);
-        this.clipCursor = firstAtOrAfter(this.flat.clips, loop.start);
-        this.startRunningClips(loop.start, jumpTime);
-        continue;
+      const loopEnd = loop.on && loop.end > loop.start && this.until < loop.end ? loop.end : Infinity;
+      const turn = Math.min(loopEnd, this.nextChange(this.until));
+      if (to < turn) {
+        this.scheduleSpan(this.until, to);
+        return;
       }
-      this.scheduleSpan(this.until, to);
-      return;
+      this.scheduleSpan(this.until, turn);
+      const time = this.timeOf(turn);
+      const from = turn === loopEnd ? loop.start : turn;
+      this.anchors.push({ time, beat: from, spb: this.spbAt(from) });
+      if (turn !== loopEnd) continue;
+      this.until = loop.start;
+      this.noteCursor = firstAtOrAfter(this.flat.notes, loop.start);
+      this.clipCursor = firstAtOrAfter(this.flat.clips, loop.start);
+      this.startRunningClips(loop.start, time);
     }
   };
 
@@ -814,11 +835,13 @@
     node.port.onmessage = e => chunks.push(e.data);
     input.source.connect(node);
 
-    const spb = this.spb();
+    // The count-in is one bar of the time and tempo in force at the playhead.
+    const bar = P().positionAt(this.project, this.paused);
+    const every = this.spbAt(this.paused) * 4 / bar.den;
     const first = this.ctx.currentTime + 0.12;
     const countIn = [];
-    for (let i = 0; i < 4; i++) countIn.push(this.tick(first + i * spb, i === 0));
-    const startTime = first + 4 * spb;
+    for (let i = 0; i < bar.num; i++) countIn.push(this.tick(first + i * every, i === 0));
+    const startTime = first + bar.num * every;
     this.recording = {
       stream: input.stream, source: input.source, node, chunks, countIn, startTime,
       fromBeat: this.paused, sampleRate: this.ctx.sampleRate,
@@ -859,10 +882,8 @@
     // The player heard the band late (output path) and was then heard late
     // again (input path); the clip skips that much of the take to line up.
     const latency = Math.min(0.5, (this.ctx.outputLatency || 0) + (this.ctx.baseLatency || 0) + CHAIN_DELAY);
-    return {
-      sampleRate: rec.sampleRate, channels, latency,
-      startBeat: rec.fromBeat, beats: (total / rec.sampleRate) / this.spb(),
-    };
+    const endsAt = P().secondsToBeat(this.project, P().beatToSeconds(this.project, rec.fromBeat) + total / rec.sampleRate);
+    return { sampleRate: rec.sampleRate, channels, latency, startBeat: rec.fromBeat, beats: endsAt - rec.fromBeat };
   };
 
   Engine.prototype.isRecording = function () { return !!this.recording; };
@@ -882,8 +903,8 @@
       source.tracks = source.tracks.filter(t => t.id === options.onlyTrackId);
       source.tracks.forEach(t => { t.mute = false; t.solo = false; });
     }
-    const spb = 60 / source.tempo;
-    const seconds = Math.max(0.5, P().endBeat(source) * spb + (options.tail == null ? 2.5 : options.tail));
+    const timeOf = beat => P().beatToSeconds(source, beat);
+    const seconds = Math.max(0.5, timeOf(P().endBeat(source)) + (options.tail == null ? 2.5 : options.tail));
     const Offline = global.OfflineAudioContext || global.webkitOfflineAudioContext;
     const ctx = new Offline(2, Math.ceil(seconds * sampleRate), sampleRate);
     const mixer = new Mixer(ctx, false);
@@ -891,16 +912,17 @@
     mixer.sync(source, false);
 
     const flat = flatten(source);
-    flat.clips.forEach(c => mixer.playClip(c.trackId, c.clip, c.beat * spb, 0, spb));
+    flat.clips.forEach(c => mixer.playClip(c.trackId, c.clip, timeOf(c.beat), 0, timeOf(c.end) - timeOf(c.beat)));
     // Notes are created a couple of seconds at a time while the render is
     // paused, so the graph never holds more than what is currently sounding.
     const CHUNK = 2;
     let cursor = 0;
     const scheduleUntil = time => {
-      const beat = time / spb;
+      const beat = P().secondsToBeat(source, time);
       while (cursor < flat.notes.length && flat.notes[cursor].beat < beat) {
         const ev = flat.notes[cursor++];
-        mixer.note(ev.trackId, ev.n, ev.beat * spb, ev.d * spb, ev.v);
+        const starts = timeOf(ev.beat);
+        mixer.note(ev.trackId, ev.n, starts, timeOf(ev.beat + ev.d) - starts, ev.v);
       }
     };
     scheduleUntil(CHUNK);

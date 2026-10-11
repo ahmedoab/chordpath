@@ -617,6 +617,73 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     await page.keyboard.press('Escape');
     check('Escape closes the list', await page.locator('#scrim.open').count() === 0);
 
+    // ── Tempo and time signature ───────────────────────────────────────────
+    section('Tempo and time signature');
+    const timing = () => page.evaluate(() => { const p = DawEngine.get().project; return { tempo: p.tempo, meter: p.meter, changes: p.changes }; });
+    const reads = async (bars, tempo, meter) => {
+      await page.waitForFunction(want => document.getElementById('dawBars').textContent === want, bars, { timeout: 3000 }).catch(() => {});
+      return (await page.textContent('#dawBars')) === bars && (await page.inputValue('#dawTempo')) === String(tempo) &&
+        (await page.textContent('#dawMeter')).trim() === meter;
+    };
+    const songTempo = (await timing()).tempo;
+    await page.keyboard.press('Home');
+    check('the bar, tempo and time signature at the playhead are shown together', await reads('1.1', songTempo, '4/4'));
+
+    await page.evaluate(() => DawEngine.get().seek(32));                 // bar 9
+    await page.click('#dawMeter');
+    await page.waitForSelector('#modalContent .daw-timing');
+    check('the list starts with what the song opens in', (await page.locator('.daw-timing tbody tr').count()) === 1 &&
+      (await page.inputValue('.daw-timing tr[data-beat="0"] .tm-tempo')) === String(songTempo));
+    check('and offers a change at the bar the playhead is in', /bar 9/.test(await page.textContent('#tmAdd')));
+    await page.click('#tmAdd');
+    await page.waitForSelector('.daw-timing tr[data-beat="32"]');
+    await page.fill('.daw-timing tr[data-beat="32"] .tm-tempo', '80');
+    await page.locator('.daw-timing tr[data-beat="32"] .tm-tempo').dispatchEvent('change');
+    await page.fill('.daw-timing tr[data-beat="32"] .tm-num', '3');
+    await page.locator('.daw-timing tr[data-beat="32"] .tm-num').dispatchEvent('change');
+    check('a change is added there and can be edited', JSON.stringify((await timing()).changes) === '[{"beat":32,"tempo":80,"num":3,"den":4}]');
+    check('its row says which bar it starts on', (await page.textContent('.daw-timing tr[data-beat="32"] td')).trim() === '9');
+    await page.click('#tmDone');
+    check('the transport now reads the new tempo and time there', await reads('9.1', 80, '3/4'));
+    await page.evaluate(() => DawEngine.get().seek(35));
+    check('bars are counted in threes from then on', await reads('10.1', 80, '3/4'));
+    await page.keyboard.press('Home');
+    check('and before the change everything is as it was', await reads('1.1', songTempo, '4/4'));
+    const clockAt = async beat => {
+      await page.evaluate(b => DawEngine.get().seek(b), beat);
+      await page.waitForTimeout(120);
+      const m = /^(\d+):([\d.]+)$/.exec(await page.textContent('#dawClock'));
+      return m ? Number(m[1]) * 60 + Number(m[2]) : -1;
+    };
+    const atChange = await clockAt(32), threeOn = await clockAt(35);
+    check('the clock runs slower after the change', Math.abs(atChange - 32 * 60 / songTempo) < 0.06 && Math.abs(threeOn - atChange - 3 * 60 / 80) < 0.11);
+
+    // The tempo box edits the stretch the playhead is in; it does not start a new one.
+    await page.fill('#dawTempo', '90');
+    await page.locator('#dawTempo').dispatchEvent('change');
+    let now = await timing();
+    check('typing a tempo changes the stretch under the playhead', now.tempo === songTempo && now.changes.length === 1 && now.changes[0].tempo === 90);
+
+    // The tab of a clip that the change falls inside: four-beat bars, then three-beat ones.
+    const preChorus = (await state()).tracks[0].clips.find(c => c.start < 32 && c.start + c.length > 32);
+    pt = await lanePoint(preChorus.start + 1, 0, ppb);
+    await page.mouse.click(pt.x, pt.y);
+    await page.click('#dawPanelTabs [data-panel="tab"]');
+    const mixedTab = await page.textContent('#dawTab');
+    check('a clip the change falls inside is tabbed in fours, then in threes',
+      /^e \|(?:[\d-]{32}\|)+(?:[\d-]{24}\|)+/m.test(mixedTab) || /^e \|(?:[\d-]{48}\|)+(?:[\d-]{36}\|)+/m.test(mixedTab));
+    check('with the count changing where the time does', /4 e \+ a +1 e \+ a +2 e \+ a +3 e \+ a +1 e/.test(mixedTab) || /4 +e +\+ +a +1 +e +\+ +a +2 +e +\+ +a +3 +e +\+ +a +1 +e/.test(mixedTab));
+
+    await page.click('#dawMeter');
+    await page.waitForSelector('#modalContent .daw-timing');
+    await page.click('.daw-timing tr[data-beat="32"] [data-remove]');
+    check('a change can be removed', (await timing()).changes.length === 0);
+    await page.click('#tmDone');
+    await page.keyboard.press('Control+z');
+    now = await timing();
+    check('and undo brings it back', now.changes.length === 1 && now.changes[0].tempo === 90 && now.changes[0].num === 3);
+    const keptChanges = JSON.stringify(now.changes);
+
     // ── Saving ─────────────────────────────────────────────────────────────
     section('Saving');
     const snapshot = await state();
@@ -641,6 +708,8 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
       await page.evaluate(id => Math.abs(DawEngine.get().audioSeconds(id) - 2) < 0.02, brought.clips[0].audioId));
     check('the editor panel keeps the height it was given', Math.abs((await panelHeight()) - shorter) <= 2);
     check('and the input to record from is still the one chosen', (await page.inputValue('#dawInput')) === chosenInput);
+    check('the tempo and time-signature change is still in the song',
+      await page.evaluate(() => JSON.stringify(DawEngine.get().project.changes)) === keptChanges);
     await page.waitForFunction(id => DawStore.getAudio(id).then(a => a === null), spareId, { timeout: 10000 }).catch(() => {});
     check('audio that no clip uses any more has been cleared from disk',
       await page.evaluate(async ids => (await DawStore.getAudio(ids[0])) === null && (await DawStore.getAudio(ids[1])) !== null, [spareId, take.audioId]));

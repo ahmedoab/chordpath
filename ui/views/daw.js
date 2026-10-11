@@ -28,6 +28,7 @@
     panelH: 0,                       // editor panel height in px; 0 = the default share of the window
     input: '', inputs: [],           // the input recording listens to ('' = system default), and those on offer
     clipboard: null,                 // copied notes, as DawProject.copyNotes gives them
+    shownStretch: '',                // the tempo and time signature the transport bar is showing
   };
 
   function root() { return doc.getElementById('dawRoot'); }
@@ -41,8 +42,16 @@
     return { track: track || null, clip: found ? found.clip : null };
   }
 
+  const BAR = 4;                     // the Snap setting that means "to the bar line"
+
   function snapBeat(beat) {
+    if (S.snap === BAR) return P().nearestBar(S.project, Math.max(0, beat));   // bars follow the time signature
     return Math.max(0, S.snap > 0 ? Math.round(beat / S.snap) * S.snap : beat);
+  }
+  // The grid step in beats: for "Bar", the length of the bar at that point.
+  function gridStep(at) {
+    if (S.snap === BAR) return P().positionAt(S.project, at).length;
+    return S.snap > 0 ? S.snap : 0.25;
   }
 
   // ── Saving ───────────────────────────────────────────────────────────────
@@ -219,8 +228,16 @@
     S.engine.inputs().then(list => {
       S.inputs = list;
       const pick = $('dawInput');
-      if (pick) pick.innerHTML = inputOptions();
+      if (!pick) return;
+      pick.innerHTML = inputOptions();
+      nameInput();
     }).catch(() => { /* no list; the system default still records */ });
+  }
+  // The picker is narrow, so the whole name of the chosen input is its tooltip.
+  function nameInput() {
+    const pick = $('dawInput');
+    const chosen = pick && pick.options[pick.selectedIndex];
+    if (chosen) pick.title = chosen.textContent;
   }
 
   function render() {
@@ -232,10 +249,11 @@
         <button type="button" class="ghost" id="dawHome" title="Back to the start (Home)">⏮</button>
         <button type="button" class="primary" id="dawPlay" title="Play / stop (Space)">▶ Play</button>
         <button type="button" class="ghost daw-rec" id="dawRec" title="Record onto an audio track (R)">● Record</button>
-        <label class="daw-field" title="The input that recording listens to">from <select id="dawInput">${inputOptions()}</select></label>
+        <label class="daw-field">from <select id="dawInput" title="The input that recording listens to">${inputOptions()}</select></label>
         <button type="button" class="ghost daw-toggle" id="dawMonitor" title="Hear your input through the app while you play. Use headphones: through speakers the microphone would pick itself up.">Hear it</button>
         <div class="daw-pos"><span id="dawBars" class="mono">1.1</span><span id="dawClock" class="meta">0:00.0</span></div>
-        <label class="daw-field">Tempo <input id="dawTempo" type="number" min="40" max="240" value="${esc(p.tempo)}" /></label>
+        <label class="daw-field" title="The tempo where the playhead is. Typing here changes it for that stretch of the song.">Tempo <input id="dawTempo" type="number" min="40" max="240" value="${esc(p.tempo)}" /></label>
+        <button type="button" class="ghost" id="dawMeter" title="Time signature where the playhead is. Click to change tempo or time signature part-way through the song.">4/4</button>
         <button type="button" class="ghost daw-toggle" id="dawLoop" title="Loop (L). Drag in the bar ruler to set the range, or click a section.">Loop</button>
         <button type="button" class="ghost daw-toggle" id="dawClick" title="Metronome">Click</button>
         <label class="daw-field">Snap <select id="dawSnap">${SNAPS.map(([v, name]) =>
@@ -315,7 +333,15 @@
     $('dawClick').classList.toggle('on', S.click);
     $('dawUndo').disabled = !S.history.canUndo();
     $('dawRedo').disabled = !S.history.canRedo();
-    if (doc.activeElement !== $('dawTempo')) $('dawTempo').value = S.project.tempo;
+    showTimingAt(S.engine.position());
+  }
+
+  // The tempo box and the time-signature button read what holds at the playhead.
+  function showTimingAt(beat) {
+    const here = P().stretchAt(S.project, beat);
+    if (doc.activeElement !== $('dawTempo')) $('dawTempo').value = here.tempo;
+    $('dawMeter').textContent = here.num + '/' + here.den;
+    S.shownStretch = here.beat + ':' + here.tempo + ':' + here.num + '/' + here.den;
   }
 
   function syncScrollbar() {
@@ -333,8 +359,10 @@
     }),
     audioPeaks: (id, n) => S.engine.audioPeaks(id, n),
     audioSeconds: id => S.engine.audioSeconds(id),
+    snapBeat, gridStep,
     actions: {
       select, seek,
+      openTiming,
       redraw: () => { S.dirty = true; },
       commit: () => commit(),
       previewLoop(a, b) { S.project.loop.start = a; S.project.loop.end = Math.max(b, a + 0.25); S.project.loop.on = true; S.dirty = true; },
@@ -347,9 +375,11 @@
         if (!same) seek(m.beat);
         commit({ keepPanel: true });
       },
+      // A new clip fills the bar that was double-clicked.
       createClip(trackId, beat) {
         const track = P().findTrack(S.project, trackId);
-        const clip = P().addClip(track, { start: beat, length: 4, name: sectionAt(beat) || track.name });
+        const bar = P().positionAt(S.project, beat);
+        const clip = P().addClip(track, { start: bar.start, length: bar.length, name: sectionAt(bar.start) || track.name });
         if (!clip) return;
         S.sel = { trackId, clipId: clip.id, noteIds: [] };
         S.panel = 'notes';
@@ -420,21 +450,23 @@
       <button type="button" class="ghost small" data-tool="rollIn" title="Zoom the note editor in">+</button>` : ''}`;
   }
 
+  // A drum clip as a step grid, a block for every bar that has hits in it.
   function drumGridText(clip) {
     const lanes = P().DRUM_LANES;
-    const bars = Math.ceil(clip.length / 4);
     const out = [];
-    for (let bar = 0; bar < bars; bar++) {
+    P().clipBars(S.project, clip).forEach(bar => {
+      const steps = Math.max(1, Math.round(bar.length * 4));
       const lines = lanes.map(l => {
-        const cells = Array(16).fill('-');
+        const cells = Array(steps).fill('-');
         clip.notes.forEach(n => {
-          const step = Math.round((n.t - bar * 4) * 4);
-          if (n.n === l.note && n.t < clip.length && step >= 0 && step < 16) cells[step] = 'x';
+          const step = Math.round((n.t - bar.start) * 4);
+          if (n.n === l.note && n.t < clip.length && step >= 0 && step < steps) cells[step] = 'x';
         });
         return l.name.padEnd(11) + '|' + cells.join('') + '|';
       }).filter(line => line.includes('x'));
-      if (lines.length) out.push('Bar ' + (bar + 1) + '\n' + lines.join('\n') + '\n' + ' '.repeat(11) + ' 1e+a2e+a3e+a4e+a');
-    }
+      const count = global.Tabs.countLabels(bar.num, bar.den).slice(Math.round(bar.skip * 4), Math.round(bar.skip * 4) + steps);
+      if (lines.length) out.push('Bar ' + bar.bar + '\n' + lines.join('\n') + '\n' + ' '.repeat(12) + count.map(c => c || ' ').join(''));
+    });
     return out.length ? out.join('\n\n') : '(no hits in this clip)';
   }
 
@@ -448,7 +480,8 @@
     const pitches = events.map(e => e.midi).sort((a, b) => a - b);
     const low = pitches[Math.floor(pitches.length / 2)] < 52;
     return global.Tabs.renderNotesTab(events, {
-      totalBeats: clip.length, tempo: S.project.tempo, register: low ? 'bass' : 'full', lineWidth: 140,
+      totalBeats: clip.length, tempo: P().tempoAt(S.project, clip.start), register: low ? 'bass' : 'full', lineWidth: 140,
+      bars: P().clipBars(S.project, clip),
     });
   }
 
@@ -533,7 +566,8 @@
       const { track, clip } = selection();
       const wrap = $('dawRollWrap');
       return {
-        project: S.project, track, clip, sel: S.sel, snap: S.snap, rollPx: S.rollPx,
+        project: S.project, track, clip, sel: S.sel, rollPx: S.rollPx,
+        snap: S.snap === BAR && clip ? gridStep(clip.start) : S.snap,
         playhead: S.engine.position(), scroll: { left: wrap ? wrap.scrollLeft : 0, top: wrap ? wrap.scrollTop : 0 },
       };
     },
@@ -791,9 +825,10 @@
     if (!stillHere()) return;
     const track = P().addTrack(S.project, 'audio', { name: trackNameFor(file) });
     if (!track) { UI().toast('No room for another track'); return; }
-    const clip = P().addClip(track, {
-      start: snapBeat(S.engine.position()), length: seconds * S.project.tempo / 60, audioId, name: track.name,
-    });
+    // As long on the timeline as the audio lasts, at the tempo (or tempos) it will play over.
+    const start = snapBeat(S.engine.position());
+    const end = P().secondsToBeat(S.project, P().beatToSeconds(S.project, start) + seconds);
+    const clip = P().addClip(track, { start, length: end - start, audioId, name: track.name });
     S.sel = { trackId: track.id, clipId: clip ? clip.id : null, noteIds: [] };
     commit({ structure: true });
     flushSave();
@@ -875,15 +910,79 @@
     }));
   }
 
+  // ── Tempo and time signature ─────────────────────────────────────────────
+  // One row for every stretch of the song. Each edit is applied at once, and
+  // the list is drawn again because a change of time moves the bars after it.
+  function openTiming() {
+    const p = S.project;
+    const playhead = P().positionAt(p, S.engine.position());
+    const taken = P().stretches(p).some(s => Math.abs(s.beat - playhead.start) < 1e-9);
+    const row = s => `
+      <tr data-beat="${esc(s.beat)}">
+        <td>${esc(s.bar)}</td>
+        <td><input type="number" class="tm-tempo" min="40" max="240" value="${esc(s.tempo)}" aria-label="Tempo from bar ${esc(s.bar)}" /></td>
+        <td><input type="number" class="tm-num" min="1" max="16" value="${esc(s.num)}" aria-label="Beats in a bar" />
+          <span>/</span>
+          <select class="tm-den" aria-label="The note that counts as a beat">${P().DENOMINATORS.map(d =>
+            `<option value="${d}"${d === s.den ? ' selected' : ''}>${d}</option>`).join('')}</select></td>
+        <td>${s.beat > 0 ? '<button type="button" class="ghost small danger" data-remove>Remove</button>' : ''}</td>
+      </tr>`;
+    UI().openModal(`
+      <div class="daw-timing">
+        <h2>Tempo and time signature</h2>
+        <p>Each row holds from the start of its bar until the next row takes over. To add one, put the playhead in the bar where it should begin.</p>
+        <table>
+          <thead><tr><th>From bar</th><th>Tempo</th><th>Time</th><th></th></tr></thead>
+          <tbody>${P().stretches(p).map(row).join('')}</tbody>
+        </table>
+        <div class="fd-actions">
+          <button type="button" class="ghost" id="tmAdd"${taken ? ' disabled' : ''}>${taken
+            ? `Bar ${esc(playhead.bar)} already has a row` : `Add a change at bar ${esc(playhead.bar)}`}</button>
+          <button type="button" class="primary" id="tmDone">Done</button>
+        </div>
+      </div>`);
+
+    const apply = (beat, patch) => {
+      P().setChange(S.project, beat, patch);
+      commit();                                       // the editor and the tab are redrawn too: their bar lines may have moved
+      openTiming();
+    };
+    doc.querySelectorAll('#modalContent .daw-timing tbody tr').forEach(tr => {
+      const beat = parseFloat(tr.dataset.beat);
+      const number = (selector, low, high) => {
+        const value = Math.round(parseFloat(tr.querySelector(selector).value));
+        return Number.isFinite(value) ? Math.max(low, Math.min(high, value)) : undefined;
+      };
+      tr.querySelector('.tm-tempo').addEventListener('change', () => apply(beat, { tempo: number('.tm-tempo', 40, 240) }));
+      tr.querySelector('.tm-num').addEventListener('change', () => apply(beat, { num: number('.tm-num', 1, 16) }));
+      tr.querySelector('.tm-den').addEventListener('change', () => apply(beat, { den: parseInt(tr.querySelector('.tm-den').value, 10) }));
+      const remove = tr.querySelector('[data-remove]');
+      if (remove) remove.addEventListener('click', () => {
+        P().removeChange(S.project, beat);
+        commit();
+        openTiming();
+      });
+    });
+    $('tmAdd').addEventListener('click', () => apply(playhead.start, {}));
+    $('tmDone').addEventListener('click', () => UI().closeModal());
+  }
+
   function rebuild() {
     const sg = song();
     if (!sg) return;
-    UI().confirmBox('Replace the note tracks with a fresh copy of the song as it is now? Note edits made here are lost (Undo brings them back); recordings are kept.')
+    UI().confirmBox('Replace the note tracks with a fresh copy of the song as it is now? Note edits made here are lost (Undo brings them back); recordings are kept, and so are tempo and time-signature changes made here.')
       .then(ok => {
         if (!ok) return;
         const fresh = P().fromSong(sg);
         fresh.id = S.project.id;
         fresh.master = S.project.master;
+        // Timing that was shaped here stays; otherwise the song's own tempo comes across.
+        const now = S.project;
+        if (now.changes.length || now.meter.num !== 4 || now.meter.den !== 4) {
+          fresh.tempo = now.tempo;
+          fresh.meter = now.meter;
+          fresh.changes = now.changes;
+        }
         S.project.tracks.filter(t => t.kind === 'audio').forEach(t => fresh.tracks.push(t));
         S.project = P().sanitize(fresh);
         S.sel = { trackId: S.project.tracks[0] ? S.project.tracks[0].id : null, clipId: null, noteIds: [] };
@@ -994,10 +1093,12 @@
     press('dawKeys', () => UI().openModal(global.Learn.renderShortcuts('daw')));
     on('dawTempo', 'change', () => {
       const input = $('dawTempo');
-      const tempo = Math.max(40, Math.min(240, Math.round(parseFloat(input.value) || S.project.tempo)));
+      // The tempo typed here is for the stretch of the song the playhead is in.
+      const here = P().stretchAt(S.project, S.engine.position());
+      const tempo = Math.max(40, Math.min(240, Math.round(parseFloat(input.value) || here.tempo)));
       input.value = tempo;
       input.blur();
-      if (tempo !== S.project.tempo) { S.project.tempo = tempo; commit({ keepPanel: true }); }
+      if (tempo !== here.tempo) { P().setChange(S.project, here.beat, { tempo }); commit({ keepPanel: true }); }
     });
     on('dawSnap', 'change', () => {
       S.snap = parseFloat($('dawSnap').value) || 0;
@@ -1007,6 +1108,7 @@
     on('dawInput', 'change', () => {
       S.input = $('dawInput').value;
       $('dawInput').blur();
+      nameInput();
       global.Storage.setSettings({ dawInput: S.input });
       S.engine.setInput(S.input).then(heardFrom, () => {
         UI().toast('Could not open that input');
@@ -1014,6 +1116,7 @@
       });
     });
     press('dawMonitor', toggleMonitor);
+    press('dawMeter', openTiming);
     on('dawHScroll', 'scroll', () => {
       S.scrollBeat = $('dawHScroll').scrollLeft / S.pxPerBeat;
       S.dirty = true;
@@ -1122,10 +1225,13 @@
     if (playing || pos !== S.lastPos || S.dirty) {
       S.lastPos = pos;
       S.dirty = false;
-      const whole = Math.floor(pos + 1e-6);
-      $('dawBars').textContent = (Math.floor(whole / 4) + 1) + '.' + (whole % 4 + 1);
-      const sec = pos * 60 / S.project.tempo;
+      // Bar and beat in the time signature at that point, and the time by the tempo map.
+      const at = P().positionAt(S.project, pos + 1e-6);
+      $('dawBars').textContent = at.bar + '.' + Math.floor(at.beat + 1e-6);
+      const sec = P().beatToSeconds(S.project, pos);
       $('dawClock').textContent = Math.floor(sec / 60) + ':' + (sec % 60).toFixed(1).padStart(4, '0');
+      const here = P().stretchAt(S.project, pos);
+      if (here.beat + ':' + here.tempo + ':' + here.num + '/' + here.den !== S.shownStretch) showTimingAt(pos);
       S.arrange.draw();
       if (S.roll && S.panel === 'notes') S.roll.draw();
     }

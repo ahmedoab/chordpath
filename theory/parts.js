@@ -269,10 +269,11 @@
     const sections = [];
     let start = 0;
     global.Song.buildPlayback(song).forEach(item => {
-      const parts = fromItem(Object.assign({}, item, { tempo: song.tempo }));
+      const tempo = item.tempo || song.tempo;        // a section may have a tempo of its own
+      const parts = fromItem(Object.assign({}, item, { tempo }));
       const reps = Math.max(1, item.repeat || 1);
       for (let r = 0; r < reps; r++) {
-        sections.push({ id: item.sectionId, name: item.name, role: item.role, start, beats: parts.beats, repeat: r, parts });
+        sections.push({ id: item.sectionId, name: item.name, role: item.role, start, beats: parts.beats, repeat: r, tempo, parts });
         start += parts.beats;
       }
     });

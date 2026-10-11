@@ -65,9 +65,15 @@ markers along the top. From there the project is yours to change.
   double-click an empty stretch to start a new one. Click a section name to
   loop that section, or drag in the bar ruler to loop any range. `S` splits
   at the playhead, `Ctrl+D` duplicates, `?` lists every shortcut.
+- **Tempo and time.** Both can change at any bar. Click the time signature
+  beside the tempo, or double-click the bar ruler, and add a change where the
+  playhead is. The metronome, the count-in, bar numbers, the tab and exported
+  MIDI all follow; a section of the song that has its own tempo arrives as a
+  change already in place.
 - **Notes.** A piano roll for pitched tracks and a step grid for drums:
   click to add, drag to move or lengthen, right-click to delete, plus
-  velocity, quantize and transpose.
+  velocity, quantize and transpose. Hold Shift and drag a box to select
+  several notes, then move, resize, copy and paste them together.
 - **Tab.** Any clip as six-line guitar tab, whatever instrument plays it.
   Chords are written as shapes one hand can hold, in the octave where they
   are easiest; drums as a step grid.
@@ -76,9 +82,10 @@ markers along the top. From there the project is yours to change.
 - **Sound.** Ten built-in instruments and a drum kit, synthesised by the app
   itself. There are no samples to download.
 - **Recording.** Record a microphone or interface onto audio tracks after a
-  one-bar count-in; choose which input beside the Record button. Or bring
-  in an audio file (WAV, MP3, OGG, FLAC) with Import audio or by dropping
-  it on the window.
+  one-bar count-in. Choose which input beside the Record button, and switch
+  on "Hear it" to hear yourself through the app while you play (with
+  headphones). Or bring in an audio file (WAV, MP3, OGG, FLAC) with Import
+  or by dropping it on the window.
 - **Export.** A mixdown as 16- or 24-bit WAV, stems (one file per track),
   or the notes as MIDI.
 
@@ -86,10 +93,10 @@ Edits can be undone, a hundred steps back, and the project saves itself next
 to the song on your computer. "Rebuild" refreshes the note tracks after you
 change the song elsewhere in ChordPath; your recordings stay.
 
-What it does not do: host VST or AU plugins, change tempo or time signature
-partway through a song (one tempo, 4/4), or stretch recorded audio to a new
-tempo. For those, export the stems or the MIDI and carry on in another DAW.
-A single take or imported file can be up to twenty minutes long.
+What it does not do: host VST or AU plugins, or stretch recorded audio to a
+new tempo. For those, export the stems or the MIDI and carry on in another
+DAW. Tempo changes happen at bar lines; there are no gradual speed-ups. A
+single take or imported file can be up to twenty minutes long.
 
 ## The workflow
 

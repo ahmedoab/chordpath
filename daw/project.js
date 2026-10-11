@@ -10,7 +10,8 @@
   'use strict';
 
   const FORMAT = 'chordpath-daw';
-  const LIMITS = { tracks: 64, clips: 512, notes: 8192, markers: 256, name: 60, title: 120, beats: 100000, audioSeconds: 1200 };
+  const LIMITS = { tracks: 64, clips: 512, notes: 8192, markers: 256, changes: 128, name: 60, title: 120, beats: 100000, audioSeconds: 1200 };
+  const DENOMINATORS = [2, 4, 8, 16];                    // the note a time signature counts in
   // Megabytes that hold about twenty-five minutes of each kind of audio file.
   const AUDIO_MB = { compressed: 25, flac: 130, plain: 260 };
   const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -115,13 +116,21 @@
     };
   }
 
+  function createMeter(m) {
+    m = m && typeof m === 'object' ? m : {};
+    const beats = typeof m.num === 'number' && Number.isFinite(m.num) ? Math.round(m.num) : 4;
+    return { num: beats >= 1 && beats <= 16 ? beats : 4, den: DENOMINATORS.includes(m.den) ? m.den : 4 };
+  }
+
   function createProject(opts) {
     opts = opts || {};
     return {
       id: opts.id || uid('daw'),
       title: text(opts.title, LIMITS.title, 'Untitled'),
       songId: typeof opts.songId === 'string' && ID_RE.test(opts.songId) ? opts.songId : null,
-      tempo: Math.round(num(opts.tempo, 40, 240, 100)),
+      tempo: Math.round(num(opts.tempo, 40, 240, 100)),  // from the first bar
+      meter: createMeter(opts.meter),                    // time signature from the first bar
+      changes: [],                                       // later: [{ beat, tempo, num, den }], each at a bar start
       key: typeof opts.key === 'string' && NOTE_RE.test(opts.key) ? opts.key : 'C',
       scale: text(opts.scale, 40, 'major'),
       master: num(opts.master, -60, 6, 0),               // master fader, dB
@@ -129,6 +138,144 @@
       markers: [],
       tracks: [],
     };
+  }
+
+  // ── Tempo and time signature along the song ──────────────────────────────
+  // A song is a row of stretches, each with one tempo and one time signature.
+  // The first starts at beat 0 (project.tempo, project.meter); every entry in
+  // project.changes starts another, and always at the start of a bar. Beats
+  // are quarter notes throughout, whatever the time signature.
+  //
+  // Returns [{ beat, tempo, num, den, bar }], bar being the number of the
+  // stretch's first bar.
+  function stretches(project) {
+    const meter = project.meter || { num: 4, den: 4 };
+    const out = [{ beat: 0, tempo: project.tempo, num: meter.num, den: meter.den, bar: 1 }];
+    (project.changes || []).forEach(c => {
+      const prev = out[out.length - 1];
+      const bars = Math.max(1, Math.ceil((c.beat - prev.beat) / (prev.num * 4 / prev.den) - 1e-9));
+      out.push({ beat: c.beat, tempo: c.tempo, num: c.num, den: c.den, bar: prev.bar + bars });
+    });
+    return out;
+  }
+  function stretchAt(project, beat) {
+    const list = stretches(project);
+    let found = list[0];
+    for (let i = 1; i < list.length && list[i].beat <= beat + 1e-9; i++) found = list[i];
+    return found;
+  }
+  function tempoAt(project, beat) { return stretchAt(project, beat).tempo; }
+
+  function beatToSeconds(project, beat) {
+    const list = stretches(project);
+    let seconds = 0;
+    for (let i = 0; i < list.length; i++) {
+      const end = i + 1 < list.length ? list[i + 1].beat : Infinity;
+      if (beat <= end) return seconds + (beat - list[i].beat) * 60 / list[i].tempo;
+      seconds += (end - list[i].beat) * 60 / list[i].tempo;
+    }
+    return seconds;
+  }
+  function secondsToBeat(project, seconds) {
+    const list = stretches(project);
+    let passed = 0;
+    for (let i = 0; i < list.length; i++) {
+      const end = i + 1 < list.length ? list[i + 1].beat : Infinity;
+      const lasts = (end - list[i].beat) * 60 / list[i].tempo;
+      if (seconds <= passed + lasts) return list[i].beat + (seconds - passed) * list[i].tempo / 60;
+      passed += lasts;
+    }
+    return 0;
+  }
+
+  // Where a beat falls: { bar, beat, start, length, num, den }. `beat` counts
+  // the beats of the bar from 1 (eighths in 6/8); start and length are the
+  // bar's, in quarter notes.
+  function positionAt(project, at) {
+    const s = stretchAt(project, Math.max(0, at));
+    const length = s.num * 4 / s.den;
+    const bars = Math.floor((Math.max(0, at) - s.beat) / length + 1e-9);
+    const start = s.beat + bars * length;
+    return { bar: s.bar + bars, beat: (Math.max(0, at) - start) * s.den / 4 + 1, start, length, num: s.num, den: s.den };
+  }
+
+  // Every bar line from `from` up to (not including) `to`: [{ beat, bar, num, den, length }].
+  function barsBetween(project, from, to) {
+    const list = stretches(project);
+    const out = [];
+    list.forEach((s, i) => {
+      const end = Math.min(to, i + 1 < list.length ? list[i + 1].beat : Infinity);
+      const length = s.num * 4 / s.den;
+      const first = Math.max(0, Math.ceil((from - s.beat) / length - 1e-9));
+      for (let k = first; s.beat + k * length < end - 1e-9; k++) {
+        out.push({ beat: s.beat + k * length, bar: s.bar + k, num: s.num, den: s.den, length });
+      }
+    });
+    return out;
+  }
+  function nearestBar(project, beat) {
+    const here = positionAt(project, beat);
+    const list = stretches(project);
+    const following = list.find(s => s.beat > here.start + 1e-9);
+    const next = Math.min(here.start + here.length, following ? following.beat : Infinity);
+    return beat - here.start < next - beat ? here.start : next;
+  }
+
+  // The bars a clip lies across, cut to the clip: [{ bar, start, length, num,
+  // den, skip }]. start is counted from the start of the clip, and skip is
+  // how much of the bar comes before it, for a clip that begins inside a bar.
+  function clipBars(project, clip) {
+    const end = clip.start + clip.length;
+    const lines = barsBetween(project, positionAt(project, clip.start).start, end);
+    return lines.map((b, i) => {
+      const from = Math.max(b.beat, clip.start);
+      const to = Math.min(b.beat + b.length, i + 1 < lines.length ? lines[i + 1].beat : Infinity, end);
+      return { bar: b.bar, start: from - clip.start, length: to - from, num: b.num, den: b.den, skip: from - b.beat };
+    }).filter(b => b.length > 1e-9);
+  }
+
+  // Metronome clicks from `from` up to `to`: one on every beat of the bar,
+  // the first of each bar accented. [{ beat, accent }]
+  function clicksBetween(project, from, to) {
+    const out = [];
+    barsBetween(project, positionAt(project, from).start, to).forEach(bar => {
+      const step = 4 / bar.den;
+      for (let k = 0; k < bar.num; k++) {
+        const beat = bar.beat + k * step;
+        if (beat >= from - 1e-9 && beat < to - 1e-9 && beat < bar.beat + bar.length) out.push({ beat, accent: k === 0 });
+      }
+    });
+    return out;
+  }
+
+  // Makes the tempo and time signature change at the start of the bar that
+  // `beat` falls in, or edits the change already there. patch: { tempo, num,
+  // den }; anything left out stays as it is at that point. In the first bar
+  // it sets what the song starts from. Returns the beat the change sits on.
+  function setChange(project, beat, patch) {
+    patch = patch || {};
+    const at = positionAt(project, beat).start;
+    const now = stretchAt(project, at);
+    const next = {
+      beat: at,
+      tempo: Math.round(num(patch.tempo, 40, 240, now.tempo)),
+      num: Math.round(num(patch.num, 1, 16, now.num)),
+      den: DENOMINATORS.includes(patch.den) ? patch.den : now.den,
+    };
+    if (at < 1e-9) {
+      project.tempo = next.tempo;
+      project.meter = { num: next.num, den: next.den };
+      return 0;
+    }
+    project.changes = (project.changes || []).filter(c => Math.abs(c.beat - at) > 1e-9);
+    if (project.changes.length < LIMITS.changes) project.changes.push(next);
+    project.changes.sort((a, b) => a.beat - b.beat);
+    return at;
+  }
+  function removeChange(project, beat) {
+    const before = (project.changes || []).length;
+    project.changes = (project.changes || []).filter(c => Math.abs(c.beat - beat) > 1e-9);
+    return project.changes.length < before;
   }
 
   // ── From a ChordPath song ────────────────────────────────────────────────
@@ -169,6 +316,15 @@
     });
     project.markers = laid.sections.map(sec => ({ beat: sec.start, name: sec.name }));
     if (laid.sections.length) project.loop.end = laid.sections[0].beats;
+    // A section with a tempo of its own becomes a tempo change where it starts.
+    let tempo = project.tempo;
+    laid.sections.forEach(sec => {
+      const wanted = Math.round(num(sec.tempo, 40, 240, tempo));
+      if (wanted === tempo) return;
+      tempo = wanted;
+      if (sec.start > 0) project.changes.push({ beat: sec.start, tempo, num: 4, den: 4 });
+      else project.tempo = tempo;
+    });
     return project;
   }
 
@@ -432,9 +588,20 @@
     const seen = new Set();
     const project = createProject({
       id: keepId(raw.id, 'daw', seen), title: raw.title, songId: raw.songId,
-      tempo: raw.tempo, key: raw.key, scale: raw.scale, master: raw.master,
+      tempo: raw.tempo, meter: raw.meter, key: raw.key, scale: raw.scale, master: raw.master,
     });
     if (global.Scales && !global.Scales.SCALES[project.scale]) project.scale = 'major';
+
+    // Later tempo and time-signature changes: in order, one to a beat (the
+    // last one given wins), never at or before the first bar.
+    const changes = new Map();
+    (Array.isArray(raw.changes) ? raw.changes : []).forEach(c => {
+      if (!c || typeof c !== 'object' || typeof c.beat !== 'number' || !Number.isFinite(c.beat) || c.beat <= 0 ||
+          c.beat > LIMITS.beats || typeof c.tempo !== 'number' || !Number.isFinite(c.tempo)) return;
+      const meter = createMeter(c);
+      changes.set(c.beat, { beat: c.beat, tempo: Math.round(num(c.tempo, 40, 240, project.tempo)), num: meter.num, den: meter.den });
+    });
+    project.changes = Array.from(changes.values()).sort((a, b) => a.beat - b.beat).slice(0, LIMITS.changes);
 
     const loop = raw.loop && typeof raw.loop === 'object' ? raw.loop : {};
     project.loop.on = loop.on === true;
@@ -537,16 +704,25 @@
     const playable = project.tracks.filter(t => t.kind !== 'audio' && t.clips.some(c => c.notes && c.notes.length));
     const out = [0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 1, 0, 1 + playable.length, (PPQ >> 8) & 255, PPQ & 255];
 
+    // The conductor track: title, then tempo, time signature and section
+    // names, each where it takes effect.
     const cond = [];
     meta(cond, 0, 0x03, ascii(project.title));
-    meta(cond, 0, 0x58, [4, 2, 24, 8]);
-    const mpq = Math.round(60000000 / project.tempo);
-    meta(cond, 0, 0x51, [(mpq >> 16) & 255, (mpq >> 8) & 255, mpq & 255]);
+    const events = [];
+    stretches(project).forEach((s, i, all) => {
+      const tick = Math.round(s.beat * PPQ);
+      const mpq = Math.round(60000000 / s.tempo);
+      events.push({ tick, order: 0, type: 0x51, bytes: [(mpq >> 16) & 255, (mpq >> 8) & 255, mpq & 255] });
+      if (i === 0 || s.num !== all[i - 1].num || s.den !== all[i - 1].den) {
+        events.push({ tick, order: 1, type: 0x58, bytes: [s.num, Math.round(Math.log2(s.den)), Math.round(96 / s.den), 8] });
+      }
+    });
+    project.markers.forEach(m => events.push({ tick: Math.round(m.beat * PPQ), order: 2, type: 0x06, bytes: ascii(m.name) }));
+    events.sort((a, b) => a.tick - b.tick || a.order - b.order);
     let last = 0;
-    project.markers.slice().sort((a, b) => a.beat - b.beat).forEach(m => {
-      const tick = Math.round(m.beat * PPQ);
-      meta(cond, tick - last, 0x06, ascii(m.name));
-      last = tick;
+    events.forEach(e => {
+      meta(cond, e.tick - last, e.type, e.bytes);
+      last = e.tick;
     });
     meta(cond, 0, 0x2f, []);
     chunk(out, cond);
@@ -589,6 +765,8 @@
     INSTRUMENTS, DRUM_LANES, TRACK_COLORS, LIMITS,
     createProject, createTrack, createClip, fromSong,
     findTrack, findClip, endBeat, snap,
+    DENOMINATORS, stretches, stretchAt, tempoAt, beatToSeconds, secondsToBeat, positionAt, barsBetween, nearestBar, clipBars, clicksBetween,
+    setChange, removeChange,
     audioFileProblem, audioLengthProblem,
     addTrack, removeTrack,
     addClip, removeClip, moveClip, resizeClip, splitClip, duplicateClip,

@@ -232,7 +232,6 @@
 
   // ── Tab of any notes, chords included ────────────────────────────────────
   const HAND_SPAN = 3;            // frets between the lowest and the highest fretted finger
-  const COUNT = ['1', 'e', '+', 'a', '2', 'e', '+', 'a', '3', 'e', '+', 'a', '4', 'e', '+', 'a'];
 
   // Finds where one hand can play pitches that sound together: each on its
   // own string, lower notes on lower strings, all within a hand's span. When
@@ -344,11 +343,24 @@
     return best;
   }
 
+  // What to count under each sixteenth of a bar: "1 e + a" in quarters,
+  // "1 +" in eighths, and so on for whatever the time signature counts in.
+  function countLabels(beats, counts) {
+    const perBeat = Math.max(1, Math.round(16 / counts));
+    const within = perBeat === 4 ? ['', 'e', '+', 'a'] : Array.from({ length: perBeat }, (unused, i) => (i && i * 2 === perBeat ? '+' : ''));
+    const out = [];
+    for (let beat = 1; beat <= beats; beat++) within.forEach((label, i) => out.push(i ? label : String(beat)));
+    return out;
+  }
+
   // Six-line tab of any notes: single lines, chords, or both. Notes struck
   // one after another within a strum's breath are written as one chord, and
   // every step is wide enough that fret numbers never run together.
   // events: [{ midi, beatStart }]. opts: { totalBeats, tempo, register,
-  // maxFret, near, lineWidth }.
+  // maxFret, near, lineWidth, bars }. Without `bars` the music is taken to be
+  // in 4/4 from beat 0; with it, each entry is one bar (or the part of one
+  // that the notes cover): { start, length, num, den, skip }, start and
+  // length in beats and skip the beats of that bar which come before `start`.
   function renderNotesTab(events, opts) {
     opts = opts || {};
     const sorted = (events || [])
@@ -356,10 +368,26 @@
       .sort((a, b) => a.beatStart - b.beatStart);
     if (!sorted.length) return '(no notes)';
 
-    const beatsPerBar = 4, subdiv = 4, cellsPerBar = beatsPerBar * subdiv;
+    const subdiv = 4;                                         // steps to a beat: sixteenths
     const totalBeats = opts.totalBeats > 0 ? opts.totalBeats : sorted[sorted.length - 1].beatStart + 1;
-    const bars = Math.max(1, Math.ceil((totalBeats - 1e-6) / beatsPerBar));
-    const steps = bars * cellsPerBar;
+    let given = Array.isArray(opts.bars) ? opts.bars.filter(b => b && b.length > 0) : [];
+    if (!given.length) {
+      for (let start = 0; start < Math.max(1, Math.ceil((totalBeats - 1e-6) / 4)) * 4; start += 4) given.push({ start, length: 4, num: 4, den: 4 });
+    }
+    let steps = 0;
+    const bars = given.map(b => {
+      const cells = Math.max(1, Math.round(b.length * subdiv));
+      const labels = countLabels(b.num || 4, b.den || 4).slice(Math.round((b.skip || 0) * subdiv));
+      const bar = { start: b.start, first: steps, cells, labels };
+      steps += cells;
+      return bar;
+    });
+    // The step a beat falls on: found in its own bar, so bars of any length line up.
+    const stepOf = beat => {
+      let bar = bars[0];
+      for (let i = 1; i < bars.length && bars[i].start <= beat + 1e-9; i++) bar = bars[i];
+      return bar.first + (beat - bar.start) * subdiv;
+    };
 
     // A strum spreads its notes over a few hundredths of a second.
     const breath = Math.min(0.05 * (opts.tempo || 100) / 60, 0.12);
@@ -372,8 +400,8 @@
     const byStep = new Map();
     let rounded = 0;
     groups.forEach(g => {
-      const exact = g.start * subdiv;
-      const step = Math.min(steps - 1, Math.round(exact));
+      const exact = stepOf(g.start);
+      const step = Math.max(0, Math.min(steps - 1, Math.round(exact)));
       if (Math.abs(exact - step) > 0.16) rounded++;
       byStep.set(step, (byStep.get(step) || []).concat(g.pitches));
     });
@@ -394,21 +422,26 @@
     const rows = TUNING_MIDI.map(() => Array(steps).fill('-'.repeat(w)));
     placed.forEach(m => m.notes.forEach(n => { rows[n.string][m.step] = String(n.fret).padEnd(w, '-'); }));
 
-    const barWidth = cellsPerBar * w + 1;
-    const barsPerLine = Math.max(1, Math.floor(((opts.lineWidth || 80) - 3) / barWidth));
+    // As many bars to a line as the width allows, and always at least one.
+    const room = (opts.lineWidth || 80) - 3;
     const systems = [];
-    for (let bar = 0; bar < bars; bar += barsPerLine) {
-      const end = Math.min(bars, bar + barsPerLine);
+    for (let from = 0; from < bars.length;) {
+      let to = from, used = 0;
+      while (to < bars.length && (to === from || used + bars[to].cells * w + 1 <= room)) used += bars[to++].cells * w + 1;
       const lines = [];
       for (let s = 5; s >= 0; s--) {
         let line = STRING_LABELS[s] + ' |';
-        for (let b = bar; b < end; b++) line += rows[s].slice(b * cellsPerBar, (b + 1) * cellsPerBar).join('') + '|';
+        for (let b = from; b < to; b++) line += rows[s].slice(bars[b].first, bars[b].first + bars[b].cells).join('') + '|';
         lines.push(line);
       }
       let count = '   ';
-      for (let b = bar; b < end; b++) count += COUNT.map(c => c.padEnd(w, ' ')).join('') + ' ';
+      for (let b = from; b < to; b++) {
+        for (let i = 0; i < bars[b].cells; i++) count += (bars[b].labels[i] || '').padEnd(w, ' ');
+        count += ' ';
+      }
       lines.push(count.replace(/\s+$/, ''));
       systems.push(lines.join('\n'));
+      from = to;
     }
 
     const remarks = [];
@@ -551,7 +584,7 @@
   global.Tabs = {
     TUNING_MIDI, STRING_LABELS, OPEN_PCS, REGISTERS,
     findChordShape,
-    mapEventsToFrets, placeNotes,
+    mapEventsToFrets, placeNotes, countLabels,
     renderMelodyTab, renderNotesTab, renderChordTab, renderBassTab, renderDrumGrid,
     bassEvents,
   };

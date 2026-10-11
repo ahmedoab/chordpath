@@ -1,7 +1,9 @@
 /* ChordPath — ui/daw/arrange.js
  * The arrangement timeline: one lane per track, clips drawn as strips of ink
  * on the page, and — instead of a bare bar ruler — the song's own sections
- * across the top. Click a section to loop it.
+ * across the top. Click a section to loop it. The bar ruler beneath follows
+ * the time signature and notes where the tempo or the time changes;
+ * double-click it to make a change there.
  *
  * Draws on one canvas. The view owns the project; this module reads it
  * through host.state() and reports gestures through host.actions.
@@ -43,10 +45,7 @@
 
     const beatToX = beat => (beat - host.state().scrollBeat) * host.state().pxPerBeat;
     const xToBeat = x => x / host.state().pxPerBeat + host.state().scrollBeat;
-    function snapBeat(beat) {
-      const s = host.state().snap;
-      return Math.max(0, s > 0 ? Math.round(beat / s) * s : beat);
-    }
+    const snapBeat = beat => host.snapBeat(beat);
 
     function hit(x, y) {
       const st = host.state();
@@ -116,9 +115,10 @@
         });
       } else {
         const total = host.audioSeconds(clip.audioId);
-        const spb = 60 / st.project.tempo;
+        const P = global.DawProject;
+        const lasts = P.beatToSeconds(st.project, clip.start + clip.length) - P.beatToSeconds(st.project, clip.start);
         const buckets = Math.max(8, Math.min(2000, Math.round(w / 2)));
-        const peaks = total > 0 ? host.audioPeaks(clip.audioId, Math.max(8, Math.round(buckets * total / Math.max(0.01, clip.length * spb)))) : null;
+        const peaks = total > 0 ? host.audioPeaks(clip.audioId, Math.max(8, Math.round(buckets * total / Math.max(0.01, lasts)))) : null;
         if (peaks) {
           const first = Math.floor(clip.offset / total * peaks.length);
           const mid = bodyTop + bodyH / 2;
@@ -165,18 +165,36 @@
         label(m.name, Math.max(x0, 0) + 7, 16, x1 - Math.max(x0, 0) - 10, looped ? c.ink : c.ink2, '600 11px Inter, sans-serif');
       });
 
-      // Bar ruler.
+      // Bar ruler: the bars are as long as the time signature makes them.
       g.fillStyle = c.surface;
       g.fillRect(0, RIBBON_H, width, RULER_H);
-      const barStep = ppb * 4 >= 34 ? 1 : ppb * 4 >= 17 ? 2 : ppb * 4 >= 8 ? 4 : 8;
-      for (let beat = Math.floor(firstBeat / 4) * 4; beat <= lastBeat; beat += 4) {
-        const bar = beat / 4;
-        if (bar % barStep) continue;
-        const x = beatToX(beat);
+      const P = global.DawProject;
+      const bars = P.barsBetween(p, P.positionAt(p, firstBeat).start, lastBeat + 1);
+      const shortest = bars.reduce((least, b) => Math.min(least, b.length), 4) * ppb;
+      const barStep = shortest >= 34 ? 1 : shortest >= 17 ? 2 : shortest >= 8 ? 4 : 8;
+      bars.forEach(b => {
+        if ((b.bar - 1) % barStep) return;
+        const x = beatToX(b.beat);
         g.fillStyle = c.line2;
         g.fillRect(x, RIBBON_H + 12, 1, RULER_H - 12);
-        label(String(bar + 1), x + 4, RIBBON_H + 14, 40, c.muted, '500 10px "JetBrains Mono", monospace');
-      }
+        label(String(b.bar), x + 4, RIBBON_H + 14, 40, c.muted, '500 10px "JetBrains Mono", monospace');
+      });
+      // Where the tempo or the time signature changes, the ruler says what to.
+      P.stretches(p).forEach((s, i, all) => {
+        const x = beatToX(s.beat);
+        if (!i || x < -120 || x > width) return;
+        const was = all[i - 1];
+        const news = [s.tempo !== was.tempo ? s.tempo + ' bpm' : '', s.num !== was.num || s.den !== was.den ? s.num + '/' + s.den : '']
+          .filter(Boolean).join('  ');
+        g.fillStyle = c.accent;
+        g.fillRect(x, RIBBON_H, 1.5, RULER_H);
+        // The note sits on a plate of its own, over any bar numbers it would otherwise run into.
+        g.font = '600 10px Inter, sans-serif';
+        const wide = Math.ceil(g.measureText(news || 'same').width);
+        g.fillStyle = c.surface;
+        g.fillRect(x + 22, RIBBON_H + 6, wide + 10, RULER_H - 7);
+        label(news || 'same', x + 26, RIBBON_H + 14, wide + 4, c.accent, '600 10px Inter, sans-serif');
+      });
       if (p.loop.end > p.loop.start) {
         const lx = beatToX(p.loop.start), lw = (p.loop.end - p.loop.start) * ppb;
         g.globalAlpha = p.loop.on ? 0.55 : 0.18;
@@ -194,13 +212,15 @@
         g.fillRect(0, y + LANE_H - 1, width, 1);
       });
       const lanesH = p.tracks.length * LANE_H;
-      for (let beat = firstBeat; beat <= lastBeat; beat++) {
-        const isBar = beat % 4 === 0;
-        if (!isBar && ppb < 9) continue;
-        g.globalAlpha = isBar ? 0.9 : 0.4;
-        g.fillStyle = c.line;
-        g.fillRect(beatToX(beat), TOP, 1, lanesH);
-      }
+      g.fillStyle = c.line;
+      bars.forEach(b => {
+        g.globalAlpha = 0.9;
+        g.fillRect(beatToX(b.beat), TOP, 1, lanesH);
+        const beat = 4 / b.den;                      // the beat this bar is counted in
+        if (beat * ppb < 9) return;
+        g.globalAlpha = 0.4;
+        for (let k = 1; k < b.num && k * beat < b.length - 1e-9; k++) g.fillRect(beatToX(b.beat + k * beat), TOP, 1, lanesH);
+      });
       g.globalAlpha = 1;
       if (p.loop.on && p.loop.end > p.loop.start) {
         g.globalAlpha = 0.07;
@@ -293,7 +313,7 @@
           host.actions.redraw();
         }
       } else if (drag.kind === 'resize') {
-        const min = st.snap > 0 ? st.snap : 0.25;
+        const min = host.gridStep(drag.clip.start);
         const length = Math.max(min, snapBeat(xToBeat(pt.x)) - drag.clip.start);
         if (length !== drag.clip.length) {
           P.resizeClip(st.project, drag.clip.id, length);
@@ -320,9 +340,11 @@
     canvas.addEventListener('dblclick', e => {
       const pt = point(e);
       const h = hit(pt.x, pt.y);
+      // On the ruler: the playhead has just been put there, so offer a change of tempo or time.
+      if (h.zone === 'ruler') { host.actions.openTiming(); return; }
       if (h.zone !== 'lane') return;
       if (h.clip) host.actions.openClip(h.track.id, h.clip.id);
-      else if (h.track.kind !== 'audio') host.actions.createClip(h.track.id, Math.floor(xToBeat(pt.x) / 4) * 4);
+      else if (h.track.kind !== 'audio') host.actions.createClip(h.track.id, xToBeat(pt.x));
     });
 
     canvas.addEventListener('wheel', e => {

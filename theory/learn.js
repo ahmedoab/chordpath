@@ -36,7 +36,7 @@
     { key:'Ctrl+Z / Ctrl+Y',  desc:'Undo / redo'                              },
     { key:'+ / -',            desc:'Zoom the timeline in / out'               },
     { key:'Ctrl + wheel',     desc:'Zoom the timeline around the pointer'     },
-    { key:'Double-click',     desc:'Empty track: new clip. Clip: open its notes. Fader: reset.' },
+    { key:'Double-click',     desc:'Empty track: new clip. Clip: open its notes. Fader: reset. Bar ruler: change tempo or time signature there.' },
     { key:'Right-click',      desc:'Delete a note in the note editor'         },
     { key:'Shift + drag',     desc:'Note editor: draw a box round several notes to select them' },
     { key:'Shift + click',    desc:'Note editor: add a note to the selection, or take it out' },

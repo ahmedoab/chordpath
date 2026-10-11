@@ -97,15 +97,25 @@
         }
       });
 
-      // Time grid.
-      const fine = L.step * ppb >= 7 ? L.step : (ppb >= 7 ? 1 : 4);
-      for (let b = 0; b <= clip.length + 1e-9; b += fine) {
-        const whole = Math.abs(b - Math.round(b)) < 1e-9;
-        const bar = whole && Math.round(b) % 4 === 0;
-        g.globalAlpha = bar ? 1 : whole ? 0.6 : 0.28;
-        g.fillStyle = bar ? c.line2 : c.line;
-        g.fillRect(KEYS_W + b * ppb, RULER_H, 1, height - RULER_H);
-      }
+      // Time grid: the snap steps faintly, then the beats and bar lines of the
+      // time signature the clip sits in.
+      const bars = global.DawProject.clipBars(st.project, clip);
+      const upright = (beat, alpha, color) => {
+        g.globalAlpha = alpha;
+        g.fillStyle = color;
+        g.fillRect(KEYS_W + beat * ppb, RULER_H, 1, height - RULER_H);
+      };
+      if (L.step * ppb >= 7) for (let b = 0; b <= clip.length + 1e-9; b += L.step) upright(b, 0.28, c.line);
+      bars.forEach(bar => {
+        const beat = 4 / bar.den;
+        if (beat * ppb >= 7) {
+          for (let k = Math.ceil(bar.skip / beat - 1e-9); k * beat < bar.skip + bar.length - 1e-9; k++) {
+            if (k) upright(bar.start - bar.skip + k * beat, 0.6, c.line);
+          }
+        }
+        if (bar.skip < 1e-9) upright(bar.start, 1, c.line2);
+      });
+      upright(clip.length, 1, c.line2);
       g.globalAlpha = 1;
       g.fillStyle = c.bg;
       g.fillRect(KEYS_W + gridW + 1, RULER_H, width - KEYS_W - gridW, height - RULER_H);
@@ -158,12 +168,16 @@
       g.fillRect(0, ry, width, RULER_H);
       g.fillStyle = c.line;
       g.fillRect(0, ry + RULER_H - 1, width, 1);
+      // Bars are numbered as they are in the song; the beats within them when there is room.
       g.font = '500 9px "JetBrains Mono", monospace';
       g.fillStyle = c.muted;
-      for (let b = 0; b < clip.length; b++) {
-        if (ppb < 22 && b % 4) continue;
-        g.fillText((Math.floor(b / 4) + 1) + (b % 4 ? '.' + (b % 4 + 1) : ''), KEYS_W + b * ppb + 3, ry + 11);
-      }
+      bars.forEach(bar => {
+        const beat = 4 / bar.den;
+        for (let k = Math.ceil(bar.skip / beat - 1e-9); k * beat < bar.skip + bar.length - 1e-9; k++) {
+          if (k && beat * ppb < 22) continue;
+          g.fillText(bar.bar + (k ? '.' + (k + 1) : ''), KEYS_W + (bar.start - bar.skip + k * beat) * ppb + 3, ry + 11);
+        }
+      });
 
       // Key column, pinned to the left of the scrolled view.
       const kx = scroll.left;

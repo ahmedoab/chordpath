@@ -1228,12 +1228,13 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .daw-bar button.primary { min-width: 5.4rem; border: 1px solid var(--accent); border-radius: var(--radius-s); }
 .daw-bar .daw-rec.on, [data-theme="dark"] .daw-bar .daw-rec.on { background: var(--tense); border-color: var(--tense); color: #fff; }
 .daw-bar .daw-toggle.on, [data-theme="dark"] .daw-bar .daw-toggle.on { background: var(--accent-2); border-color: var(--accent); color: var(--ink); }
-.daw-pos { display: flex; align-items: baseline; gap: 0.5rem; min-width: 7.4rem; padding: 0 0.5rem; }
+.daw-pos { display: flex; align-items: baseline; gap: 0.5rem; min-width: 6.6rem; padding: 0 0.4rem; }
 #dawBars { font-size: 1.05rem; font-weight: 500; min-width: 2.6rem; }
 .daw-field { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; color: var(--ink-2); white-space: nowrap; }
-.daw-field input[type="number"] { width: 4.2rem; padding: 0.25rem 0.35rem; }
+.daw-field input[type="number"] { width: 3.8rem; padding: 0.25rem 0.35rem; }
 .daw-field select { width: auto; padding: 0.25rem 0.35rem; font-size: 0.76rem; }
-#dawInput { max-width: 9.5rem; text-overflow: ellipsis; }
+/* A fixed width: input names vary a great deal and must not shove the toolbar about. */
+#dawInput { width: 7.4rem; text-overflow: ellipsis; }
 .daw-field input[type="range"] { accent-color: var(--accent); width: 96px; }
 /* The buttons at the far end wrap together when the window is narrow. */
 .daw-actions { display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
@@ -1330,3 +1331,15 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .mx-btn.wide { width: 100%; padding: 0.14rem; }
 .daw-export p { margin: 0 0 0.8rem; }
 .daw-export .daw-field { margin-bottom: 0.4rem; }
+
+/* The list of tempo and time-signature changes: one row to a stretch of the song. */
+.daw-timing p { margin: 0 0 0.8rem; max-width: 46ch; }
+.daw-timing table { border-collapse: collapse; margin-bottom: 0.4rem; }
+.daw-timing th { text-align: left; font-size: 0.72rem; font-weight: 600; color: var(--muted); padding: 0 1rem 0.3rem 0; }
+.daw-timing td { padding: 0.2rem 1rem 0.2rem 0; font-size: 0.84rem; white-space: nowrap; }
+.daw-timing td:first-child { font-family: var(--font-mono); color: var(--ink-2); }
+.daw-timing input[type="number"] { width: 4.4rem; padding: 0.25rem 0.35rem; }
+.daw-timing .tm-num { width: 3.4rem; }
+.daw-timing select { width: auto; padding: 0.25rem 0.35rem; }
+.daw-timing td span { color: var(--muted); padding: 0 0.15rem; }
+#dawMeter { font-family: var(--font-mono); font-size: 0.76rem; min-width: 2.9rem; }
