@@ -26,6 +26,7 @@
     raf: 0, saveTimer: 0, lastPos: -1, dirty: true, wasPlaying: false, recTrackId: null, ticket: 0,
     theme: '', observer: null, wired: false,
     panelH: 0,                       // editor panel height in px; 0 = the default share of the window
+    input: '', inputs: [],           // the input recording listens to ('' = system default), and those on offer
   };
 
   function root() { return doc.getElementById('dawRoot'); }
@@ -174,7 +175,7 @@
     S.ticket++;
     cancelAnimationFrame(S.raf);
     if (S.engine) {
-      if (S.engine.isRecording()) S.engine.stopRecording();
+      if (S.engine.isRecording()) finishRecording();           // the take is kept, not thrown away
       S.engine.stop();
     }
     if (S.saveTimer) flushSave();
@@ -203,6 +204,23 @@
       </div>`;
   }
 
+  // The choices in the input picker. An input chosen earlier that is not
+  // plugged in now stays listed, so it is picked up again when it returns.
+  function inputOptions() {
+    const missing = S.input && !S.inputs.some(i => i.id === S.input);
+    const option = (id, name) => `<option value="${esc(id)}"${id === S.input ? ' selected' : ''}>${esc(name)}</option>`;
+    return option('', 'System default') + S.inputs.map(i => option(i.id, i.name)).join('') +
+      (missing ? option(S.input, 'Chosen input (not connected)') : '');
+  }
+
+  function refreshInputs() {
+    S.engine.inputs().then(list => {
+      S.inputs = list;
+      const pick = $('dawInput');
+      if (pick) pick.innerHTML = inputOptions();
+    }).catch(() => { /* no list; the system default still records */ });
+  }
+
   function render() {
     if (!S.project) return;
     const A = global.DawArrange;
@@ -212,26 +230,28 @@
         <button type="button" class="ghost" id="dawHome" title="Back to the start (Home)">⏮</button>
         <button type="button" class="primary" id="dawPlay" title="Play / stop (Space)">▶ Play</button>
         <button type="button" class="ghost daw-rec" id="dawRec" title="Record onto an audio track (R)">● Record</button>
+        <label class="daw-field" title="The input that recording listens to">from <select id="dawInput">${inputOptions()}</select></label>
         <div class="daw-pos"><span id="dawBars" class="mono">1.1</span><span id="dawClock" class="meta">0:00.0</span></div>
         <label class="daw-field">Tempo <input id="dawTempo" type="number" min="40" max="240" value="${esc(p.tempo)}" /></label>
         <button type="button" class="ghost daw-toggle" id="dawLoop" title="Loop (L). Drag in the bar ruler to set the range, or click a section.">Loop</button>
         <button type="button" class="ghost daw-toggle" id="dawClick" title="Metronome">Click</button>
         <label class="daw-field">Snap <select id="dawSnap">${SNAPS.map(([v, name]) =>
           `<option value="${v}"${v === S.snap ? ' selected' : ''}>${name}</option>`).join('')}</select></label>
-        <span id="dawStatus" class="meta daw-status">${esc(S.status)}</span>
-        <span class="spacer"></span>
-        <button type="button" class="ghost" id="dawUndo" title="Undo (Ctrl+Z)">Undo</button>
-        <button type="button" class="ghost" id="dawRedo" title="Redo (Ctrl+Y)">Redo</button>
-        <button type="button" class="ghost" id="dawZoomOut" title="Zoom out (-)">−</button>
-        <button type="button" class="ghost" id="dawZoomIn" title="Zoom in (+)">+</button>
-        <button type="button" class="ghost" id="dawRebuild" title="Replace the note tracks with the song as it is now">Rebuild from song</button>
-        <button type="button" class="ghost" id="dawImport" title="Bring an audio file in on a track of its own. You can also drop a file anywhere here.">Import audio…</button>
-        <input type="file" id="dawImportFile" accept="audio/*,.wav,.mp3,.ogg,.oga,.flac,.m4a,.aac,.opus" hidden />
-        <button type="button" class="ghost" id="dawExport">Export…</button>
-        <button type="button" class="ghost" id="dawKeys" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+        <div class="daw-actions">
+          <button type="button" class="ghost" id="dawUndo" title="Undo (Ctrl+Z)">Undo</button>
+          <button type="button" class="ghost" id="dawRedo" title="Redo (Ctrl+Y)">Redo</button>
+          <button type="button" class="ghost" id="dawZoomOut" title="Zoom out (-)">−</button>
+          <button type="button" class="ghost" id="dawZoomIn" title="Zoom in (+)">+</button>
+          <button type="button" class="ghost" id="dawRebuild" title="Rebuild the note tracks from the song as it is now. Recordings are kept.">Rebuild</button>
+          <button type="button" class="ghost" id="dawImport" title="Bring an audio file in on a track of its own. You can also drop a file anywhere here.">Import audio…</button>
+          <input type="file" id="dawImportFile" accept="audio/*,.wav,.mp3,.ogg,.oga,.flac,.m4a,.aac,.opus" hidden />
+          <button type="button" class="ghost" id="dawExport">Export…</button>
+          <button type="button" class="ghost" id="dawKeys" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+        </div>
       </div>
       <div class="daw-arrange" id="dawArrange">
         <div class="daw-heads" id="dawHeads" style="width:${HEAD_W}px;padding-top:${A.TOP}px">
+          <div class="daw-status" id="dawStatus" style="height:${A.TOP}px" aria-live="polite">${esc(S.status)}</div>
           ${p.tracks.map(headHTML).join('')}
           <div class="daw-add">
             <button type="button" class="ghost small" data-add="instrument">+ Instrument</button>
@@ -325,7 +345,7 @@
       },
       createClip(trackId, beat) {
         const track = P().findTrack(S.project, trackId);
-        const clip = P().addClip(track, { start: beat, length: 4, name: track.name });
+        const clip = P().addClip(track, { start: beat, length: 4, name: sectionAt(beat) || track.name });
         if (!clip) return;
         S.sel = { trackId, clipId: clip.id, noteId: null };
         S.panel = 'notes';
@@ -341,6 +361,13 @@
       scrollBy(beats) { S.scrollBeat = Math.max(0, S.scrollBeat + beats); syncScrollbar(); S.dirty = true; },
     },
   };
+
+  // The name of the section a beat falls in, going by the song's markers.
+  function sectionAt(beat) {
+    let found = null;
+    S.project.markers.forEach(m => { if (m.beat <= beat + 1e-6 && (!found || m.beat >= found.beat)) found = m; });
+    return found ? found.name : '';
+  }
 
   function select(trackId, clipId) {
     const changed = S.sel.trackId !== trackId || S.sel.clipId !== clipId;
@@ -601,13 +628,15 @@
       commit({ structure: true });
     }
     S.recTrackId = track.id;
-    setStatus('Opening the microphone…');
+    setStatus('Opening the input…');
     try {
-      await S.engine.startRecording();
-      setStatus('Recording: one bar of clicks, then you are on. Press Stop when done.');
+      const opened = await S.engine.startRecording();
+      setStatus('One bar of clicks, then recording. Press Stop when done.');
+      if (opened && opened.fellBack) UI().toast('The chosen input is not connected. Recording from the system default.');
+      refreshInputs();                                // their real names are known once recording is allowed
     } catch (e) {
       setStatus('');
-      UI().toast('Could not open the microphone');
+      UI().toast('Could not open an input to record from');
     }
     updateBar();
   }
@@ -634,8 +663,6 @@
   }
 
   // ── Bringing audio in ────────────────────────────────────────────────────
-  const MAX_IMPORT_BYTES = 300 * 1024 * 1024;
-
   function newAudioId() {
     return 'aud_' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
   }
@@ -651,7 +678,8 @@
   async function importAudio(file) {
     if (!file || !S.project) return;
     if (S.engine.isRecording()) { UI().toast('Stop recording before importing audio'); return; }
-    if (file.size > MAX_IMPORT_BYTES) { UI().toast('That file is too large to import'); return; }
+    const unfit = P().audioFileProblem(file.name, file.size);
+    if (unfit) { UI().toast(unfit); return; }
     if (S.project.tracks.length >= P().LIMITS.tracks) { UI().toast('No room for another track'); return; }
     const projectId = S.project.id;
     const stillHere = () => S.active && S.project && S.project.id === projectId;
@@ -665,6 +693,9 @@
     setStatus('');
     if (!stillHere()) return;                         // left, or opened another song, meanwhile
     if (!audio) { UI().toast(`"${file.name}" could not be read as audio`); return; }
+    const seconds = audio.channels[0].length / audio.sampleRate;
+    const overlong = P().audioLengthProblem(seconds);
+    if (overlong) { UI().toast(overlong); return; }
 
     const audioId = newAudioId();
     S.engine.setAudio(audioId, audio.sampleRate, audio.channels);
@@ -676,7 +707,6 @@
     if (!stillHere()) return;
     const track = P().addTrack(S.project, 'audio', { name: trackNameFor(file) });
     if (!track) { UI().toast('No room for another track'); return; }
-    const seconds = audio.channels[0].length / audio.sampleRate;
     const clip = P().addClip(track, {
       start: snapBeat(S.engine.position()), length: seconds * S.project.tempo / 60, audioId, name: track.name,
     });
@@ -811,8 +841,13 @@
   // Listeners that outlive a redraw: they sit on the view itself or the window.
   function wireOnce() {
     wireSliderFocus();
-    const saved = global.Storage.getSettings().dawPanel;
-    S.panelH = typeof saved === 'number' && Number.isFinite(saved) && saved > 0 ? saved : 0;
+    const settings = global.Storage.getSettings();
+    S.panelH = typeof settings.dawPanel === 'number' && Number.isFinite(settings.dawPanel) && settings.dawPanel > 0 ? settings.dawPanel : 0;
+    S.input = typeof settings.dawInput === 'string' ? settings.dawInput.slice(0, 200) : '';
+    S.engine.setInput(S.input);
+    refreshInputs();
+    const devices = global.navigator.mediaDevices;
+    if (devices && devices.addEventListener) devices.addEventListener('devicechange', refreshInputs);
     global.addEventListener('resize', () => { if (S.active && S.project) showPanelHeight(); });
     // An audio file dropped anywhere on the DAW is imported.
     root().addEventListener('dragover', e => {
@@ -884,6 +919,12 @@
       S.snap = parseFloat($('dawSnap').value) || 0;
       $('dawSnap').blur();
       if (S.roll) S.roll.draw();
+    });
+    on('dawInput', 'change', () => {
+      S.input = $('dawInput').value;
+      $('dawInput').blur();
+      S.engine.setInput(S.input);
+      global.Storage.setSettings({ dawInput: S.input });
     });
     on('dawHScroll', 'scroll', () => {
       S.scrollBeat = $('dawHScroll').scrollLeft / S.pxPerBeat;
@@ -977,6 +1018,10 @@
       S.engine.seek(0);
     }
     if (playing !== S.wasPlaying) { S.wasPlaying = playing; updateBar(); }
+    // A take held in memory cannot grow for ever.
+    if (S.engine.recordedSeconds() >= P().LIMITS.audioSeconds) {
+      finishRecording().then(() => UI().toast('Recording stopped: that is the longest take a project can hold.'));
+    }
 
     if (playing) {
       const canvas = $('dawCanvas');

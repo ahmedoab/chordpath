@@ -423,9 +423,56 @@ const { check, section, tempDataDir, launch, crashed, finish, cleanup } = requir
       check('deleting a project deletes its recordings', rec.gone);
     }
 
+    // Stopping during the count-in: the clicks still to come must not sound.
+    const countIn = await page.evaluate(async () => {
+      const T = window.__t;
+      const eng = DawEngine.get();
+      eng.sync(DawProject.createProject({ tempo: 60 }));          // nothing to play, so any sound is the count-in
+      await eng.seek(0);
+      const loudest = async ms => {
+        let peak = -160;
+        for (let i = 0; i < ms / 20; i++) { await T.wait(20); peak = Math.max(peak, eng.levels().master); }
+        return peak;
+      };
+      await eng.startRecording();
+      const first = await loudest(350);
+      eng.stopRecording();
+      await T.wait(250);                                           // the first click dies away
+      return { first, after: await loudest(1500) };                // the second was due a second after the first
+    });
+    check(`the count-in is heard (${countIn.first.toFixed(0)} dB)`, countIn.first > -40);
+    check(`and stops when recording is stopped (${countIn.after.toFixed(0)} dB)`, countIn.after < -60);
+
+    // Which input is recorded. The test shell offers several pretend ones.
+    const inputs = await page.evaluate(async () => {
+      const eng = DawEngine.get();
+      const list = await eng.inputs();
+      const chosen = list[list.length - 1];
+      const heardFrom = () => eng.recording.stream.getAudioTracks()[0].getSettings().deviceId;
+      eng.setInput(chosen.id);
+      const first = await eng.startRecording();
+      const usedChosen = heardFrom() === chosen.id;
+      eng.stopRecording();
+      eng.setInput('an-input-that-was-unplugged');
+      const second = await eng.startRecording();
+      const stillRecording = eng.isRecording();
+      eng.stopRecording();
+      eng.setInput('');
+      return {
+        count: list.length, named: list.every(i => typeof i.name === 'string' && i.name.length > 0),
+        distinct: new Set(list.map(i => i.id)).size === list.length,
+        noAlias: list.every(i => i.id !== 'default' && i.id !== 'communications'),
+        usedChosen, firstFellBack: first.fellBack, secondFellBack: second.fellBack, stillRecording,
+      };
+    });
+    check(`the inputs on this computer can be listed (${inputs.count})`, inputs.count >= 2 && inputs.named && inputs.distinct && inputs.noAlias);
+    check('recording uses the input that was chosen', inputs.usedChosen && inputs.firstFellBack === false);
+    check('and falls back to the default one, saying so, if that input has gone', inputs.secondFellBack === true && inputs.stillRecording);
+
     // ── Audio files ──────────────────────────────────────────────────────────
     section('Audio files and clean-up');
     const files = await page.evaluate(async () => {
+      const T = window.__t;
       const eng = DawEngine.get();
       // Two seconds of stereo tone as a WAV file, read back the way an imported file is.
       const sr = 22050, n = sr * 2;
@@ -438,6 +485,25 @@ const { check, section, tempDataDir, launch, crashed, finish, cleanup } = requir
       const peakOf = data => { let p = 0; for (let i = 0; i < data.length; i++) p = Math.max(p, Math.abs(data[i])); return p; };
       let refused = false;
       try { await eng.decode(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer); } catch (e) { refused = true; }
+
+      // A compressed file, made here with the app's own encoder, goes the same way.
+      const sink = eng.ctx.createMediaStreamDestination();
+      const osc = eng.ctx.createOscillator();
+      const level = eng.ctx.createGain();
+      level.gain.value = 0.4;
+      osc.connect(level).connect(sink);
+      const recorder = new MediaRecorder(sink.stream, { mimeType: 'audio/webm;codecs=opus' });
+      const pieces = [];
+      recorder.ondataavailable = e => { if (e.data.size) pieces.push(e.data); };
+      const stopped = new Promise(resolve => { recorder.onstop = resolve; });
+      osc.start();
+      recorder.start();
+      await T.wait(1500);
+      recorder.stop();
+      await stopped;
+      osc.stop();
+      const squeezed = await eng.decode(await new Blob(pieces).arrayBuffer());
+      const plays = type => document.createElement('audio').canPlayType(type) !== '';
 
       const blank = () => [new Float32Array(80)];
       await DawStore.putAudio('aud_keep', 'daw_prune', 8000, blank());
@@ -457,12 +523,18 @@ const { check, section, tempDataDir, launch, crashed, finish, cleanup } = requir
         seconds: decoded.channels[0].length / decoded.sampleRate, count: decoded.channels.length,
         peakL: peakOf(decoded.channels[0]), peakR: peakOf(decoded.channels[1]),
         refused, removed, kept, dropped, untouched,
+        squeezedSeconds: squeezed.channels[0].length / squeezed.sampleRate, squeezedPeak: peakOf(squeezed.channels[0]),
+        formats: { mp3: plays('audio/mpeg'), ogg: plays('audio/ogg; codecs="vorbis"'), flac: plays('audio/flac'), m4a: plays('audio/mp4; codecs="mp4a.40.2"') },
         letGo: !eng.hasAudio('aud_a') && eng.hasAudio('aud_b') && !eng.mixer.buffers.has('aud_a') && eng.mixer.buffers.has('aud_b'),
       };
     });
     check('an audio file decodes to samples of the right length', Math.abs(files.seconds - 2) < 0.01 && files.count === 2);
     check('at the level it was saved with', Math.abs(files.peakL - 0.5) < 0.03 && Math.abs(files.peakR - 0.25) < 0.03);
     check('a file that is not audio is refused', files.refused);
+    check(`a compressed file decodes as well (${files.squeezedSeconds.toFixed(2)} s of Opus)`,
+      files.squeezedSeconds > 1 && files.squeezedSeconds < 2.2 && files.squeezedPeak > 0.1);
+    check('the app carries decoders for MP3, OGG and FLAC', files.formats.mp3 && files.formats.ogg && files.formats.flac);
+    console.log('  (M4A/AAC decoder present: ' + files.formats.m4a + ')');
     check('pruning removes only the recordings a project no longer uses', files.removed === 1 && files.kept && files.dropped && files.untouched);
     check('the engine lets go of recordings it is told it no longer needs', files.letGo);
 

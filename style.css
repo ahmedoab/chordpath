@@ -1233,14 +1233,22 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .daw-field { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; color: var(--ink-2); white-space: nowrap; }
 .daw-field input[type="number"] { width: 4.2rem; padding: 0.25rem 0.35rem; }
 .daw-field select { width: auto; padding: 0.25rem 0.35rem; font-size: 0.76rem; }
+#dawInput { max-width: 9.5rem; text-overflow: ellipsis; }
 .daw-field input[type="range"] { accent-color: var(--accent); width: 96px; }
-.daw-status { margin-left: 0.4rem; }
+/* The buttons at the far end wrap together when the window is narrow. */
+.daw-actions { display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
 
 .daw-arrange {
   display: grid; grid-template-columns: auto minmax(0, 1fr);
   overflow-y: auto; overflow-x: hidden; min-height: 0;
 }
-.daw-heads { background: var(--surface); border-right: 1px solid var(--line); }
+.daw-heads { position: relative; background: var(--surface); border-right: 1px solid var(--line); }
+/* What the DAW is busy with, in the corner above the track names: room that
+   is always there, so a message never moves anything else. */
+.daw-status {
+  position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center;
+  padding: 0 0.6rem; font-size: 0.72rem; line-height: 1.25; color: var(--accent); overflow: hidden;
+}
 .daw-head {
   display: flex; flex-direction: column; justify-content: center; gap: 0.28rem;
   padding: 0 0.5rem 0 0.55rem; cursor: pointer;
@@ -1288,7 +1296,9 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .daw-tools { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
 .daw-sep { width: 1px; height: 1.1rem; background: var(--line); margin: 0 0.25rem; }
 .daw-panel-body { min-height: 0; overflow: hidden; }
-.daw-roll { height: 100%; overflow: auto; background: var(--bg); }
+/* The gutter is kept even before the rows overflow, so the canvas is measured
+   once and never ends up a scrollbar's width too wide. */
+.daw-roll { height: 100%; overflow: auto; scrollbar-gutter: stable; background: var(--bg); }
 .daw-hint { padding: 1rem 1.1rem; max-width: 62ch; font-size: 0.84rem; line-height: 1.55; }
 .daw-hint p { margin: 0 0 0.6rem; }
 .daw-tab { height: 100%; max-height: none; margin: 0; border: 0; border-radius: 0; font-size: 0.74rem; background: var(--bg); }

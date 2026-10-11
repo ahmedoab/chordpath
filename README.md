@@ -6,8 +6,9 @@ bridge/outro), chord progressions, arrangement patterns, and an instrument
 roster — then walks you through producing it in your DAW with guitar tabs
 for every part, free-plugin picks, mixing chains, and recording guides.
 
-> **Experimental branch.** This branch adds Muse (a built-in AI) and turns
-> ChordPath into a desktop application. `main` holds the original version.
+> **Experimental branch.** This branch adds Muse (a built-in AI), turns
+> ChordPath into a desktop application, and gives it a DAW of its own.
+> `main` holds the original version.
 
 **Fully self-contained.** ChordPath never goes online: no accounts, no API
 keys, no services. The audio library and fonts ship in `vendor/`, the page's
@@ -25,7 +26,8 @@ npm start
 ```
 
 Or with nothing installed: open `index.html` in a browser. Either way your
-songs and Muse's memory are stored on your computer.
+songs and Muse's memory are stored on your computer. The DAW is built and
+tested for the desktop application.
 
 ## Muse — ChordPath's own AI
 
@@ -53,6 +55,42 @@ with every song by feeling and by shared words; those similarities weight a
 chord-to-chord transition model, and a search writes a new loop from it.
 Songs you taught count three times as much as the built-in ones.
 
+## The DAW
+
+Open a song in the DAW and its parts arrive as tracks: chords, bass, drums,
+vocal melody and under melody, one clip per section, with the sections as
+markers along the top. From there the project is yours to change.
+
+- **Timeline.** Drag a clip to move it, drag its right edge to trim it,
+  double-click an empty stretch to start a new one. Click a section name to
+  loop that section, or drag in the bar ruler to loop any range. `S` splits
+  at the playhead, `Ctrl+D` duplicates, `?` lists every shortcut.
+- **Notes.** A piano roll for pitched tracks and a step grid for drums:
+  click to add, drag to move or lengthen, right-click to delete, plus
+  velocity, quantize and transpose.
+- **Tab.** Any clip as six-line guitar tab, whatever instrument plays it.
+  Chords are written as shapes one hand can hold, in the octave where they
+  are easiest; drums as a step grid.
+- **Mixer.** Volume, pan, mute and solo, three-band EQ, a compressor and
+  reverb and delay sends on every track, a master fader, and level meters.
+- **Sound.** Ten built-in instruments and a drum kit, synthesised by the app
+  itself. There are no samples to download.
+- **Recording.** Record a microphone or interface onto audio tracks after a
+  one-bar count-in; choose which input beside the Record button. Or bring
+  in an audio file (WAV, MP3, OGG, FLAC) with Import audio or by dropping
+  it on the window.
+- **Export.** A mixdown as 16- or 24-bit WAV, stems (one file per track),
+  or the notes as MIDI.
+
+Edits can be undone, a hundred steps back, and the project saves itself next
+to the song on your computer. "Rebuild" refreshes the note tracks after you
+change the song elsewhere in ChordPath; your recordings stay.
+
+What it does not do: host VST or AU plugins, change tempo or time signature
+partway through a song (one tempo, 4/4), or stretch recorded audio to a new
+tempo. For those, export the stems or the MIDI and carry on in another DAW.
+A single take or imported file can be up to twenty minutes long.
+
 ## The workflow
 
 1. **Songs** — your project browser. Autosaved projects, JSON import/export.
@@ -74,21 +112,30 @@ Songs you taught count three times as much as the built-in ones.
    per instrument: free plugins, a concrete mix chain (Hz, ratios, ms), and
    how to record it. Includes a full vocal-session guide with a range check
    against your own voice.
-6. **Handoff** — one printable page with every tab, arrangement note,
+6. **DAW** — the song as editable tracks, with recording, mixing and export.
+   See above.
+7. **Handoff** — one printable page with every tab, arrangement note,
    plugin pick, and the production checklist. Print it or save as PDF, and
-   drag the exported `.mid` into your DAW: every part lands on its own
+   drag the exported `.mid` into another DAW: every part lands on its own
    track with sections as markers.
 
 ## Tests
 
-No framework needed — the theory engine and Muse run headless in Node:
+No framework needed. The theory engine, Muse and the DAW's project model run
+headless in Node; everything that needs sound or a screen is tested in the
+real desktop app.
 
 ```
-npm test            # the three suites below
-node tests/run.js        # ~2300 data-integrity + engine checks
-node tests/audio-test.js # playback-scheduling checks (stubbed Tone.js)
-node tests/muse-test.js  # chord parsing, lexicon, Muse memory and drafting
-npm run test:e2e    # launches the desktop app and drives it end to end
+npm test                  # the four headless suites below
+node tests/run.js         # ~2300 data-integrity + engine checks
+node tests/audio-test.js  # playback-scheduling checks (stubbed Tone.js)
+node tests/muse-test.js   # chord parsing, lexicon, Muse memory and drafting
+node tests/daw-test.js    # WAV files, song to notes, the DAW project, tab from notes
+
+npm run test:e2e          # launches the desktop app three times (several minutes)
+node tests/e2e.js         # Muse and the desktop shell
+node tests/e2e-engine.js  # the audio engine, measured from its own output
+node tests/e2e-daw.js     # the DAW screen, driven with mouse and keyboard
 ```
 
 ## Architecture
@@ -108,8 +155,15 @@ Vanilla JS, no build step. Each file is an IIFE exporting one global;
   numerals, key detection), **lexicon** (description → feelings),
   **musedata** (the built-in song library), **muse** (memory, learning,
   drafting).
+- `daw/` — the DAW underneath the screen: **wav** (reading and writing WAV),
+  **project** (tracks, clips and notes, the editing operations, undo, MIDI
+  export), **store** (projects and recordings in the app's local database),
+  **engine** (instruments, mixer, effects, transport, recording and offline
+  bouncing, written on the Web Audio API). `theory/parts.js` turns a song
+  into the notes each track starts with.
 - `ui/` — components, viz (piano/fretboard/chord diagrams), nav (hash
-  router), and one view module per screen.
+  router), and one view module per screen. `ui/daw/` holds the DAW's
+  timeline, note editor and mixer.
 - `desktop/` — the Electron shell: one window, a private `app://` address
   for the app's files, and the rule that nothing else may be requested.
 - `vendor/` — Tone.js and the Inter / JetBrains Mono fonts, with licences.

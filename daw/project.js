@@ -10,7 +10,9 @@
   'use strict';
 
   const FORMAT = 'chordpath-daw';
-  const LIMITS = { tracks: 64, clips: 512, notes: 8192, markers: 256, name: 60, title: 120, beats: 100000 };
+  const LIMITS = { tracks: 64, clips: 512, notes: 8192, markers: 256, name: 60, title: 120, beats: 100000, audioSeconds: 1200 };
+  // Megabytes that hold about twenty-five minutes of each kind of audio file.
+  const AUDIO_MB = { compressed: 25, flac: 130, plain: 260 };
   const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
   const NOTE_RE = /^[A-G][#b]?$/;
   const COLOR_RE = /^#[0-9a-f]{6}$/i;
@@ -188,6 +190,23 @@
   }
   function snap(beat, grid) {
     return grid > 0 ? Math.round(beat / grid) * grid : beat;
+  }
+
+  // ── What may be imported ─────────────────────────────────────────────────
+  const TOO_LONG = 'That file is too long to import. Trim it to under 20 minutes first.';
+
+  // Whether an audio file is short enough to bring in, judged from its name
+  // and size alone so that nothing enormous is ever read into memory.
+  // Returns '' when it is, or the reason it is not.
+  function audioFileProblem(name, bytes) {
+    if (!(bytes > 0)) return 'That file is empty.';
+    const ext = (/\.([A-Za-z0-9]{1,5})$/.exec(String(name || '')) || ['', ''])[1].toLowerCase();
+    const kind = ['wav', 'wave', 'aif', 'aiff'].includes(ext) ? 'plain' : ext === 'flac' ? 'flac' : 'compressed';
+    return bytes > AUDIO_MB[kind] * 1024 * 1024 ? TOO_LONG : '';
+  }
+  // The same question once the audio has been read and its real length is known.
+  function audioLengthProblem(seconds) {
+    return seconds > LIMITS.audioSeconds ? TOO_LONG : '';
   }
 
   // ── Tracks ───────────────────────────────────────────────────────────────
@@ -488,6 +507,7 @@
     INSTRUMENTS, DRUM_LANES, TRACK_COLORS, LIMITS,
     createProject, createTrack, createClip, fromSong,
     findTrack, findClip, endBeat, snap,
+    audioFileProblem, audioLengthProblem,
     addTrack, removeTrack,
     addClip, removeClip, moveClip, resizeClip, splitClip, duplicateClip,
     addNote, removeNote, updateNote, quantize, transpose,

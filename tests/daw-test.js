@@ -345,6 +345,23 @@ section('MIDI export');
   eq('a track with no notes is left out', (DawProject.toMidi(edited)[10] << 8) | DawProject.toMidi(edited)[11], ntrks - 1);
 }
 
+// ── What may be imported ───────────────────────────────────────────────────
+section('Audio file limits');
+{
+  const MB = 1024 * 1024;
+  const problem = DawProject.audioFileProblem;
+  eq('a short recording is welcome', problem('riff.wav', 5 * MB), '');
+  eq('so is a song-length MP3', problem('demo.mp3', 9 * MB), '');
+  check('an MP3 the size of a whole concert is not', /too long/.test(problem('whole gig.mp3', 26 * MB)));
+  eq('the same size as a WAV is only a few minutes', problem('take.WAV', 26 * MB), '');
+  check('a WAV has its own, larger limit', /too long/.test(problem('rehearsal.wav', 261 * MB)));
+  check('and so does FLAC, in between', problem('song.flac', 100 * MB) === '' && /too long/.test(problem('album.flac', 131 * MB)));
+  check('a file of an unknown kind is judged as if compressed', /too long/.test(problem('mystery', 26 * MB)));
+  check('an empty file is refused', /empty/.test(problem('nothing.wav', 0)));
+  eq('twenty minutes is the most a project takes in one piece',
+    [DawProject.audioLengthProblem(1200), /too long/.test(DawProject.audioLengthProblem(1200.5))], ['', true]);
+}
+
 // ── Tab of a clip's notes, chords included ─────────────────────────────────
 section('Tab from notes');
 {

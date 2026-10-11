@@ -8,7 +8,7 @@
  *   chordpath:project:<id>            full song JSON (the ONLY key autosave writes)
  *   chordpath:snapshots:index:<songId> [{snapId,name,takenAt}]
  *   chordpath:snapshot:<songId>:<snapId> {name, takenAt, song}   (never overwritten)
- *   chordpath:settings                {theme, lastSongId, singerRange, dawPanel}
+ *   chordpath:settings                {theme, lastSongId, singerRange, dawPanel, dawInput}
  *   chordpath:saved                   legacy v1 saves — migrated once, kept as backup
  */
 (function (global) {

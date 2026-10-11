@@ -469,6 +469,7 @@
     this.clickOn = false;
     this.timer = null;
     this.recording = null;
+    this.inputId = '';               // input to record from; '' = the system default
   }
 
   Engine.prototype.ensure = function () {
@@ -626,6 +627,7 @@
     g.connect(this.mixer.limiter);
     o.start(when);
     o.stop(when + 0.08);
+    return o;
   };
 
   // Schedules everything between `from` and `to` beats on the current anchor.
@@ -714,16 +716,36 @@
     }
     registerProcessor('chordpath-recorder', ChordPathRecorder);`;
 
-  // Opens the microphone, counts in one bar, then plays from the resting
-  // playhead while capturing. Resolves once the microphone is open.
+  // The audio inputs this computer offers, as [{ id, name }]. The system only
+  // gives their real names once recording has been allowed.
+  Engine.prototype.inputs = async function () {
+    const devices = await global.navigator.mediaDevices.enumerateDevices();
+    return devices
+      .filter(d => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
+      .map((d, i) => ({ id: d.deviceId, name: d.label || 'Input ' + (i + 1) }));
+  };
+  // Chooses the input to record from; '' is whichever the system has as its default.
+  Engine.prototype.setInput = function (deviceId) { this.inputId = typeof deviceId === 'string' ? deviceId : ''; };
+
+  // Opens the input, counts in one bar, then plays from the resting playhead
+  // while capturing. Resolves once the input is open, to { fellBack }: true
+  // when the chosen input was not there and the default one is being used.
   Engine.prototype.startRecording = async function () {
     this.ensure();
-    if (this.recording) return;
+    if (this.recording) return { fellBack: false };
     if (this.ctx.state !== 'running') await this.ctx.resume();
     this.stop();
-    const stream = await global.navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-    });
+    // Voice-call processing would mangle music, so it is all switched off.
+    const plain = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    const open = audio => global.navigator.mediaDevices.getUserMedia({ audio });
+    let stream, fellBack = false;
+    try {
+      stream = await open(this.inputId ? Object.assign({ deviceId: { exact: this.inputId } }, plain) : plain);
+    } catch (e) {
+      if (!this.inputId) throw e;
+      stream = await open(plain);
+      fellBack = true;
+    }
     if (!this.recorderLoaded) {
       await this.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([RECORDER_SOURCE], { type: 'text/javascript' })));
       this.recorderLoaded = true;
@@ -736,10 +758,12 @@
 
     const spb = this.spb();
     const first = this.ctx.currentTime + 0.12;
-    for (let i = 0; i < 4; i++) this.tick(first + i * spb, i === 0);
+    const countIn = [];
+    for (let i = 0; i < 4; i++) countIn.push(this.tick(first + i * spb, i === 0));
     const startTime = first + 4 * spb;
-    this.recording = { stream, source, node, chunks, startTime, fromBeat: this.paused, sampleRate: this.ctx.sampleRate };
+    this.recording = { stream, source, node, chunks, countIn, startTime, fromBeat: this.paused, sampleRate: this.ctx.sampleRate };
     await this.play(startTime);
+    return { fellBack };
   };
 
   // Stops and returns the take — { sampleRate, channels, startBeat, beats,
@@ -754,6 +778,7 @@
     rec.source.disconnect();
     rec.node.port.onmessage = null;
     rec.stream.getTracks().forEach(t => t.stop());
+    rec.countIn.forEach(click => click.disconnect());      // any clicks still to come stay silent
 
     const firstFrame = Math.round(rec.startTime * rec.sampleRate);
     const total = Math.round(endTime * rec.sampleRate) - firstFrame;
@@ -780,6 +805,10 @@
   };
 
   Engine.prototype.isRecording = function () { return !!this.recording; };
+  // How long the take is so far; nothing during the count-in.
+  Engine.prototype.recordedSeconds = function () {
+    return this.recording ? Math.max(0, this.ctx.currentTime - this.recording.startTime) : 0;
+  };
 
   // ── Bouncing to a file ───────────────────────────────────────────────────
   // Renders a project off-line. options: { onlyTrackId, tail, sampleRate }.

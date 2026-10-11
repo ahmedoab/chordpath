@@ -65,6 +65,9 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     check('with a header for each', (await page.locator('#dawHeads .daw-head').count()) === 5);
     check('sections become markers', st.markers.length === 8 && st.markers[0].name === 'Intro');
     check('the tempo box shows the song tempo', (await page.inputValue('#dawTempo')) === String(st.tempo));
+    const barHeight = async () => (await page.locator('.daw-bar').boundingBox()).height;
+    const oneRow = await barHeight();
+    check('the toolbar sits on a single row', oneRow < 56);
     check('the timeline has been drawn', await page.evaluate(() => {
       const c = document.getElementById('dawCanvas');
       const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
@@ -181,6 +184,7 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     st = await state();
     const made = st.tracks[1].clips.find(c => c.start === 4 && c.notes === 0);
     check('double-clicking an empty stretch makes a new four-beat clip', !!made && made.length === 4);
+    check('named after the section it sits in', /^Intro on Bass: 4 beats, 0 notes$/.test((await page.textContent('#dawClipInfo')).trim()));
 
     // ── Note editor ────────────────────────────────────────────────────────
     section('Note editor');
@@ -208,6 +212,10 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     };
     let r = await roll();
     check('the editor opens scrolled to a playable register', r.scrollTop > 100);
+    check('and fits its clip without a sideways scrollbar', await page.evaluate(() => {
+      const wrap = document.getElementById('dawRollWrap');
+      return wrap.scrollWidth <= wrap.clientWidth;
+    }));
     // An empty clip opens centred on the octave above middle C, so work there.
     let c1 = await cell(1, 60);
     await page.mouse.click(c1.x, c1.y);
@@ -356,13 +364,26 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
 
     // ── Recording ──────────────────────────────────────────────────────────
     section('Recording');
+    // The test shell offers a few pretend inputs.
+    await page.waitForFunction(() => document.querySelectorAll('#dawInput option').length >= 3, null, { timeout: 10000 }).catch(() => {});
+    const inputNames = await page.locator('#dawInput option').allTextContents();
+    check('the inputs are offered beside Record, the system default first', inputNames.length >= 3 && inputNames[0] === 'System default');
+    await page.selectOption('#dawInput', { index: inputNames.length - 1 });
+    const chosenInput = await page.inputValue('#dawInput');
     await page.keyboard.press('Home');
     await page.click('#dawRec');
     await page.waitForFunction(() => window.__daw().recording, null, { timeout: 15000 });
+    check('recording listens to the input that was chosen', chosenInput !== '' && await page.evaluate(id =>
+      DawEngine.get().recording.stream.getAudioTracks()[0].getSettings().deviceId === id, chosenInput));
     st = await state();
     check('Record makes and arms an audio track', st.tracks.length === 6 && st.tracks[5].kind === 'audio' && st.tracks[5].armed);
     check('the Record button shows it is live', await page.locator('#dawRec.on').count() === 1);
     check('the status line explains the count-in', /count|clicks/i.test(await page.textContent('#dawStatus')));
+    check('in full, without moving the toolbar', Math.abs((await barHeight()) - oneRow) < 1 &&
+      await page.evaluate(() => {
+        const s = document.getElementById('dawStatus');
+        return s.clientWidth > 100 && s.scrollWidth <= s.clientWidth && s.scrollHeight <= s.clientHeight;
+      }));
     await page.waitForFunction(() => window.__daw().position > 3, null, { timeout: 20000 });
     await page.click('#dawPlay');
     await page.waitForFunction(() => !window.__daw().recording && window.__daw().tracks[5].clips.length === 1, null, { timeout: 10000 });
@@ -372,6 +393,31 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     check('the take can be played back', await page.evaluate(id => DawEngine.get().audioSeconds(id) > 1, take.audioId));
     check('the take is described in plain terms', /^Take 1 on Audio 1: \d+(\.\d\d?)? beats$/.test((await page.textContent('#dawClipInfo')).trim()));
     await shot(page, '14-daw-recorded');
+
+    // A take cannot grow for ever. The limit is twenty minutes; it is shortened here to keep the test quick.
+    await page.evaluate(() => { DawProject.LIMITS.audioSeconds = 1.5; });
+    await page.click('#dawRec');
+    await page.waitForFunction(() => window.__daw().tracks[5].clips.length === 2, null, { timeout: 30000 }).catch(() => {});
+    st = await state();
+    check('recording stops by itself at the longest take a project can hold', !st.recording && st.tracks[5].clips.length === 2);
+    check('and says why', /longest take/i.test(await page.textContent('#toast')));
+    await page.evaluate(() => { DawProject.LIMITS.audioSeconds = 1200; });
+    await page.keyboard.press('Delete');
+    check('the extra take can be deleted again', (await state()).tracks[5].clips.length === 1);
+
+    // Wandering off to another page mid-take must not throw the take away.
+    await page.click('#dawRec');
+    await page.waitForFunction(() => window.__daw().recording && window.__daw().position > 1, null, { timeout: 20000 });
+    await page.click('#navTabs [data-nav="overview"]');
+    await page.waitForSelector('#overviewRoot .ov-card');
+    check('leaving the DAW ends the recording', !(await state()).recording);
+    await page.click('#navTabs [data-nav="daw"]');
+    await page.waitForSelector('#dawCanvas');
+    await page.waitForFunction(() => window.__daw().tracks[5].clips.length === 2, null, { timeout: 10000 }).catch(() => {});
+    st = await state();
+    check('and keeps what was recorded', st.tracks[5].clips.length === 2 && st.tracks[5].clips[1].length > 0.5);
+    await page.keyboard.press('Delete');
+    check('ready to be kept or deleted', (await state()).tracks[5].clips.length === 1);
 
     // ── Export ─────────────────────────────────────────────────────────────
     section('Export');
@@ -442,6 +488,11 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     await page.setInputFiles('#dawImportFile', path.join(fixtures, 'Shopping list.wav'));
     await page.waitForFunction(() => /could not be read/i.test(document.getElementById('toast').textContent), null, { timeout: 15000 });
     check('a file that is not audio is turned away and nothing is added', (await state()).tracks.length === 7);
+    fs.writeFileSync(path.join(fixtures, 'Whole gig.mp3'), Buffer.alloc(26 * 1024 * 1024));
+    await page.setInputFiles('#dawImportFile', path.join(fixtures, 'Whole gig.mp3'));
+    await page.waitForFunction(() => /too long/i.test(document.getElementById('toast').textContent), null, { timeout: 15000 }).catch(() => {});
+    check('one too long to work with is turned away before it is read',
+      /too long/i.test(await page.textContent('#toast')) && (await state()).tracks.length === 7);
 
     // A take that is thrown away is cleared from disk the next time the project opens.
     await page.setInputFiles('#dawImportFile', path.join(fixtures, 'Spare.wav'));
@@ -449,6 +500,24 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     const spareId = (await state()).tracks[7].clips[0].audioId;
     await page.keyboard.press('Delete');
     check('Delete removes the selected audio clip', (await state()).tracks[7].clips.length === 0);
+
+    // Dropping a file on the window does what choosing it does.
+    await page.evaluate(() => {
+      const rate = 8000, tone = new Float32Array(rate);              // one second
+      for (let i = 0; i < rate; i++) tone[i] = 0.4 * Math.sin(2 * Math.PI * 220 * i / rate);
+      const data = new DataTransfer();
+      data.items.add(new File([Wav.encode([tone], rate, 16)], 'Dropped riff.wav', { type: 'audio/wav' }));
+      const target = document.getElementById('dawCanvas');
+      const over = new DragEvent('dragover', { dataTransfer: data, bubbles: true, cancelable: true });
+      target.dispatchEvent(over);
+      window.__dropWelcome = over.defaultPrevented;
+      target.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }));
+    });
+    await page.waitForFunction(() => window.__daw().tracks.some(t => t.name === 'Dropped riff'), null, { timeout: 15000 }).catch(() => {});
+    st = await state();
+    const droppedTrack = st.tracks.find(t => t.name === 'Dropped riff');
+    check('a file dropped on the window is imported too', await page.evaluate(() => window.__dropWelcome) &&
+      !!droppedTrack && droppedTrack.clips.length === 1 && Math.abs(droppedTrack.clips[0].length - st.tempo / 60) < 0.05);
 
     // ── Layout and help ────────────────────────────────────────────────────
     section('Layout and help');
@@ -492,6 +561,7 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     check('so is the imported audio', again.tracks[6].name === 'Guitar idea' &&
       await page.evaluate(id => Math.abs(DawEngine.get().audioSeconds(id) - 2) < 0.02, brought.clips[0].audioId));
     check('the editor panel keeps the height it was given', Math.abs((await panelHeight()) - shorter) <= 2);
+    check('and the input to record from is still the one chosen', (await page.inputValue('#dawInput')) === chosenInput);
     await page.waitForFunction(id => DawStore.getAudio(id).then(a => a === null), spareId, { timeout: 10000 }).catch(() => {});
     check('audio that no clip uses any more has been cleared from disk',
       await page.evaluate(async ids => (await DawStore.getAudio(ids[0])) === null && (await DawStore.getAudio(ids[1])) !== null, [spareId, take.audioId]));
