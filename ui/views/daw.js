@@ -178,6 +178,7 @@
     if (S.engine) {
       if (S.engine.isRecording()) finishRecording();           // the take is kept, not thrown away
       S.engine.stop();
+      if (S.engine.isMonitoring()) S.engine.setMonitor(false); // the microphone is not left open behind another page
     }
     if (S.saveTimer) flushSave();
   }
@@ -232,6 +233,7 @@
         <button type="button" class="primary" id="dawPlay" title="Play / stop (Space)">▶ Play</button>
         <button type="button" class="ghost daw-rec" id="dawRec" title="Record onto an audio track (R)">● Record</button>
         <label class="daw-field" title="The input that recording listens to">from <select id="dawInput">${inputOptions()}</select></label>
+        <button type="button" class="ghost daw-toggle" id="dawMonitor" title="Hear your input through the app while you play. Use headphones: through speakers the microphone would pick itself up.">Hear it</button>
         <div class="daw-pos"><span id="dawBars" class="mono">1.1</span><span id="dawClock" class="meta">0:00.0</span></div>
         <label class="daw-field">Tempo <input id="dawTempo" type="number" min="40" max="240" value="${esc(p.tempo)}" /></label>
         <button type="button" class="ghost daw-toggle" id="dawLoop" title="Loop (L). Drag in the bar ruler to set the range, or click a section.">Loop</button>
@@ -244,7 +246,7 @@
           <button type="button" class="ghost" id="dawZoomOut" title="Zoom out (-)">−</button>
           <button type="button" class="ghost" id="dawZoomIn" title="Zoom in (+)">+</button>
           <button type="button" class="ghost" id="dawRebuild" title="Rebuild the note tracks from the song as it is now. Recordings are kept.">Rebuild</button>
-          <button type="button" class="ghost" id="dawImport" title="Bring an audio file in on a track of its own. You can also drop a file anywhere here.">Import audio…</button>
+          <button type="button" class="ghost" id="dawImport" title="Bring an audio file in on a track of its own. You can also drop a file anywhere here.">Import…</button>
           <input type="file" id="dawImportFile" accept="audio/*,.wav,.mp3,.ogg,.oga,.flac,.m4a,.aac,.opus" hidden />
           <button type="button" class="ghost" id="dawExport">Export…</button>
           <button type="button" class="ghost" id="dawKeys" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
@@ -308,6 +310,7 @@
     const recording = S.engine.isRecording();
     $('dawPlay').textContent = playing || recording ? '■ Stop' : '▶ Play';
     $('dawRec').classList.toggle('on', recording);
+    $('dawMonitor').classList.toggle('on', S.engine.isMonitoring());
     $('dawLoop').classList.toggle('on', S.project.loop.on);
     $('dawClick').classList.toggle('on', S.click);
     $('dawUndo').disabled = !S.history.canUndo();
@@ -678,6 +681,24 @@
     return 'Audio ' + (S.project.tracks.filter(t => t.kind === 'audio').length + 1);
   }
 
+  // Says so when the input in use is not the one that was chosen.
+  function heardFrom(opened) {
+    if (opened && opened.fellBack) UI().toast('The chosen input is not connected. Using the system default.');
+    updateBar();
+  }
+
+  // Monitoring: hear the input through the app. It starts switched off every
+  // time, because through speakers a microphone would feed back on itself.
+  async function toggleMonitor() {
+    try {
+      heardFrom(await S.engine.setMonitor(!S.engine.isMonitoring()));
+      refreshInputs();                                // their real names are known once listening is allowed
+    } catch (e) {
+      UI().toast('Could not open an input to listen to');
+      updateBar();
+    }
+  }
+
   async function toggleRecord() {
     if (S.engine.isRecording()) { await finishRecording(); return; }
     let track = S.project.tracks.find(t => t.kind === 'audio' && t.armed);
@@ -695,7 +716,7 @@
     try {
       const opened = await S.engine.startRecording();
       setStatus('One bar of clicks, then recording. Press Stop when done.');
-      if (opened && opened.fellBack) UI().toast('The chosen input is not connected. Recording from the system default.');
+      heardFrom(opened);
       refreshInputs();                                // their real names are known once recording is allowed
     } catch (e) {
       setStatus('');
@@ -986,9 +1007,13 @@
     on('dawInput', 'change', () => {
       S.input = $('dawInput').value;
       $('dawInput').blur();
-      S.engine.setInput(S.input);
       global.Storage.setSettings({ dawInput: S.input });
+      S.engine.setInput(S.input).then(heardFrom, () => {
+        UI().toast('Could not open that input');
+        updateBar();
+      });
     });
+    press('dawMonitor', toggleMonitor);
     on('dawHScroll', 'scroll', () => {
       S.scrollBeat = $('dawHScroll').scrollLeft / S.pxPerBeat;
       S.dirty = true;

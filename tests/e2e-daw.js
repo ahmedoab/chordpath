@@ -437,6 +437,15 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     check('the inputs are offered beside Record, the system default first', inputNames.length >= 3 && inputNames[0] === 'System default');
     await page.selectOption('#dawInput', { index: inputNames.length - 1 });
     const chosenInput = await page.inputValue('#dawInput');
+    const listening = () => page.evaluate(() => DawEngine.get().isMonitoring());
+    await page.click('#dawMonitor');
+    await page.waitForFunction(() => DawEngine.get().isMonitoring(), null, { timeout: 10000 }).catch(() => {});
+    check('"Hear it" passes the chosen input through to the output', (await listening()) && await page.locator('#dawMonitor.on').count() === 1 &&
+      await page.evaluate(id => DawEngine.get().input.stream.getAudioTracks()[0].getSettings().deviceId === id, chosenInput));
+    await page.click('#dawMonitor');
+    await page.waitForFunction(() => !DawEngine.get().isMonitoring(), null, { timeout: 10000 }).catch(() => {});
+    check('and pressing it again stops and lets go of the input', !(await listening()) && await page.locator('#dawMonitor.on').count() === 0 &&
+      await page.evaluate(() => DawEngine.get().input === null));
     await page.keyboard.press('Home');
     await page.click('#dawRec');
     await page.waitForFunction(() => window.__daw().recording, null, { timeout: 15000 });
@@ -472,12 +481,15 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     await page.keyboard.press('Delete');
     check('the extra take can be deleted again', (await state()).tracks[5].clips.length === 1);
 
-    // Wandering off to another page mid-take must not throw the take away.
+    // Wandering off to another page mid-take must not throw the take away, nor leave the input open.
+    await page.click('#dawMonitor');
+    await page.waitForFunction(() => DawEngine.get().isMonitoring(), null, { timeout: 10000 }).catch(() => {});
     await page.click('#dawRec');
     await page.waitForFunction(() => window.__daw().recording && window.__daw().position > 1, null, { timeout: 20000 });
     await page.click('#navTabs [data-nav="overview"]');
     await page.waitForSelector('#overviewRoot .ov-card');
     check('leaving the DAW ends the recording', !(await state()).recording);
+    check('and stops listening to the input', !(await listening()) && await page.evaluate(() => DawEngine.get().input === null));
     await page.click('#navTabs [data-nav="daw"]');
     await page.waitForSelector('#dawCanvas');
     await page.waitForFunction(() => window.__daw().tracks[5].clips.length === 2, null, { timeout: 10000 }).catch(() => {});

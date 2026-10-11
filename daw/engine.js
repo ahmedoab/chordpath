@@ -470,6 +470,9 @@
     this.timer = null;
     this.recording = null;
     this.inputId = '';               // input to record from; '' = the system default
+    this.input = null;               // the open input: { id, stream, source, fellBack }
+    this.monitoring = false;         // whether the input is being passed to the output
+    this.monitorGain = null;
   }
 
   Engine.prototype.ensure = function () {
@@ -724,17 +727,26 @@
       .filter(d => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
       .map((d, i) => ({ id: d.deviceId, name: d.label || 'Input ' + (i + 1) }));
   };
-  // Chooses the input to record from; '' is whichever the system has as its default.
-  Engine.prototype.setInput = function (deviceId) { this.inputId = typeof deviceId === 'string' ? deviceId : ''; };
+  // Chooses the input to record from; '' is whichever the system has as its
+  // default. If the input is being listened to, listening moves to the new one.
+  Engine.prototype.setInput = async function (deviceId) {
+    this.inputId = typeof deviceId === 'string' ? deviceId : '';
+    if (!this.monitoring || this.recording) return { fellBack: false };
+    try {
+      return { fellBack: (await this.openInput()).fellBack };
+    } catch (e) {
+      this.monitoring = false;                             // nothing left to listen to
+      throw e;
+    }
+  };
 
-  // Opens the input, counts in one bar, then plays from the resting playhead
-  // while capturing. Resolves once the input is open, to { fellBack }: true
-  // when the chosen input was not there and the default one is being used.
-  Engine.prototype.startRecording = async function () {
-    this.ensure();
-    if (this.recording) return { fellBack: false };
-    if (this.ctx.state !== 'running') await this.ctx.resume();
-    this.stop();
+  // The input is opened once and shared by recording and monitoring, and let
+  // go of when neither needs it. Resolves to { stream, source, fellBack }:
+  // fellBack is true when the chosen input was not there and the default one
+  // is being used instead.
+  Engine.prototype.openInput = async function () {
+    if (this.input && this.input.id === this.inputId) return this.input;
+    this.dropInput();                                      // another input was chosen: move over to it
     // Voice-call processing would mangle music, so it is all switched off.
     const plain = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
     const open = audio => global.navigator.mediaDevices.getUserMedia({ audio });
@@ -746,24 +758,73 @@
       stream = await open(plain);
       fellBack = true;
     }
+    this.input = { id: this.inputId, stream, source: this.ctx.createMediaStreamSource(stream), fellBack };
+    if (this.monitoring) this.input.source.connect(this.monitorGain);
+    return this.input;
+  };
+  Engine.prototype.dropInput = function () {
+    if (!this.input) return;
+    this.input.source.disconnect();
+    this.input.stream.getTracks().forEach(t => t.stop());
+    this.input = null;
+  };
+  // Lets go of the input unless a take or monitoring still needs it.
+  Engine.prototype.closeInput = function () {
+    if (!this.recording && !this.monitoring) this.dropInput();
+  };
+
+  // Monitoring: the input is passed straight to the output so players can
+  // hear themselves. It is never part of a bounce, and a take records the
+  // input itself, not this copy of it.
+  Engine.prototype.setMonitor = async function (on) {
+    this.ensure();
+    if (!on) {
+      if (this.monitoring && this.input) this.input.source.disconnect(this.monitorGain);
+      this.monitoring = false;
+      this.closeInput();
+      return { fellBack: false };
+    }
+    if (this.monitoring) return { fellBack: this.input.fellBack };
+    if (this.ctx.state !== 'running') await this.ctx.resume();
+    const input = await this.openInput();
+    if (!this.monitorGain) {
+      this.monitorGain = this.ctx.createGain();
+      this.monitorGain.connect(this.mixer.master);
+    }
+    input.source.connect(this.monitorGain);
+    this.monitoring = true;
+    return { fellBack: input.fellBack };
+  };
+  Engine.prototype.isMonitoring = function () { return this.monitoring; };
+
+  // Opens the input, counts in one bar, then plays from the resting playhead
+  // while capturing. Resolves once the input is open, to { fellBack }.
+  Engine.prototype.startRecording = async function () {
+    this.ensure();
+    if (this.recording) return { fellBack: false };
+    if (this.ctx.state !== 'running') await this.ctx.resume();
+    this.stop();
+    const input = await this.openInput();
     if (!this.recorderLoaded) {
       await this.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([RECORDER_SOURCE], { type: 'text/javascript' })));
       this.recorderLoaded = true;
     }
-    const source = this.ctx.createMediaStreamSource(stream);
     const node = new global.AudioWorkletNode(this.ctx, 'chordpath-recorder', { numberOfInputs: 1, numberOfOutputs: 0 });
     const chunks = [];
     node.port.onmessage = e => chunks.push(e.data);
-    source.connect(node);
+    input.source.connect(node);
 
     const spb = this.spb();
     const first = this.ctx.currentTime + 0.12;
     const countIn = [];
     for (let i = 0; i < 4; i++) countIn.push(this.tick(first + i * spb, i === 0));
     const startTime = first + 4 * spb;
-    this.recording = { stream, source, node, chunks, countIn, startTime, fromBeat: this.paused, sampleRate: this.ctx.sampleRate };
+    this.recording = {
+      stream: input.stream, source: input.source, node, chunks, countIn, startTime,
+      fromBeat: this.paused, sampleRate: this.ctx.sampleRate,
+    };
     await this.play(startTime);
-    return { fellBack };
+    return { fellBack: input.fellBack };
   };
 
   // Stops and returns the take — { sampleRate, channels, startBeat, beats,
@@ -775,9 +836,9 @@
     const endTime = this.ctx.currentTime;
     this.stop();
     this.paused = rec.fromBeat;
-    rec.source.disconnect();
+    rec.source.disconnect(rec.node);
     rec.node.port.onmessage = null;
-    rec.stream.getTracks().forEach(t => t.stop());
+    this.closeInput();                                     // unless it is still being listened to
     rec.countIn.forEach(click => click.disconnect());      // any clicks still to come stay silent
 
     const firstFrame = Math.round(rec.startTime * rec.sampleRate);

@@ -469,6 +469,42 @@ const { check, section, tempDataDir, launch, crashed, finish, cleanup } = requir
     check('recording uses the input that was chosen', inputs.usedChosen && inputs.firstFellBack === false);
     check('and falls back to the default one, saying so, if that input has gone', inputs.secondFellBack === true && inputs.stillRecording);
 
+    // Hearing the input through the app. The pretend input beeps about once a second.
+    const monitor = await page.evaluate(async () => {
+      const T = window.__t;
+      const eng = DawEngine.get();
+      eng.sync(DawProject.createProject({ tempo: 120 }));          // nothing of its own to play
+      await eng.seek(0);
+      const loudest = async ms => {
+        let peak = -160;
+        for (let i = 0; i < ms / 20; i++) { await T.wait(20); peak = Math.max(peak, eng.levels().master); }
+        return peak;
+      };
+      const before = await loudest(1500);
+      const opened = await eng.setMonitor(true);
+      const on = eng.isMonitoring();
+      const during = await loudest(2500);
+
+      // Recording while listening: one input serves both, and listening carries on afterwards.
+      await eng.startRecording();
+      await T.wait(2000 + 1500);
+      const take = eng.stopRecording();
+      let takePeak = 0;
+      if (take) for (let i = 0; i < take.channels[0].length; i++) takePeak = Math.max(takePeak, Math.abs(take.channels[0][i]));
+      const stillOn = eng.isMonitoring();
+      const stillHeard = await loudest(2500);
+
+      await eng.setMonitor(false);
+      await T.wait(300);
+      const after = await loudest(2000);
+      return { before, on, fellBack: opened.fellBack, during, takePeak, stillOn, stillHeard, after, off: !eng.isMonitoring(), closed: eng.input === null };
+    });
+    check(`the input is not heard until monitoring is turned on (${monitor.before.toFixed(0)} dB)`, monitor.before < -60);
+    check(`with it on, the input comes through (${monitor.during.toFixed(0)} dB)`, monitor.on && monitor.fellBack === false && monitor.during > -50);
+    check('a take can be recorded while listening', monitor.takePeak > 0.01);
+    check('and listening carries on after the take', monitor.stillOn && monitor.stillHeard > -50);
+    check(`turning it off silences the input and lets go of it (${monitor.after.toFixed(0)} dB)`, monitor.off && monitor.closed && monitor.after < -60);
+
     // ── Audio files ──────────────────────────────────────────────────────────
     section('Audio files and clean-up');
     const files = await page.evaluate(async () => {
