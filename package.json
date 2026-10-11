@@ -1,0 +1,18 @@
+{
+  "name": "chordpath",
+  "productName": "ChordPath",
+  "version": "0.3.0-experimental",
+  "description": "Feeling-driven song studio and DAW with its own built-in, offline AI.",
+  "private": true,
+  "author": "ahmedoab",
+  "main": "desktop/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node tests/run.js && node tests/audio-test.js && node tests/muse-test.js",
+    "test:e2e": "node tests/e2e.js"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "playwright-core": "1.64.0"
+  }
+}

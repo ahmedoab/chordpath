@@ -20,3 +20,8 @@ npm-debug.log*
 
 # Claude per-user settings (keep shared settings.json, ignore personal overrides)
 .claude/settings.local.json
+
+# Dependencies and build output
+node_modules/
+dist/
+out/
