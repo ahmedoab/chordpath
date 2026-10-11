@@ -23,6 +23,9 @@
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 html { color-scheme: light dark; }
+/* Scrollbars and other native controls follow the app's theme, not the OS's. */
+html[data-theme="light"] { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
 body { overflow: hidden; }            /* no page scroll — fixed-viewport app */
 
 :root {
@@ -1203,3 +1206,117 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .mem-feel { font-size: 0.78rem; color: var(--ink-2); font-style: italic; margin-top: 0.25rem; }
 .mem-actions { display: flex; gap: 0.25rem; margin-top: 0.4rem; flex-wrap: wrap; }
 @media (max-width: 860px) { .muse-grid { grid-template-columns: 1fr; } }
+
+/* ── DAW ──
+   Three bands: transport, timeline, and an editor drawer. The timeline and
+   note editor are canvases that read these same colour tokens. */
+#view-daw { overflow: hidden; }
+.daw {
+  height: 100%; display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(150px, var(--daw-panel, 40%));
+  background: var(--bg);
+}
+.daw, .daw * { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+.daw-loading { padding: 2rem; }
+.mono { font-family: var(--font-mono); }
+
+.daw-bar {
+  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+  padding: 0.45rem 0.8rem; background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.daw-bar button { padding: 0.3rem 0.65rem; font-size: 0.78rem; }
+.daw-bar button.primary { min-width: 5.4rem; border: 1px solid var(--accent); border-radius: var(--radius-s); }
+.daw-bar .daw-rec.on, [data-theme="dark"] .daw-bar .daw-rec.on { background: var(--tense); border-color: var(--tense); color: #fff; }
+.daw-bar .daw-toggle.on, [data-theme="dark"] .daw-bar .daw-toggle.on { background: var(--accent-2); border-color: var(--accent); color: var(--ink); }
+.daw-pos { display: flex; align-items: baseline; gap: 0.5rem; min-width: 7.4rem; padding: 0 0.5rem; }
+#dawBars { font-size: 1.05rem; font-weight: 500; min-width: 2.6rem; }
+.daw-field { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; color: var(--ink-2); white-space: nowrap; }
+.daw-field input[type="number"] { width: 4.2rem; padding: 0.25rem 0.35rem; }
+.daw-field select { width: auto; padding: 0.25rem 0.35rem; font-size: 0.76rem; }
+.daw-field input[type="range"] { accent-color: var(--accent); width: 96px; }
+.daw-status { margin-left: 0.4rem; }
+
+.daw-arrange {
+  display: grid; grid-template-columns: auto minmax(0, 1fr);
+  overflow-y: auto; overflow-x: hidden; min-height: 0;
+}
+.daw-heads { background: var(--surface); border-right: 1px solid var(--line); }
+.daw-head {
+  display: flex; flex-direction: column; justify-content: center; gap: 0.28rem;
+  padding: 0 0.5rem 0 0.55rem; cursor: pointer;
+  border-bottom: 1px solid var(--line); border-left: 3px solid var(--tc);
+}
+.daw-head.selected { background: var(--bg); }
+.daw-head-top { display: flex; align-items: center; gap: 0.3rem; }
+.daw-name { flex: 1; min-width: 0; font-size: 0.8rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.daw-head .daw-x, [data-theme="dark"] .daw-head .daw-x {
+  background: transparent; border: 0; color: var(--faint); padding: 0 0.2rem; font-size: 0.95rem; line-height: 1;
+}
+.daw-head .daw-x:hover { color: var(--tense); }
+.daw-head-row { display: flex; align-items: center; gap: 0.25rem; }
+.daw-head-row select { flex: 1; min-width: 0; font-size: 0.7rem; padding: 0.12rem 0.2rem; }
+.daw-kind { flex: 1; font-size: 0.7rem; color: var(--muted); }
+.daw-add { display: flex; gap: 0.25rem; padding: 0.5rem 0.5rem 0.8rem; }
+.daw-add button { flex: 1; padding: 0.2rem 0.3rem; font-size: 0.68rem; white-space: nowrap; }
+.daw-lanes { min-width: 0; }
+.daw-lanes canvas, .daw-roll canvas { display: block; touch-action: none; }
+.daw-hscroll { overflow-x: auto; overflow-y: hidden; height: 12px; border-top: 1px solid var(--line); background: var(--surface); }
+.daw-hscroll > div { height: 1px; }
+/* The divider between the timeline and the editor panel; drag it to resize. */
+.daw-split { height: 7px; cursor: ns-resize; touch-action: none; background: var(--surface); border-top: 1px solid var(--line-2); display: flex; align-items: center; justify-content: center; }
+.daw-split::after { content: ''; width: 34px; height: 2px; border-radius: 1px; background: var(--line-2); }
+.daw-split:hover::after, .daw-split.dragging::after { background: var(--accent); }
+
+/* Small square switches shared by track headers and mixer strips. */
+.mx-btn, [data-theme="dark"] .mx-btn {
+  background: var(--surface); color: var(--muted); border: 1px solid var(--line);
+  padding: 0.1rem 0.36rem; font-size: 0.66rem; font-weight: 600; min-width: 1.5rem; line-height: 1.4;
+}
+.mx-btn:hover, [data-theme="dark"] .mx-btn:hover { background: var(--surface-2); color: var(--ink); }
+.mx-btn.on, [data-theme="dark"] .mx-btn.on { background: var(--warn); border-color: var(--warn); color: #fff; }
+.mx-btn.solo.on, [data-theme="dark"] .mx-btn.solo.on { background: var(--good); border-color: var(--good); }
+.mx-btn.arm.on, [data-theme="dark"] .mx-btn.arm.on { background: var(--tense); border-color: var(--tense); }
+
+.daw-panel {
+  display: grid; grid-template-rows: auto minmax(0, 1fr);
+  background: var(--surface); min-height: 0;
+}
+.daw-panel-bar {
+  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  padding: 0.35rem 0.8rem; border-bottom: 1px solid var(--line);
+}
+.daw-tools { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
+.daw-sep { width: 1px; height: 1.1rem; background: var(--line); margin: 0 0.25rem; }
+.daw-panel-body { min-height: 0; overflow: hidden; }
+.daw-roll { height: 100%; overflow: auto; background: var(--bg); }
+.daw-hint { padding: 1rem 1.1rem; max-width: 62ch; font-size: 0.84rem; line-height: 1.55; }
+.daw-hint p { margin: 0 0 0.6rem; }
+.daw-tab { height: 100%; max-height: none; margin: 0; border: 0; border-radius: 0; font-size: 0.74rem; background: var(--bg); }
+
+/* Mixer: each strip is a name over two columns, the fader with its meter as
+   tall as the panel allows, and the rest of the controls beside it. */
+.mixer { display: flex; gap: 0.45rem; height: 100%; overflow-x: auto; overflow-y: hidden; padding: 0.55rem 0.8rem; align-items: stretch; }
+.mx-strip {
+  flex: 0 0 186px; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 0.3rem; min-height: 0;
+  padding: 0.4rem 0.55rem 0.5rem;
+  background: var(--bg); border: 1px solid var(--line); border-top: 3px solid var(--tc, var(--ink-2));
+  border-radius: var(--radius-s);
+}
+.mx-strip.master { --tc: var(--accent); flex-basis: 96px; margin-left: auto; }
+.mx-name { font-size: 0.74rem; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.6rem; min-height: 0; }
+.mx-main { display: flex; gap: 0.3rem; min-height: 0; }
+.mx-meter { width: 8px; height: 100%; background: var(--surface-2); border-radius: 3px; display: flex; align-items: flex-end; overflow: hidden; }
+.mx-meter span { display: block; width: 100%; height: 0; background: var(--good); }
+.mx-meter span.hot { background: var(--tense); }
+.mx-fader { writing-mode: vertical-lr; direction: rtl; width: 18px; height: 100%; min-height: 0; accent-color: var(--accent); }
+.mx-side { display: flex; flex-direction: column; justify-content: space-between; gap: 0.12rem; min-height: 0; overflow-y: auto; }
+.mx-side > * { flex: 0 0 auto; }
+.mx-strip.master .mx-side { justify-content: flex-end; overflow: visible; }
+.mx-row { display: flex; align-items: center; gap: 0.25rem; }
+.mx-db { flex: 1; font-size: 0.68rem; color: var(--ink-2); white-space: nowrap; }
+.mx-ctl { display: grid; grid-template-columns: 2.9rem minmax(0, 1fr); align-items: center; font-size: 0.64rem; line-height: 1.2; color: var(--muted); }
+.mx-range { width: 100%; min-width: 0; height: 12px; margin: 0; accent-color: var(--accent); }
+.mx-btn.wide { width: 100%; padding: 0.14rem; }
+.daw-export p { margin: 0 0 0.8rem; }
+.daw-export .daw-field { margin-bottom: 0.4rem; }

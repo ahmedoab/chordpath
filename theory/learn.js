@@ -25,6 +25,24 @@
     { key:'Esc',         desc:'Close any open dialog / stop audio' },
   ];
 
+  const DAW_SHORTCUTS = [
+    { key:'Space',            desc:'Play / stop'                              },
+    { key:'Home',             desc:'Back to the start'                        },
+    { key:'R',                desc:'Record onto an audio track'               },
+    { key:'L',                desc:'Toggle loop'                              },
+    { key:'S',                desc:'Split the selected clip at the playhead'  },
+    { key:'Ctrl+D',           desc:'Duplicate the selected clip'              },
+    { key:'Delete',           desc:'Delete the selected note, or else the selected clip' },
+    { key:'Ctrl+Z / Ctrl+Y',  desc:'Undo / redo'                              },
+    { key:'+ / -',            desc:'Zoom the timeline in / out'               },
+    { key:'Ctrl + wheel',     desc:'Zoom the timeline around the pointer'     },
+    { key:'Double-click',     desc:'Empty track: new clip. Clip: open its notes. Fader: reset.' },
+    { key:'Right-click',      desc:'Delete a note in the note editor'         },
+    { key:'T',                desc:'Toggle light / dark theme'                },
+    { key:'?',                desc:'Show this shortcut list'                  },
+    { key:'Esc',              desc:'Close any open dialog'                    },
+  ];
+
   const PRIMER = [
     {
       heading: 'Start from the section',
@@ -76,9 +94,11 @@
   ];
 
   // ── HTML render helpers ───────────────────────────────────────────────────
-  function renderShortcuts() {
-    const items = SHORTCUTS.map(s => `<dt><kbd>${s.key}</kbd></dt><dd>${s.desc}</dd>`).join('');
-    return `<h2>Keyboard shortcuts</h2><dl>${items}</dl>
+  // which: 'daw' for the DAW's own list; otherwise the Section editor's.
+  function renderShortcuts(which) {
+    const daw = which === 'daw';
+    const items = (daw ? DAW_SHORTCUTS : SHORTCUTS).map(s => `<dt><kbd>${s.key}</kbd></dt><dd>${s.desc}</dd>`).join('');
+    return `<h2>${daw ? 'DAW shortcuts' : 'Keyboard shortcuts'}</h2><dl>${items}</dl>
             <p class="meta" style="margin-top:.8rem">Shortcuts are disabled while typing in a text field.</p>`;
   }
 
@@ -162,5 +182,5 @@
             <div style="display: flex; flex-wrap: wrap; gap: .25rem;">${items}</div>`;
   }
 
-  global.Learn = { SHORTCUTS, PRIMER, LAYER_GUIDE, PRESETS, renderShortcuts, renderPrimer, renderLayerGuide, renderPresets };
+  global.Learn = { SHORTCUTS, DAW_SHORTCUTS, PRIMER, LAYER_GUIDE, PRESETS, renderShortcuts, renderPrimer, renderLayerGuide, renderPresets };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -82,8 +82,14 @@
         if (act === 'del') {
           e.stopPropagation();
           const entry = St().listProjects().find(p => p.id === id);
-          ui.confirmBox(`Delete "${entry ? entry.title : 'this song'}" and its snapshots? This cannot be undone.`)
-            .then(ok => { if (ok) { St().deleteProject(id); render(); ui.toast('Song deleted'); } });
+          ui.confirmBox(`Delete "${entry ? entry.title : 'this song'}", its snapshots, and its DAW project with any recordings? This cannot be undone.`)
+            .then(ok => {
+              if (!ok) return;
+              St().deleteProject(id);
+              global.Views.Daw.forget(id);
+              render();
+              ui.toast('Song deleted');
+            });
           return;
         }
         global.Nav.go('overview', id);

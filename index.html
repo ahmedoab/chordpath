@@ -21,6 +21,7 @@
     <button type="button" data-nav="overview" disabled title="Open a song first">Overview</button>
     <button type="button" data-nav="section" disabled title="Open a song first">Section</button>
     <button type="button" data-nav="studio" disabled title="Open a song first">Studio</button>
+    <button type="button" data-nav="daw" disabled title="Open a song first">DAW</button>
     <button type="button" data-nav="handoff" disabled title="Open a song first">Handoff</button>
   </div>
   <div class="nav-right">
@@ -289,6 +290,11 @@
   <div class="view-inner" id="studioRoot"></div>
 </section>
 
+<!-- ─── View: DAW ──────────────────────────────────────────────────── -->
+<section class="view" id="view-daw" hidden>
+  <div class="daw" id="dawRoot"></div>
+</section>
+
 <!-- ─── View: Handoff pack ─────────────────────────────────────────── -->
 <section class="view" id="view-handoff" hidden>
   <div class="view-inner" id="handoffRoot"></div>
@@ -427,6 +433,10 @@
 <script src="ui/views/section.js"></script>
 <script src="ui/views/studio.js"></script>
 <script src="ui/views/handoff.js"></script>
+<script src="ui/daw/arrange.js"></script>
+<script src="ui/daw/roll.js"></script>
+<script src="ui/daw/mixer.js"></script>
+<script src="ui/views/daw.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

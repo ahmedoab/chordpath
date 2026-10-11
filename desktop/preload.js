@@ -13,4 +13,9 @@ contextBridge.exposeInMainWorld('Desktop', {
   onMenu(handler) {
     ipcRenderer.on('menu', (event, command) => handler(String(command)));
   },
+  // Writes several exported files into one folder the user picks.
+  // files: [{ name, bytes: Uint8Array }] resolves to { saved, folder }.
+  saveFiles(files) {
+    return ipcRenderer.invoke('save-files', files);
+  },
 });

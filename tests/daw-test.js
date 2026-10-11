@@ -345,6 +345,116 @@ section('MIDI export');
   eq('a track with no notes is left out', (DawProject.toMidi(edited)[10] << 8) | DawProject.toMidi(edited)[11], ntrks - 1);
 }
 
+// ── Tab of a clip's notes, chords included ─────────────────────────────────
+section('Tab from notes');
+{
+  const { Tabs } = globalThis;
+  const spots = placed => placed.notes.map(n => [n.string, n.fret]);
+
+  eq('one note goes where it is easiest: open high e', spots(Tabs.placeNotes([64])), [[5, 0]]);
+  eq('an open C chord comes out as the shape every guitarist knows',
+    spots(Tabs.placeNotes([48, 52, 55, 60, 64])), [[1, 3], [2, 2], [3, 0], [4, 1], [5, 0]]);
+  eq('so does an open E', spots(Tabs.placeNotes([40, 47, 52, 56, 59, 64])), [[0, 0], [1, 2], [2, 2], [3, 1], [4, 0], [5, 0]]);
+  eq('the order the notes arrive in does not matter', spots(Tabs.placeNotes([64, 48, 60, 55, 52])), spots(Tabs.placeNotes([48, 52, 55, 60, 64])));
+
+  // The same C spread over three octaves, the way the chord track voices it.
+  const wide = Tabs.placeNotes([48, 60, 64, 67, 72, 76]);
+  eq('a chord spread wider than a hand is gathered into the octave where it can be held',
+    [spots(wide), wide.folded, wide.dropped], [[[1, 3], [2, 2], [3, 0], [4, 1], [5, 0]], true, 0]);
+  const upTop = Tabs.placeNotes([67, 72, 76]);
+  eq('its top three notes alone come out as the top three strings of that shape',
+    [spots(upTop), upTop.folded], [[[3, 0], [4, 1], [5, 0]], true]);
+  eq('where the hand was before makes no difference to a chord',
+    spots(Tabs.placeNotes([48, 60, 64, 67, 72, 76], { near: 11 })), spots(wide));
+  eq('a D keeps its own bass note rather than borrow a lower one',
+    spots(Tabs.placeNotes([50, 57, 62, 66])), [[2, 0], [3, 2], [4, 3], [5, 2]]);
+  eq('a single high note is left where it is written', spots(Tabs.placeNotes([76], { near: 12 })), [[5, 12]]);
+
+  const cluster = Tabs.placeNotes([60, 61, 62, 63]);
+  const held = cluster.notes.filter(n => n.fret > 0).map(n => n.fret);
+  check('a chord no hand could hold loses notes rather than become unplayable',
+    cluster.dropped > 0 && cluster.notes.length >= 2 && Math.max(...held) - Math.min(...held) <= 3);
+  check('what is kept sits on separate strings, low notes on low strings',
+    cluster.notes.every((n, i) => i === 0 || (n.string > cluster.notes[i - 1].string && n.midi > cluster.notes[i - 1].midi)));
+  check('and the bass note is one of the notes kept', cluster.notes[0].midi % 12 === 0);
+  const barre = Tabs.placeNotes([41, 48, 53, 57, 60, 65]);
+  eq('six fretted notes are held with a barre', spots(barre), [[0, 1], [1, 3], [2, 3], [3, 2], [4, 1], [5, 1]]);
+
+  const doubled = Tabs.placeNotes([60, 60, 64]);
+  check('a pitch given twice is played once', doubled.notes.length === 2 && doubled.dropped === 0);
+  const low = Tabs.placeNotes([28]);
+  eq('a note below the guitar is moved up to its range', [spots(low), low.shifted], [[[0, 0]], 1]);
+  const high = Tabs.placeNotes([100]);
+  check('a note above it is moved down', high.shifted === 1 && high.notes.length === 1 && high.notes[0].fret <= 15);
+  eq('the bass register keeps to the low strings', spots(Tabs.placeNotes([55], { register: 'bass' })), [[2, 5]]);
+  eq('left alone, G4 is played low on the neck', spots(Tabs.placeNotes([67])), [[5, 3]]);
+  eq('but stays near the hand when it is already up the neck', spots(Tabs.placeNotes([67], { near: 8 })), [[4, 8]]);
+  eq('nothing in, nothing out', Tabs.placeNotes([]).notes, []);
+
+  const lines = text => {
+    const out = {};
+    text.split('\n').forEach(l => { const m = /^([EADGBe]) \|(.*)$/.exec(l); if (m && out[m[1]] == null) out[m[1]] = m[2]; });
+    return out;
+  };
+  // An open C strummed slowly: each string a little after the one before.
+  const strum = [48, 52, 55, 60, 64].map((midi, i) => ({ midi, beatStart: i * 0.08 }));
+  const chordTab = Tabs.renderNotesTab(strum, { totalBeats: 4, tempo: 120 });
+  const cl = lines(chordTab);
+  eq('a strummed chord is written as one stack, where the strum starts',
+    [cl.e[0], cl.B[0], cl.G[0], cl.D[0], cl.A[0], cl.E[0]], ['0', '1', '0', '2', '3', '-']);
+  check('and nowhere else', ['e', 'B', 'G', 'D', 'A', 'E'].every(s => !/\d/.test(cl[s].slice(1))));
+  check('a bar is sixteen steps wide and closed by a bar line', /^[\d-]{32}\|$/.test(cl.e));
+  check('the beat count runs under the strings', /1 e \+ a 2 e \+ a 3 e \+ a 4 e \+ a/.test(chordTab));
+
+  const run = Tabs.renderNotesTab([64, 65, 67, 69].map((midi, i) => ({ midi, beatStart: i * 0.25 })), { totalBeats: 4, tempo: 120 });
+  check('sixteenth notes in a row stay apart', lines(run).e.startsWith('0-1-3-5-'));
+  const highRun = Tabs.renderNotesTab([74, 76, 77].map((midi, i) => ({ midi, beatStart: i * 0.25 })), { totalBeats: 4, tempo: 120, near: 10 });
+  const hl = Object.values(lines(highRun)).join('\n');
+  check('two-digit frets get room so that numbers never run together', /10-12-13/.test(hl) && !/\d{3}/.test(hl));
+  check('and the count row widens with them', /1  e  \+  a  2/.test(highRun));
+
+  const two = Tabs.renderNotesTab([{ midi: 60, beatStart: 4 }, { midi: 64, beatStart: 4 }], { totalBeats: 8, tempo: 120 });
+  const tl = lines(two);
+  check('notes that start together are stacked, in the bar they belong to',
+    tl.B.split('|')[1][0] === '1' && tl.e.split('|')[1][0] === '0' && !/\d/.test(tl.e.split('|')[0]));
+  check('a chord written an octave down says so',
+    /easiest to hold/.test(Tabs.renderNotesTab([48, 60, 64, 67, 72, 76].map(midi => ({ midi, beatStart: 0 })), { totalBeats: 4, tempo: 120 })));
+  check('a chord that loses notes says how many',
+    /\d notes? left out/.test(Tabs.renderNotesTab([60, 61, 62, 63].map(midi => ({ midi, beatStart: 0 })), { totalBeats: 4, tempo: 120 })));
+  // The same chord struck four times, fully and in part, down and up.
+  const strums = [];
+  [[0, [48, 60, 64, 67, 72, 76]], [1.5, [67, 76, 72]], [2, [48, 60, 64, 67, 72, 76]], [3.5, [76, 72, 67, 64]]]
+    .forEach(([at, notes]) => notes.forEach((midi, i) => strums.push({ midi, beatStart: at + i * 0.05 })));
+  const sl = lines(Tabs.renderNotesTab(strums, { totalBeats: 4, tempo: 120 }));
+  const column = step => ['E', 'A', 'D', 'G', 'B', 'e'].map(s => sl[s][step * 2]).join('');
+  eq('one chord strummed several ways keeps one shape throughout',
+    [column(0), column(6), column(8), column(14)], ['-32010', '---010', '-32010', '--2010']);
+  check('a moved note is mentioned too', /octave/.test(Tabs.renderNotesTab([{ midi: 28, beatStart: 0 }], { totalBeats: 4, tempo: 120 })));
+  check('a triplet is rounded and the tab says so', /nearest sixteenth/.test(
+    Tabs.renderNotesTab([0, 1 / 3, 2 / 3].map(t => ({ midi: 64, beatStart: t })), { totalBeats: 4, tempo: 120 })));
+  eq('no notes, a plain message', Tabs.renderNotesTab([], { totalBeats: 4 }), '(no notes)');
+
+  // Every clip of a real song: the tab must be readable whatever the part plays.
+  const proj = DawProject.fromSong(Feelings.generateSongSpec({ feelingId: 'yearning', genreId: 'jangle_indie', energy: 'mid', seed: 11 }));
+  let clips = 0, clean = 0, inRange = 0, bassLow = 0, bassClips = 0;
+  proj.tracks.filter(t => t.kind === 'instrument').forEach(track => {
+    track.clips.forEach(clip => {
+      const bass = track.instrument === 'bass';
+      const text = Tabs.renderNotesTab(clip.notes.map(n => ({ midi: n.n, beatStart: n.t })),
+        { totalBeats: clip.length, tempo: proj.tempo, register: bass ? 'bass' : 'full' });
+      const rows = text.split('\n').filter(l => /^[EADGBe] \|/.test(l));
+      clips++;
+      if (rows.length && rows.every(l => !/\d{3}/.test(l))) clean++;
+      if (rows.every(l => (l.match(/\d+/g) || []).every(f => Number(f) <= 15))) inRange++;
+      if (bass) { bassClips++; if (rows.filter(l => /^[GBe] /.test(l)).every(l => !/\d/.test(l))) bassLow++; }
+    });
+  });
+  check(`every clip of a real song gives a tab (${clips} clips)`, clips > 20);
+  check('with no fret numbers run together anywhere', clean === clips);
+  check('and none beyond the fifteenth fret', inRange === clips);
+  check('bass clips stay on the three low strings', bassClips > 0 && bassLow === bassClips);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) {
   console.error('\nFailed checks:');

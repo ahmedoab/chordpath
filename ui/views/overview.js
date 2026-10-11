@@ -87,6 +87,7 @@
           <span class="spacer"></span>
           <button type="button" id="ovExportJson" class="ghost">Export JSON</button>
           <button type="button" id="ovExportMidi" class="ghost" ${global.Midi && global.Midi.downloadSong ? '' : 'disabled title="Multi-track MIDI arrives with a later update"'}>Export MIDI (all tracks)</button>
+          <button type="button" id="ovDaw" class="ghost">Open in DAW</button>
           <button type="button" id="ovHandoff" class="ghost">Handoff pack</button>
         </div>
 
@@ -214,6 +215,7 @@
         if (global.Midi.downloadSong(s)) ui.toast('Multi-track MIDI downloaded — drag it into your DAW');
       });
     }
+    doc.getElementById('ovDaw').addEventListener('click', () => global.Nav.go('daw', s.id));
     doc.getElementById('ovHandoff').addEventListener('click', () => global.Nav.go('handoff', s.id));
 
     const playBtn = doc.getElementById('ovPlaySong');

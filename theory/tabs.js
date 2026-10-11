@@ -230,6 +230,195 @@
     return out;
   }
 
+  // ── Tab of any notes, chords included ────────────────────────────────────
+  const HAND_SPAN = 3;            // frets between the lowest and the highest fretted finger
+  const COUNT = ['1', 'e', '+', 'a', '2', 'e', '+', 'a', '3', 'e', '+', 'a', '4', 'e', '+', 'a'];
+
+  // Finds where one hand can play pitches that sound together: each on its
+  // own string, lower notes on lower strings, all within a hand's span. When
+  // that cannot be done the bass note stays, with as many of the others as fit.
+  // opts: { register, maxFret, near } — near is the fret the hand is at now.
+  // Returns { notes: [{ string, fret, midi }], dropped, shifted, folded,
+  // position }: dropped counts what could not be played, shifted the notes
+  // outside the guitar's range, folded says a chord was written an octave down.
+  function placeNotes(pitches, opts) {
+    opts = opts || {};
+    const maxFret = opts.maxFret || 15;
+    const strings = REGISTERS[opts.register || 'full'] || REGISTERS.full;
+    const lowest = TUNING_MIDI[strings[0]];
+    const highest = TUNING_MIDI[strings[strings.length - 1]] + maxFret;
+    const near = typeof opts.near === 'number' ? opts.near : null;
+
+    let shifted = 0;
+    const distinct = new Set();
+    (pitches || []).forEach(p => {
+      if (typeof p !== 'number' || !Number.isFinite(p)) return;
+      let midi = Math.round(p);
+      const asGiven = midi;
+      while (midi < lowest) midi += 12;
+      while (midi > highest) midi -= 12;
+      if (midi !== asGiven) shifted++;
+      distinct.add(midi);
+    });
+    const wanted = Array.from(distinct).sort((a, b) => a - b);
+    if (!wanted.length) return { notes: [], dropped: 0, shifted, folded: false, position: near };
+    const classes = list => new Set(list.map(p => p % 12)).size;
+
+    // A note on its own is part of a line: it goes where it is written, and
+    // the hand stays near where it was.
+    if (wanted.length === 1) {
+      const line = bestShape(wanted, strings, maxFret, near);
+      return {
+        notes: line ? line.picks : [], dropped: line ? 0 : 1,
+        shifted, folded: false, position: line ? line.position : near,
+      };
+    }
+    // Notes that sound together are a chord. What matters is which notes it
+    // holds and which is in the bass, so it is tried as written and an octave
+    // or two lower, and written where it is easiest to hold. The same chord
+    // then always gets the same shape, whatever came before it.
+    let chord = null, folded = false;
+    for (let octaves = 0; octaves <= 2; octaves++) {
+      const moved = Array.from(new Set(wanted.map(p => {
+        let midi = p - 12 * octaves;
+        while (midi < lowest) midi += 12;
+        return midi;
+      }))).sort((a, b) => a - b);
+      if (moved[0] % 12 !== wanted[0] % 12) continue;          // the bass note stays the bass
+      const shape = bestShape(moved.length > strings.length
+        ? [moved[0]].concat(moved.slice(moved.length - (strings.length - 1))) : moved, strings, maxFret, null);
+      if (shape && (!chord || shape.score > chord.score)) { chord = shape; folded = octaves > 0; }
+    }
+    if (!chord) return { notes: [], dropped: classes(wanted), shifted, folded: false, position: near };
+    return {
+      notes: chord.picks, dropped: classes(wanted) - classes(chord.picks.map(p => p.midi)),
+      shifted, folded, position: chord.position,
+    };
+  }
+
+  // The best way for one hand to hold as many of the given pitches as it can,
+  // always including the lowest. Pitches are sorted, distinct and in range.
+  // Returns { picks: [{ string, fret, midi }], score, position } or null.
+  function bestShape(wanted, strings, maxFret, near) {
+    const top = wanted[wanted.length - 1];
+    const chordal = wanted.length > 1;
+    let best = null;
+    const weigh = picks => {
+      const fretted = picks.filter(p => p.fret > 0);
+      const frets = fretted.map(p => p.fret);
+      const low = frets.length ? Math.min.apply(null, frets) : 0;
+      if (frets.length && Math.max.apply(null, frets) - low > HAND_SPAN) return;
+      if (fretted.length > 4) {
+        // More notes than fingers: the first finger lies across the strings at
+        // the lowest fret, which rules out an open string under it.
+        const barreFrom = Math.min.apply(null, fretted.filter(p => p.fret === low).map(p => p.string));
+        if (picks.some(p => p.fret === 0 && p.string > barreFrom)) return;
+        if (fretted.filter(p => p.fret > low).length > 3) return;
+      }
+      const mean = frets.length ? frets.reduce((a, b) => a + b, 0) / frets.length : 0;
+      let score = new Set(picks.map(p => p.midi % 12)).size * 10    // every note of the chord, in some octave
+        + picks.length * 2                                          // then as many strings as will ring
+        + (picks[picks.length - 1].midi === top ? 1 : 0)            // the top note is the tune
+        + (picks.length - fretted.length) * 0.5                     // open strings are free
+        - (frets.length ? Math.max.apply(null, frets) - low : 0)    // small shapes
+        - (chordal ? 0.6 : 0.15) * mean;                            // low on the neck, chords above all
+      if (near !== null && frets.length) score -= 0.4 * Math.abs(mean - near);
+      if (!best || score > best.score) best = { score, picks: picks.slice(), position: frets.length ? mean : near };
+    };
+    // Gives the chosen notes strings from low to high, trying every way.
+    const assign = (chosen, i, fromString, picks) => {
+      if (i === chosen.length) { weigh(picks); return; }
+      for (let s = fromString; s <= strings.length - (chosen.length - i); s++) {
+        const fret = chosen[i] - TUNING_MIDI[strings[s]];
+        if (fret < 0 || fret > maxFret) continue;
+        picks.push({ string: strings[s], fret, midi: chosen[i] });
+        assign(chosen, i + 1, s + 1, picks);
+        picks.pop();
+      }
+    };
+    // Every choice of notes that includes the lowest one.
+    for (let mask = 1; mask < (1 << wanted.length); mask += 2) {
+      const chosen = wanted.filter((p, i) => mask & (1 << i));
+      if (chosen.length <= strings.length) assign(chosen, 0, 0, []);
+    }
+    return best;
+  }
+
+  // Six-line tab of any notes: single lines, chords, or both. Notes struck
+  // one after another within a strum's breath are written as one chord, and
+  // every step is wide enough that fret numbers never run together.
+  // events: [{ midi, beatStart }]. opts: { totalBeats, tempo, register,
+  // maxFret, near, lineWidth }.
+  function renderNotesTab(events, opts) {
+    opts = opts || {};
+    const sorted = (events || [])
+      .filter(e => e && Number.isFinite(e.midi) && Number.isFinite(e.beatStart) && e.beatStart >= 0)
+      .sort((a, b) => a.beatStart - b.beatStart);
+    if (!sorted.length) return '(no notes)';
+
+    const beatsPerBar = 4, subdiv = 4, cellsPerBar = beatsPerBar * subdiv;
+    const totalBeats = opts.totalBeats > 0 ? opts.totalBeats : sorted[sorted.length - 1].beatStart + 1;
+    const bars = Math.max(1, Math.ceil((totalBeats - 1e-6) / beatsPerBar));
+    const steps = bars * cellsPerBar;
+
+    // A strum spreads its notes over a few hundredths of a second.
+    const breath = Math.min(0.05 * (opts.tempo || 100) / 60, 0.12);
+    const groups = [];
+    sorted.forEach(e => {
+      const g = groups[groups.length - 1];
+      if (g && e.beatStart - g.last <= breath) { g.pitches.push(e.midi); g.last = e.beatStart; }
+      else groups.push({ start: e.beatStart, last: e.beatStart, pitches: [e.midi] });
+    });
+    const byStep = new Map();
+    let rounded = 0;
+    groups.forEach(g => {
+      const exact = g.start * subdiv;
+      const step = Math.min(steps - 1, Math.round(exact));
+      if (Math.abs(exact - step) > 0.16) rounded++;
+      byStep.set(step, (byStep.get(step) || []).concat(g.pitches));
+    });
+
+    let near = typeof opts.near === 'number' ? opts.near : null;
+    let dropped = 0, shifted = 0, folded = false, digits = 1;
+    const placed = Array.from(byStep.keys()).sort((a, b) => a - b).map(step => {
+      const p = placeNotes(byStep.get(step), { register: opts.register, maxFret: opts.maxFret, near });
+      near = p.position;
+      dropped += p.dropped;
+      shifted += p.shifted;
+      folded = folded || p.folded;
+      if (p.notes.some(n => n.fret > 9)) digits = 2;
+      return { step, notes: p.notes };
+    });
+
+    const w = digits + 1;                                     // room for the number and a dash after it
+    const rows = TUNING_MIDI.map(() => Array(steps).fill('-'.repeat(w)));
+    placed.forEach(m => m.notes.forEach(n => { rows[n.string][m.step] = String(n.fret).padEnd(w, '-'); }));
+
+    const barWidth = cellsPerBar * w + 1;
+    const barsPerLine = Math.max(1, Math.floor(((opts.lineWidth || 80) - 3) / barWidth));
+    const systems = [];
+    for (let bar = 0; bar < bars; bar += barsPerLine) {
+      const end = Math.min(bars, bar + barsPerLine);
+      const lines = [];
+      for (let s = 5; s >= 0; s--) {
+        let line = STRING_LABELS[s] + ' |';
+        for (let b = bar; b < end; b++) line += rows[s].slice(b * cellsPerBar, (b + 1) * cellsPerBar).join('') + '|';
+        lines.push(line);
+      }
+      let count = '   ';
+      for (let b = bar; b < end; b++) count += COUNT.map(c => c.padEnd(w, ' ')).join('') + ' ';
+      lines.push(count.replace(/\s+$/, ''));
+      systems.push(lines.join('\n'));
+    }
+
+    const remarks = [];
+    if (folded) remarks.push('Chords are written in the octave where they are easiest to hold.');
+    if (dropped) remarks.push(`${dropped} note${dropped > 1 ? 's' : ''} left out, beyond one hand's reach.`);
+    if (shifted) remarks.push(`${shifted} note${shifted > 1 ? 's' : ''} moved an octave to fit the guitar's range.`);
+    if (rounded) remarks.push('Timing is shown to the nearest sixteenth note.');
+    return systems.join('\n\n') + (remarks.length ? '\n\n' + remarks.join('\n') : '');
+  }
+
   // ── Strummed chord tab ───────────────────────────────────────────────────
   function renderChordTab(chords, opts) {
     opts = opts || {};
@@ -362,8 +551,8 @@
   global.Tabs = {
     TUNING_MIDI, STRING_LABELS, OPEN_PCS, REGISTERS,
     findChordShape,
-    mapEventsToFrets,
-    renderMelodyTab, renderChordTab, renderBassTab, renderDrumGrid,
+    mapEventsToFrets, placeNotes,
+    renderMelodyTab, renderNotesTab, renderChordTab, renderBassTab, renderDrumGrid,
     bassEvents,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

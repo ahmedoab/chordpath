@@ -6,6 +6,7 @@
  *   #/song/<id>                      song overview
  *   #/song/<id>/section/<sectionId>  section editor
  *   #/song/<id>/studio               studio guide
+ *   #/song/<id>/daw                  the DAW
  *   #/song/<id>/handoff              handoff pack
  * Old-format share hashes (#k=...&p=...) are detected at boot by app.js and
  * imported as projects before routing begins.
@@ -14,7 +15,7 @@
   'use strict';
 
   const doc = global.document;
-  const VIEWS = ['songs', 'wizard', 'muse', 'overview', 'section', 'studio', 'handoff'];
+  const VIEWS = ['songs', 'wizard', 'muse', 'overview', 'section', 'studio', 'daw', 'handoff'];
   // Tabs that work without a song open.
   const FREE_TABS = ['songs', 'muse'];
   const listeners = [];
@@ -28,6 +29,7 @@
       const songId = parts[1];
       if (parts[2] === 'section' && parts[3]) return { view: 'section', songId, sectionId: parts[3] };
       if (parts[2] === 'studio') return { view: 'studio', songId };
+      if (parts[2] === 'daw') return { view: 'daw', songId };
       if (parts[2] === 'handoff') return { view: 'handoff', songId };
       return { view: 'overview', songId };
     }
@@ -41,6 +43,7 @@
     else if (view === 'overview' && songId) hash = '#/song/' + songId;
     else if (view === 'section' && songId && sectionId) hash = '#/song/' + songId + '/section/' + sectionId;
     else if (view === 'studio' && songId) hash = '#/song/' + songId + '/studio';
+    else if (view === 'daw' && songId) hash = '#/song/' + songId + '/daw';
     else if (view === 'handoff' && songId) hash = '#/song/' + songId + '/handoff';
     if (global.location.hash === hash) apply();  // re-render same route
     else global.location.hash = hash;

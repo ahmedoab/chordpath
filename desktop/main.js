@@ -9,7 +9,7 @@
  */
 'use strict';
 
-const { app, BrowserWindow, Menu, protocol, session, shell, dialog } = require('electron');
+const { app, BrowserWindow, Menu, protocol, session, shell, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -96,6 +96,49 @@ function blockNetwork() {
     permission === 'media' && String(origin || '').startsWith(ORIGIN));
 }
 
+// ── Saving exported files ───────────────────────────────────────────────────
+// The page can only ever write audio, MIDI or JSON, under a plain file name,
+// into a folder the user has just chosen.
+const EXPORT_TYPES = new Set(['.wav', '.mid', '.json']);
+
+function safeExportName(name) {
+  const base = path.basename(String(name)).replace(/[<>:"/\\|?*\x00-\x1f]/g, '').trim().slice(0, 120);
+  const ext = path.extname(base).toLowerCase();
+  const stem = base.slice(0, base.length - ext.length);
+  if (!EXPORT_TYPES.has(ext) || !stem || /^(con|prn|aux|nul|com\d|lpt\d)$/i.test(stem)) return null;
+  return base;
+}
+
+function handleExports() {
+  ipcMain.handle('save-files', async (event, files) => {
+    const sender = event.senderFrame ? String(event.senderFrame.url) : '';
+    if (!sender.startsWith(ORIGIN + '/') || !Array.isArray(files) || !files.length || files.length > 64) return { saved: 0 };
+    let folder = E2E ? process.env.CHORDPATH_DOWNLOADS : null;
+    if (!folder) {
+      const picked = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
+        title: 'Choose a folder for the exported files',
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      if (picked.canceled || !picked.filePaths[0]) return { saved: 0 };
+      folder = picked.filePaths[0];
+    }
+    let saved = 0;
+    for (const file of files) {
+      const name = file && safeExportName(file.name);
+      if (!name || !(file.bytes instanceof Uint8Array)) continue;
+      await fs.promises.writeFile(path.join(folder, name), file.bytes);
+      saved++;
+    }
+    return { saved, folder };
+  });
+  // Tests save downloads straight into their own folder instead of asking.
+  if (E2E && process.env.CHORDPATH_DOWNLOADS) {
+    session.defaultSession.on('will-download', (event, item) => {
+      item.setSavePath(path.join(process.env.CHORDPATH_DOWNLOADS, path.basename(item.getFilename())));
+    });
+  }
+}
+
 // A link the user clicked goes to their own browser, never into the app.
 function openInBrowser(target) {
   let url;
@@ -171,6 +214,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     serveAppFiles();
     blockNetwork();
+    handleExports();
     buildMenu();
     createWindow();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

@@ -48,18 +48,27 @@
   }
 
   function deleteProject(id) {
-    return run('projects', 'readwrite', store => store.delete(id))
-      .then(() => open())
-      .then(db => new Promise((resolve, reject) => {
-        const tx = db.transaction('audio', 'readwrite');
-        const cursor = tx.objectStore('audio').index('projectId').openCursor(global.IDBKeyRange.only(id));
-        cursor.onsuccess = () => {
-          const c = cursor.result;
-          if (c) { c.delete(); c.continue(); }
-        };
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      }));
+    return run('projects', 'readwrite', store => store.delete(id)).then(() => pruneAudio(id, []));
+  }
+
+  // Deletes a project's recordings except those in keepIds, and resolves to
+  // how many went. Walks keys only, so no audio is loaded to do it.
+  function pruneAudio(projectId, keepIds) {
+    const keep = new Set(keepIds);
+    return open().then(db => new Promise((resolve, reject) => {
+      const tx = db.transaction('audio', 'readwrite');
+      const store = tx.objectStore('audio');
+      const cursor = store.index('projectId').openKeyCursor(global.IDBKeyRange.only(projectId));
+      let removed = 0;
+      cursor.onsuccess = () => {
+        const c = cursor.result;
+        if (!c) return;
+        if (!keep.has(c.primaryKey)) { store.delete(c.primaryKey); removed++; }
+        c.continue();
+      };
+      tx.oncomplete = () => resolve(removed);
+      tx.onerror = tx.onabort = () => reject(tx.error);
+    }));
   }
 
   // channels: Float32Array per channel at `sampleRate`.
@@ -75,5 +84,5 @@
     });
   }
 
-  global.DawStore = { saveProject, loadProject, deleteProject, putAudio, getAudio };
+  global.DawStore = { saveProject, loadProject, deleteProject, putAudio, getAudio, pruneAudio };
 })(typeof window !== 'undefined' ? window : globalThis);

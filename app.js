@@ -88,6 +88,7 @@
     if (window.Audio && window.Audio.stop && r.view !== 'section') {
       try { window.Audio.stop(); } catch (e) {}
     }
+    if (r.view !== 'daw' && window.Views.Daw) window.Views.Daw.leave();
     if (r.view === 'songs') {
       flushSave();
       Nav.setSongOpen(App.state.songId, App.state.song ? App.state.song.title : '');
@@ -120,6 +121,9 @@
       window.Views.Overview.enter();
     } else if (r.view === 'studio') {
       window.Views.Studio.enter();
+    } else if (r.view === 'daw') {
+      flushSave();
+      window.Views.Daw.enter();
     } else if (r.view === 'handoff') {
       window.Views.Handoff.enter();
     }
@@ -148,7 +152,7 @@
     if (document.getElementById('scrim').classList.contains('open')) return;
     if (e.key === '?' || (e.key === '/' && e.shiftKey)) {
       e.preventDefault();
-      UI.openModal(window.Learn.renderShortcuts());
+      UI.openModal(window.Learn.renderShortcuts(Nav.route().view));
       return;
     }
     if (e.key.toLowerCase() === 't' && !e.metaKey && !e.ctrlKey) {
@@ -158,6 +162,7 @@
     }
     const r = Nav.route();
     if (r.view === 'section') window.Views.Section.handleKey(e);
+    else if (r.view === 'daw') window.Views.Daw.handleKey(e);
   }
 
   // ── Boot ─────────────────────────────────────────────────────────────────

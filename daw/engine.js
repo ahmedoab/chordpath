@@ -513,6 +513,16 @@
     if (this.mixer) this.mixer.setAudio(audioId, sampleRate, channels);
   };
   Engine.prototype.hasAudio = function (audioId) { return this.audio.has(audioId); };
+  // Lets go of every recording except those named, so a session that opens
+  // one project after another does not hold all their audio in memory.
+  Engine.prototype.keepOnlyAudio = function (audioIds) {
+    const keep = new Set(audioIds);
+    this.audio.forEach((a, id) => {
+      if (keep.has(id)) return;
+      this.audio.delete(id);
+      if (this.mixer) this.mixer.buffers.delete(id);
+    });
+  };
   Engine.prototype.audioPeaks = function (audioId, buckets) {
     const a = this.audio.get(audioId);
     return a ? global.Wav.peaks(a.channels[0], buckets) : null;
@@ -520,6 +530,18 @@
   Engine.prototype.audioSeconds = function (audioId) {
     const a = this.audio.get(audioId);
     return a ? a.channels[0].length / a.sampleRate : 0;
+  };
+
+  // Turns an audio file's bytes (WAV, MP3, OGG, FLAC…) into samples with the
+  // decoders built into the app. Resolves to { sampleRate, channels }, at most
+  // two channels; rejects when the bytes are not audio.
+  Engine.prototype.decode = async function (bytes) {
+    this.ensure();
+    const buffer = await this.ctx.decodeAudioData(bytes);
+    const channels = [];
+    for (let c = 0; c < Math.min(2, buffer.numberOfChannels); c++) channels.push(new Float32Array(buffer.getChannelData(c)));
+    if (!channels.length || !channels[0].length) throw new Error('The file holds no audio');
+    return { sampleRate: buffer.sampleRate, channels };
   };
 
   Engine.prototype.anchorAt = function (time) {

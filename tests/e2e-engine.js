@@ -423,6 +423,49 @@ const { check, section, tempDataDir, launch, crashed, finish, cleanup } = requir
       check('deleting a project deletes its recordings', rec.gone);
     }
 
+    // ── Audio files ──────────────────────────────────────────────────────────
+    section('Audio files and clean-up');
+    const files = await page.evaluate(async () => {
+      const eng = DawEngine.get();
+      // Two seconds of stereo tone as a WAV file, read back the way an imported file is.
+      const sr = 22050, n = sr * 2;
+      const left = new Float32Array(n), right = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        left[i] = 0.5 * Math.sin(2 * Math.PI * 440 * i / sr);
+        right[i] = 0.25 * Math.sin(2 * Math.PI * 660 * i / sr);
+      }
+      const decoded = await eng.decode(Wav.encode([left, right], sr, 16).buffer);
+      const peakOf = data => { let p = 0; for (let i = 0; i < data.length; i++) p = Math.max(p, Math.abs(data[i])); return p; };
+      let refused = false;
+      try { await eng.decode(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer); } catch (e) { refused = true; }
+
+      const blank = () => [new Float32Array(80)];
+      await DawStore.putAudio('aud_keep', 'daw_prune', 8000, blank());
+      await DawStore.putAudio('aud_drop', 'daw_prune', 8000, blank());
+      await DawStore.putAudio('aud_other', 'daw_else', 8000, blank());
+      const removed = await DawStore.pruneAudio('daw_prune', ['aud_keep']);
+      const kept = !!(await DawStore.getAudio('aud_keep'));
+      const dropped = !(await DawStore.getAudio('aud_drop'));
+      const untouched = !!(await DawStore.getAudio('aud_other'));
+      await DawStore.deleteProject('daw_prune');
+      await DawStore.deleteProject('daw_else');
+
+      eng.setAudio('aud_a', 8000, blank());
+      eng.setAudio('aud_b', 8000, blank());
+      eng.keepOnlyAudio(['aud_b']);
+      return {
+        seconds: decoded.channels[0].length / decoded.sampleRate, count: decoded.channels.length,
+        peakL: peakOf(decoded.channels[0]), peakR: peakOf(decoded.channels[1]),
+        refused, removed, kept, dropped, untouched,
+        letGo: !eng.hasAudio('aud_a') && eng.hasAudio('aud_b') && !eng.mixer.buffers.has('aud_a') && eng.mixer.buffers.has('aud_b'),
+      };
+    });
+    check('an audio file decodes to samples of the right length', Math.abs(files.seconds - 2) < 0.01 && files.count === 2);
+    check('at the level it was saved with', Math.abs(files.peakL - 0.5) < 0.03 && Math.abs(files.peakR - 0.25) < 0.03);
+    check('a file that is not audio is refused', files.refused);
+    check('pruning removes only the recordings a project no longer uses', files.removed === 1 && files.kept && files.dropped && files.untouched);
+    check('the engine lets go of recordings it is told it no longer needs', files.letGo);
+
     section('Health');
     if (log.errors.length) console.error(log.errors.join('\n'));
     check('no errors were logged', log.errors.length === 0);

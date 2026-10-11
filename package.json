@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node tests/run.js && node tests/audio-test.js && node tests/muse-test.js && node tests/daw-test.js",
-    "test:e2e": "node tests/e2e.js && node tests/e2e-engine.js"
+    "test:e2e": "node tests/e2e.js && node tests/e2e-engine.js && node tests/e2e-daw.js"
   },
   "devDependencies": {
     "electron": "44.7.0",
