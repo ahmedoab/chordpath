@@ -2,7 +2,11 @@
  * Muse, the app's own AI. Name a song and it either shows what it already
  * knows or asks you for the chords; then it asks how the song feels, stores
  * both, and drafts a new progression from what it has learned. The panel on
- * the right is its memory. Nothing here goes online.
+ * the right is its memory.
+ *
+ * In the desktop app Muse can also look a song up when asked: the shell asks
+ * Wikipedia, Research reads the article, and Muse tells the user what it
+ * found. Nothing found that way is learned until the user has checked it.
  */
 (function (global) {
   'use strict';
@@ -83,10 +87,18 @@
       </form>`}`;
   }
 
+  // Looking a song up needs the desktop app: a page in a browser has no way out.
+  function canLookUp() {
+    return !!(global.Desktop && typeof global.Desktop.lookup === 'function' && global.Research);
+  }
+
   function stepChords() {
     const ui = UI();
     const s = state.song;
     const q = encodeURIComponent((s.title + ' ' + s.artist + ' chords').replace(/\s+/g, ' ').trim());
+    const lookup = !canLookUp() ? ''
+      : `<button type="button" class="ghost" id="museLookup"${s.looking ? ' disabled' : ''}
+          title="Sends this song's title and artist to Wikipedia. Nothing else leaves this computer.">${s.looking ? 'Looking…' : 'Look it up on Wikipedia'}</button>`;
     return `
       <form id="museChordsForm" class="muse-form col">
         <textarea id="museChords" class="mono" rows="6" spellcheck="false" maxlength="6000" aria-label="Chords"
@@ -95,6 +107,7 @@
           chord sheet — lyrics and all. I'll pick the chords out and keep <code>[Verse]</code> / <code>[Chorus]</code> labels.</p>
         <div class="muse-row">
           <button type="submit" class="primary">Continue</button>
+          ${lookup}
           <button type="button" class="ghost" id="museNoChords">I don't know the chords</button>
           <button type="button" class="ghost" id="museCancel">Cancel</button>
           <a class="muse-link" href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener noreferrer">Look them up in your browser ↗</a>
@@ -130,10 +143,13 @@
   }
 
   function stepFeel() {
+    const found = state.song.foundFeel;
     return `
       <form id="museFeelForm" class="muse-form col">
         <textarea id="museFeel" rows="3" maxlength="2000" aria-label="How it feels"
           placeholder="Bittersweet, like driving home at 3am…">${UI().esc(state.song.feelText)}</textarea>
+        ${found ? `<p class="meta">Wikipedia's words for it: <em>${UI().esc(found)}</em>.
+          <button type="button" class="ghost small" id="museUseFeel">Start from those</button> Yours matter more: say it your way.</p>` : ''}
         <div class="muse-row">
           <button type="submit" class="primary">Continue</button>
           <button type="button" class="ghost" id="museFeelBack">Back</button>
@@ -261,7 +277,8 @@
       <div class="muse">
         <header class="muse-head">
           <h3>Muse <span class="badge">Experimental</span></h3>
-          <p class="meta">ChordPath's own AI. It lives inside this app, learns only from the songs you teach it, and never goes online.</p>
+          <p class="meta">ChordPath's own AI. It lives inside this app and learns from the songs you teach it.${canLookUp()
+            ? ' It goes online only when you ask it to look a song up, and then only to Wikipedia.' : ' It never goes online.'}</p>
         </header>
         <div class="muse-grid">
           <section class="muse-talk">
@@ -321,9 +338,78 @@
         say(`I already know <strong>${ui.esc(e.title)}</strong> — you taught me. Change anything you like.`);
       }
     } else {
-      say(`I don't know <strong>${ui.esc(title)}</strong> yet, and I never look anything up — I learn from you. What are the chords?`);
+      say(`I don't know <strong>${ui.esc(title)}</strong> yet. What are the chords? ` + (canLookUp()
+        ? 'Type them if you know them, or I can look it up on Wikipedia and tell you what I find.'
+        : 'I never look anything up; I learn from you.'));
     }
     state.step = 'chords';
+    render();
+  }
+
+  // ── Looking a song up ────────────────────────────────────────────────────
+  // What an article said, as Muse tells it. Everything in it came from
+  // outside, so every piece is escaped.
+  function foundHTML(res, usable) {
+    const ui = UI();
+    const f = res.facts;
+    const lines = [];
+    const who = [f.artist ? 'By ' + f.artist : '', f.year ? String(f.year) : ''].filter(Boolean).join(', ');
+    if (who) lines.push(who);
+    if (f.genres.length) lines.push('Style: ' + f.genres.join(', '));
+    const key = f.key ? f.key.key + (f.key.mode ? ' ' + f.key.mode : '') : '';
+    if (key || f.tempo) lines.push([key ? 'Key: ' + key : '', f.tempo ? 'Tempo: ' + f.tempo + ' bpm' : ''].filter(Boolean).join('. '));
+    if (f.progressions.length) lines.push('Chords it spells out: ' + f.progressions.join('; '));
+    if (f.feelText) lines.push('Its words for how it feels: ' + f.feelText);
+    const source = res.article.url
+      ? `<a class="muse-source" href="${ui.esc(res.article.url)}" target="_blank" rel="noopener noreferrer">${ui.esc(res.article.title)}</a>`
+      : `<strong>${ui.esc(res.article.title)}</strong>`;
+    const next = usable
+      ? 'I\'ve put the chords in the box for you to check. Wikipedia is not always right about chords, so play them through before I learn them.'
+      : f.progressions.length
+        ? 'I\'ve left the box as you had it. Its chords are above if you want them.'
+        : state.song.chordsText.trim()
+          ? 'It does not spell out the chords, so the ones in the box stand as they were.'
+          : 'It does not spell out the chords. Type them if you know them, or look them up in your browser.';
+    return `I found ${source} on Wikipedia.
+      <span class="muse-quote">${ui.esc(f.summary)}</span>
+      <ul class="muse-found">${lines.map(line => `<li>${ui.esc(line)}</li>`).join('')}</ul>
+      ${next}`;
+  }
+
+  async function lookUp() {
+    const s = state.song;
+    if (!s || s.looking || !canLookUp()) return;
+    const box = doc.getElementById('museChords');
+    if (box) s.chordsText = box.value;                       // whatever has been typed so far is kept
+    s.looking = true;
+    said('Look it up');
+    say(`Looking for <strong>${UI().esc(s.title)}</strong> on Wikipedia…`);
+    render();
+    const res = await global.Research.find(s.title, s.artist, (kind, words) => global.Desktop.lookup(kind, words));
+    if (state.song !== s) return;                            // cancelled, or on to another song, meanwhile
+    s.looking = false;
+    if (res.status === 'offline') {
+      say('I couldn\'t reach Wikipedia. Check that you are online and try again, or type the chords.');
+    } else if (res.status === 'none') {
+      say(`I couldn't find a Wikipedia article about <strong>${UI().esc(s.title)}</strong>. Check the title and the artist, or type the chords.`);
+    } else {
+      const f = res.facts;
+      // Found chords only go into an empty box: ones already there, typed or
+      // from Muse's own memory, are usually fuller and are never overwritten.
+      const usable = f.progressions.length > 0 && !s.chordsText.trim();
+      if (usable) {
+        s.chordsText = s.startText = f.progressions[0];
+        // A key is only taken from the article when it says major or minor too.
+        s.key = f.key && f.key.mode ? f.key.key : null;
+        s.mode = f.key && f.key.mode ? f.key.mode : null;
+        s.keyChosen = false;
+        s.lookedUp = true;
+      }
+      if (!s.artist && f.artist) s.artist = f.artist;
+      s.extra = Object.assign({}, s.extra, f.tempo ? { tempo: f.tempo } : {}, f.year ? { year: f.year } : {}, f.genreId ? { genreId: f.genreId } : {});
+      s.foundFeel = f.feelText;
+      say(foundHTML(res, usable));
+    }
     render();
   }
 
@@ -337,7 +423,9 @@
     if (!pv.sections.length) return false;
     s.chordsText = text;
     s.preview = pv;
-    s.source = untouched && !s.id && s.startText ? 'library' : 'user';
+    // Chords from the built-in library, left as they were, stay "library".
+    // Ones the user typed, or checked after a lookup, are the user's.
+    s.source = untouched && !s.id && s.startText && !s.lookedUp ? 'library' : 'user';
     return true;
   }
 
@@ -450,6 +538,12 @@
       askFeel();
     });
     on('museCancel', 'click', () => { say('Okay, dropped it.'); toIdle(); });
+    on('museLookup', 'click', lookUp);
+    on('museUseFeel', 'click', () => {
+      const box = doc.getElementById('museFeel');
+      box.value = state.song.foundFeel;
+      box.focus();
+    });
 
     const rekey = () => {
       const s = state.song;

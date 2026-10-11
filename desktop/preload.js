@@ -18,4 +18,10 @@ contextBridge.exposeInMainWorld('Desktop', {
   saveFiles(files) {
     return ipcRenderer.invoke('save-files', files);
   },
+  // Asks Wikipedia about a song, when the user tells Muse to. kind: 'search'
+  // (resolves to [{ title, snippet }]) or 'page' ({ title, url, text } or
+  // null). The page gives words, never an address.
+  lookup(kind, words) {
+    return ipcRenderer.invoke('lookup', { kind: String(kind), words: String(words) });
+  },
 });

@@ -6,10 +6,29 @@
  */
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = require('./e2e-helpers');
+
+// What "Wikipedia" says in this run. The shell answers Muse's lookups from
+// these files, in the shape the real site answers in, so the test never goes
+// online. The article is made up.
+const ARTICLE = `"Lantern Road" is a song by the English rock band The Hollow Pines, released in 1994 as the second single from their album Slow Weather. Written by singer Mara Quill, it is an alternative rock ballad with elements of dream pop.
+
+== Composition ==
+"Lantern Road" is written in the key of E minor and moves at a tempo of 76 beats per minute. The verses follow a chord progression of Em–C–G–D, while the chorus shifts to C–G–D–Em. Critics have described the song as melancholic and haunting, with a bittersweet, yearning chorus.`;
 
 (async () => {
   const userData = tempDataDir();
+  const fixtures = tempDataDir();
+  process.env.CHORDPATH_LOOKUP_FIXTURES = fixtures;
+  fs.writeFileSync(path.join(fixtures, 'search.json'), JSON.stringify({ query: { search: [{
+    title: 'Lantern Road (The Hollow Pines song)',
+    snippet: '<span class="searchmatch">Lantern</span> <span class="searchmatch">Road</span> is a song by the English rock band The Hollow Pines',
+  }] } }));
+  fs.writeFileSync(path.join(fixtures, 'page.json'), JSON.stringify({ query: { pages: [{
+    title: 'Lantern Road (The Hollow Pines song)', fullurl: 'https://en.wikipedia.org/wiki/Lantern_Road_(The_Hollow_Pines_song)', extract: ARTICLE,
+  }] } }));
   let { app, page, log } = await launch(userData);
 
   try {
@@ -61,7 +80,7 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
     await page.waitForSelector('#museChords');
     check('an unknown song makes Muse ask for the chords',
       /don't know/.test(await page.textContent('.muse-thread')) && /What are the chords/.test(await page.textContent('.muse-thread')));
-    check('Muse says it never looks anything up', /never look anything up/.test(await page.textContent('.muse-thread')));
+    check('and offers to look the song up, saying where', /look it up on Wikipedia/.test(await page.textContent('.muse-thread')) && await page.isVisible('#museLookup'));
 
     await page.fill('#museChords', 'nothing useful here');
     await page.click('#museChordsForm button[type="submit"]');
@@ -142,6 +161,76 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
     check('and no window opens inside the app', app.windows().length === pagesBefore && page.url().startsWith('app://chordpath/'));
     await page.click('#museCancel');
 
+    // ── Muse: looking a song up online ─────────────────────────────────────
+    section('Muse — looking a song up');
+    const thread = () => page.textContent('.muse-thread');
+    await page.fill('#museTitle', 'Lantern Road');
+    await page.fill('#museArtist', 'The Hollow Pines');
+    await page.click('#museSongForm button[type="submit"]');
+    await page.waitForSelector('#museLookup');
+    check('the button says what will be sent', /title and artist/i.test(await page.getAttribute('#museLookup', 'title')));
+    // Chords already in the box are yours: a lookup reports what it found and leaves them be.
+    await page.fill('#museChords', 'Am F C G');
+    await page.click('#museLookup');
+    await page.waitForFunction(() => /I found/.test(document.querySelector('.muse-thread').textContent), null, { timeout: 15000 }).catch(() => {});
+    check('chords you have already typed are not replaced by what it finds',
+      (await page.inputValue('#museChords')) === 'Am F C G' && /left the box as you had it/.test(await thread()));
+    await page.fill('#museChords', '');
+    await page.click('#museLookup');
+    await page.waitForFunction(() => document.getElementById('museChords').value !== '', null, { timeout: 15000 }).catch(() => {});
+    const told = await page.innerText('.muse-thread .bubble:last-child');
+    check('it names the article it read, with a link to it',
+      (await page.getAttribute('.muse-thread a.muse-source', 'href').catch(() => '')) === 'https://en.wikipedia.org/wiki/Lantern_Road_(The_Hollow_Pines_song)');
+    check('and tells you what the article says: who, when, style, key and tempo',
+      /The Hollow Pines/.test(told) && /1994/.test(told) && /alternative rock/.test(told) && /E minor/.test(told) && /76 bpm/.test(told));
+    check('the chords it found are in the box, waiting to be checked', (await page.inputValue('#museChords')) === 'Em C G D');
+    check('a second progression the article mentions is passed on as well', /C G D Em/.test(told));
+    check('nothing is learned until you say so', !/Lantern Road/.test(await page.textContent('#museMemory')));
+    await shot(page, '06-muse-lookup');
+
+    await page.click('#museChordsForm button[type="submit"]');
+    await page.waitForSelector('#museChordsOk');
+    check('the key is the one the article gives',
+      (await page.inputValue('#museKey')) === 'E' && (await page.textContent('#museKeyMode button.active')) === 'minor');
+    await page.click('#museChordsOk');
+    await page.waitForSelector('#museFeel');
+    check('Muse passes on the article\'s words for how it feels', /melancholic, haunting, bittersweet, yearning/.test(await page.textContent('#museStep')));
+    check('but leaves the description to you', (await page.inputValue('#museFeel')) === '');
+    await page.click('#museUseFeel');
+    check('unless you take them as a start', (await page.inputValue('#museFeel')) === 'melancholic, haunting, bittersweet, yearning');
+    await page.click('#museFeelForm button[type="submit"]');
+    await page.waitForSelector('#museSave');
+    await page.click('#museSave');
+    await page.waitForSelector('.draft-card');
+    const learned = await page.evaluate(() => JSON.parse(localStorage.getItem('chordpath:muse:memory')).songs.find(s => s.title === 'Lantern Road'));
+    check('once confirmed, it is learned as a song you taught, with what the article added',
+      !!learned && learned.source === 'user' && learned.tempo === 76 && learned.year === 1994 && learned.key === 'E' && learned.genreId === 'indie');
+    await page.click('#mdDone');
+
+    // No connection: the question goes unanswered and Muse says so.
+    fs.unlinkSync(path.join(fixtures, 'search.json'));
+    await page.fill('#museTitle', 'Far Shore');
+    await page.click('#museSongForm button[type="submit"]');
+    await page.waitForSelector('#museLookup');
+    await page.click('#museLookup');
+    await page.waitForFunction(() => /couldn't reach Wikipedia/.test(document.querySelector('.muse-thread').textContent), null, { timeout: 15000 }).catch(() => {});
+    check('with no connection Muse says so and still takes chords by hand',
+      /couldn't reach Wikipedia/.test(await thread()) && await page.isEnabled('#museChords') && (await page.inputValue('#museChords')) === '');
+    await page.click('#museCancel');
+
+    // The way out itself, tried from both ends.
+    const reach = await app.evaluate(async ({ session }) => {
+      const ses = session.fromPartition('lookup');
+      const attempt = async url => { try { await ses.fetch(url); return 'reached'; } catch (e) { return 'refused'; } };
+      return [await attempt('https://example.com/'), await attempt('http://en.wikipedia.org/'), await attempt('https://en.wikipedia.org.example.com/')];
+    });
+    check('the channel Muse looks things up through cannot reach anywhere but Wikipedia', reach.join() === 'refused,refused,refused');
+    check('and the page can only ask it the two questions it knows', await page.evaluate(() => Promise.all([
+      window.Desktop.lookup('fetch', 'https://example.com/').then(() => false, () => true),
+      window.Desktop.lookup('page', '').then(() => false, () => true),
+      window.Desktop.lookup('search', 'x'.repeat(500)).then(() => false, () => true),
+    ]).then(all => all.every(Boolean))));
+
     // ── Muse: asking for a draft, then a full song ─────────────────────────
     section('Muse — from a feeling to a song');
     await page.click('#museMode [data-mode="ask"]');
@@ -187,7 +276,7 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
     await page.click('#navTabs [data-nav="muse"]');
     await page.waitForSelector('.muse .bubble.from-muse');
     check('Muse remembers what it was taught after a restart',
-      /Night Shapes/.test(await page.textContent('#museMemory')) && /You've taught me 1 song/.test(await page.textContent('.muse-thread')));
+      /Night Shapes/.test(await page.textContent('#museMemory')) && /You've taught me 2 songs/.test(await page.textContent('.muse-thread')));
     check('the drafted song survives a restart', await page.evaluate(() => window.Storage.listProjects().length === 1));
   } catch (err) {
     crashed(err);
@@ -195,6 +284,7 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
   } finally {
     try { await app.close(); } catch (e) { /* already closed */ }
     cleanup(userData);
+    cleanup(fixtures);
   }
   finish();
 })();

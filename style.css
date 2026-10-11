@@ -1172,6 +1172,11 @@ button.small { font-size: 0.72rem; padding: 0.2rem 0.5rem; }
 .muse-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.6rem; }
 .muse-row select { width: auto; }
 .muse-link { font-size: 0.78rem; color: var(--accent); margin-left: auto; }
+/* What Muse found when it looked a song up: the article's own opening words,
+   set apart, then the facts it read out of it. */
+.muse-source { color: var(--accent); font-weight: 600; }
+.muse-quote { display: block; margin: 0.5rem 0; padding-left: 0.7rem; border-left: 2px solid var(--line-2); color: var(--ink-2); font-size: 0.82rem; line-height: 1.5; }
+.muse-found { margin: 0.4rem 0 0.6rem; padding-left: 1.1rem; font-size: 0.84rem; line-height: 1.6; }
 .muse-sec { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
 .muse-sec .label, .draft-head .label {
   font-size: 0.66rem; font-weight: 600; color: var(--muted);

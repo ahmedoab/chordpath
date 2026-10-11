@@ -10,10 +10,13 @@ for every part, free-plugin picks, mixing chains, and recording guides.
 > ChordPath into a desktop application, and gives it a DAW of its own.
 > `main` holds the original version.
 
-**Fully self-contained.** ChordPath never goes online: no accounts, no API
-keys, no services. The audio library and fonts ship in `vendor/`, the page's
-security policy forbids contacting any other host, and the desktop shell
-cancels every request that is not for the app's own files.
+**Self-contained.** ChordPath needs no accounts, no API keys and no
+services, and everything it does works offline. The audio library and fonts
+ship in `vendor/`, the page's security policy forbids contacting any other
+host, and the desktop shell cancels every request the page makes for
+anything but the app's own files. The single exception is one you ask for:
+Muse can look a song up on Wikipedia, and that request is made by the shell,
+to that one site, with the song's title and artist and nothing else.
 
 ## Running it
 
@@ -32,12 +35,21 @@ tested for the desktop application.
 ## Muse — ChordPath's own AI
 
 Muse is a small learning model that lives inside the app. It is not a
-chatbot and it does not call anyone else's AI.
+chatbot and it does not call anyone else's AI. When it looks a song up it
+reads an encyclopedia article with rules of its own, not with a language
+model.
 
 - **Teach it a song.** Name one. If Muse knows it (it starts with about 140
   well-known songs) it shows the chords for you to check. If it does not, it
   asks you: type them (`Am F C G`), use numerals (`i-bVI-bIII-bVII`), or
   paste a whole chord sheet and it picks the chords out of the lyrics.
+- **Or have it look the song up.** In the desktop app, "Look it up on
+  Wikipedia" makes Muse read the song's article and tell you what it found:
+  who it is by, when, in what style, the key and tempo, any chords the
+  article spells out, and its words for how the song feels, with a link to
+  the article. Chords it finds go into the box for you to check; nothing is
+  learned until you confirm it, and chords you have already typed are never
+  overwritten. Many articles do not give chords at all, and Muse says so.
 - **Tell it how the song feels**, in your own words. Muse maps that onto
   ChordPath's 26 feelings, shows you what it heard so you can correct it,
   and learns your vocabulary: a word it does not know takes on the feelings
@@ -139,17 +151,21 @@ headless in Node; everything that needs sound or a screen is tested in the
 real desktop app.
 
 ```
-npm test                  # the four headless suites below
-node tests/run.js         # ~2300 data-integrity + engine checks
-node tests/audio-test.js  # playback-scheduling checks (stubbed Tone.js)
-node tests/muse-test.js   # chord parsing, lexicon, Muse memory and drafting
-node tests/daw-test.js    # WAV files, song to notes, the DAW project, tab from notes
+npm test                     # the five headless suites below
+node tests/run.js            # ~2300 data-integrity + engine checks
+node tests/audio-test.js     # playback-scheduling checks (stubbed Tone.js)
+node tests/muse-test.js      # chord parsing, lexicon, Muse memory and drafting
+node tests/daw-test.js       # the DAW project, tempo map, tab, WAV, audio stretching
+node tests/research-test.js  # Muse's lookup: what may be asked, how an article is read
 
-npm run test:e2e          # launches the desktop app three times (several minutes)
-node tests/e2e.js         # Muse and the desktop shell
-node tests/e2e-engine.js  # the audio engine, measured from its own output
-node tests/e2e-daw.js     # the DAW screen, driven with mouse and keyboard
+npm run test:e2e             # launches the desktop app three times (several minutes)
+node tests/e2e.js            # Muse and the desktop shell
+node tests/e2e-engine.js     # the audio engine, measured from its own output
+node tests/e2e-daw.js        # the DAW screen, driven with mouse and keyboard
 ```
+
+No test goes online. Muse's lookup is tested against made-up articles that
+the shell serves from files, in the shape Wikipedia answers in.
 
 ## Architecture
 
@@ -167,7 +183,7 @@ Vanilla JS, no build step. Each file is an IIFE exporting one global;
 - `theory/` also holds Muse: **chordparse** (chord text, chord sheets, roman
   numerals, key detection), **lexicon** (description → feelings),
   **musedata** (the built-in song library), **muse** (memory, learning,
-  drafting).
+  drafting), **research** (choosing and reading an article about a song).
 - `daw/` — the DAW underneath the screen: **wav** (reading and writing WAV),
   **project** (tracks, clips and notes, the editing operations, undo, MIDI
   export), **store** (projects and recordings in the app's local database),
@@ -179,7 +195,9 @@ Vanilla JS, no build step. Each file is an IIFE exporting one global;
   router), and one view module per screen. `ui/daw/` holds the DAW's
   timeline, note editor and mixer.
 - `desktop/` — the Electron shell: one window, a private `app://` address
-  for the app's files, and the rule that nothing else may be requested.
+  for the app's files, and the rule that the page may request nothing else.
+  `lookup.js` is the one way out: it builds the only addresses the shell
+  will ever ask (Wikipedia's) and turns the answers into plain text.
 - `vendor/` — Tone.js and the Inter / JetBrains Mono fonts, with licences.
 - `audio.js` — Tone.js synthesis: full-band playback per section and
   chained whole-song playback.

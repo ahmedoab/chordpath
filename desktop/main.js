@@ -2,16 +2,22 @@
  * The desktop application shell (Electron main process). It opens one window
  * and serves the app's own files to it over a private app:// address.
  *
- * ChordPath is fully self-contained, and this file enforces it: every request
- * to anything other than the app's own files is cancelled, and the page can
- * neither navigate away nor open windows. Links the user clicks on purpose
- * are handed to their normal web browser instead.
+ * ChordPath is self-contained, and this file enforces it: every request the
+ * page makes to anything other than the app's own files is cancelled, and
+ * the page can neither navigate away nor open windows. Links the user clicks
+ * on purpose are handed to their normal web browser instead.
+ *
+ * There is one way online, and it does not go through the page: when the
+ * user asks Muse to look a song up, this shell asks Wikipedia on its behalf
+ * (see lookup.js), over a session that can reach that one host and nothing
+ * else, and hands back plain text.
  */
 'use strict';
 
 const { app, BrowserWindow, Menu, protocol, session, shell, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const Lookup = require('./lookup');
 
 const APP_ROOT = path.join(__dirname, '..');
 const HOST = 'chordpath';
@@ -80,8 +86,8 @@ function serveAppFiles() {
   });
 }
 
-// Nothing leaves this computer: anything that is not one of the app's own
-// local addresses is cancelled before it starts.
+// Nothing the page asks for leaves this computer: anything that is not one of
+// the app's own local addresses is cancelled before it starts.
 function blockNetwork() {
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     const scheme = details.url.slice(0, details.url.indexOf(':'));
@@ -139,6 +145,60 @@ function handleExports() {
   }
 }
 
+// ── Looking a song up ───────────────────────────────────────────────────────
+// Muse's lookup has a session of its own: it keeps nothing between runs, it
+// can reach Wikipedia and nowhere else, and it grants no permissions.
+const LOOKUP_GAP_MS = 400;                // between requests: a well-behaved reader does not hammer
+const LOOKUP_TIMEOUT_MS = 12000;
+const LOOKUP_MAX_CHARS = 4 * 1024 * 1024;
+let lastLookup = 0;
+
+function lookupSession() {
+  return session.fromPartition('lookup');   // no "persist:" prefix: held in memory only
+}
+
+function guardLookups() {
+  const ses = lookupSession();
+  ses.setUserAgent(`ChordPath/${app.getVersion()} (https://github.com/ahmedoab/chordpath)`);
+  ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !Lookup.allowed(details.url) }));
+  ses.setPermissionRequestHandler((wc, permission, callback) => callback(false));
+  ses.setPermissionCheckHandler(() => false);
+}
+
+async function fetchJson(url) {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), LOOKUP_TIMEOUT_MS);
+  try {
+    const res = await lookupSession().fetch(url, { signal: stop.signal, credentials: 'omit', headers: { accept: 'application/json' } });
+    if (!res.ok) throw new Error('The lookup was answered with ' + res.status);
+    const body = await res.text();
+    if (body.length > LOOKUP_MAX_CHARS) throw new Error('The answer was too large');
+    return JSON.parse(body);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function handleLookups() {
+  guardLookups();
+  // ask: { kind: 'search' | 'page', words }. The address is built here, never by the page.
+  ipcMain.handle('lookup', async (event, ask) => {
+    const sender = event.senderFrame ? String(event.senderFrame.url) : '';
+    if (!sender.startsWith(ORIGIN + '/') || !ask || typeof ask !== 'object') throw new Error('Not allowed');
+    const url = Lookup.buildUrl(ask.kind, ask.words);
+    if (!url || !Lookup.allowed(url)) throw new Error('Not allowed');
+    // Tests answer from files of their own, so that they never go online.
+    if (E2E && process.env.CHORDPATH_LOOKUP_FIXTURES) {
+      const file = path.join(process.env.CHORDPATH_LOOKUP_FIXTURES, ask.kind + '.json');
+      return Lookup.parse(ask.kind, JSON.parse(await fs.promises.readFile(file, 'utf8')));
+    }
+    const wait = lastLookup + LOOKUP_GAP_MS - Date.now();
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    lastLookup = Date.now();
+    return Lookup.parse(ask.kind, await fetchJson(url));
+  });
+}
+
 // A link the user clicked goes to their own browser, never into the app.
 function openInBrowser(target) {
   let url;
@@ -177,7 +237,8 @@ function buildMenu() {
       { label: 'About ChordPath', click: () => dialog.showMessageBox({
         type: 'info', title: 'About ChordPath',
         message: 'ChordPath ' + app.getVersion(),
-        detail: 'Feeling-driven song studio.\nRuns entirely on this computer: no accounts, no online services.',
+        detail: 'Feeling-driven song studio.\nRuns on this computer, with no accounts and no services. ' +
+          'The one time it goes online is when you ask Muse to look a song up on Wikipedia.',
       }) },
     ] },
   ];
@@ -215,6 +276,7 @@ if (!app.requestSingleInstanceLock()) {
     serveAppFiles();
     blockNetwork();
     handleExports();
+    handleLookups();
     buildMenu();
     createWindow();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
