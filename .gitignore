@@ -25,3 +25,8 @@ npm-debug.log*
 node_modules/
 dist/
 out/
+
+# Native audio host: fetched sources and build output
+native/deps/
+native/build/
+native/build.log
