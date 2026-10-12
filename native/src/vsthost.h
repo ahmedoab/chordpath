@@ -5,10 +5,11 @@
  * an instrument that turns notes into audio. Everything here is plain C++;
  * the JavaScript side lives in addon.cpp.
  *
- * Threads: process() is the only call meant for the audio thread. Notes and
- * parameter changes may come from any thread and are handed to the next
- * process() call. Everything else belongs to the thread that loaded the
- * plugin (in the app, the main one, which also owns its editor window).
+ * Threads: process() and noteFromAudioThread() are the only calls meant for
+ * the audio thread. Notes and parameter changes may come from any thread and
+ * are handed to the next process() call. Everything else belongs to one
+ * thread, the one that also runs the plugin's editor window: the host thread
+ * (see hostthread.h).
  */
 #pragma once
 
@@ -73,6 +74,8 @@ class Plugin {
   // Audio thread. Stereo, in place: left and right hold the input and are
   // overwritten with the output. Any number of frames.
   void process(float* left, float* right, int frames);
+  // Audio thread, just before process(): a note for the block about to be made.
+  void noteFromAudioThread(bool on, int pitch, float velocity, int sampleOffset);
 
   // Any thread; takes effect in the next process() call.
   void noteOn(int pitch, float velocity, int sampleOffset);
@@ -83,7 +86,13 @@ class Plugin {
   void setBypassed(bool bypassed);
   bool bypassed() const;
 
-  // Main thread.
+  // True, once, after something changed the plugin's settings from its side
+  // (a control moved in its window, a preset chosen there).
+  bool takeEdited();
+  // True, once, after the plugin said it now delays the sound by a different amount.
+  bool takeLatencyChanged();
+
+  // Host thread.
   std::vector<ParamDescription> parameters() const;
   double getParam(uint32_t id) const;
   std::string paramText(uint32_t id, double value) const;
@@ -102,9 +111,5 @@ class Plugin {
   struct Impl;
   std::unique_ptr<Impl> impl;
 };
-
-// Gives windows on the calling thread a chance to work for a moment. The app
-// has a message loop of its own; this is for tests that run without one.
-void pumpMessages(int milliseconds);
 
 }  // namespace cp

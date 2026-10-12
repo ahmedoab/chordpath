@@ -128,14 +128,25 @@ struct Plugin::Impl : public IComponentHandler, public IPlugFrame {
   bool running = false;
   bool offline = false;
   std::atomic<bool> bypass{false};
+  std::atomic<bool> edited{false}, latencyChanged{false};
+  std::atomic<int> latency{0};
 
-  // Handed over from other threads to the next process() call.
+  // Handed over from other threads to the next process() call. The "taken"
+  // lists are the audio thread's own; swapping the two back and forth means
+  // neither side ever has to ask for memory while audio is running.
   struct Note { bool on; int pitch; float velocity; int offset; };
   std::mutex pendingLock;
-  std::vector<Note> pendingNotes;
-  std::vector<std::pair<ParamID, ParamValue>> pendingParams;
-  Transport transport;
+  std::vector<Note> pendingNotes, takenNotes, audioNotes;
+  std::vector<std::pair<ParamID, ParamValue>> pendingParams, takenParams;
+  Transport transport, liveTransport;
+  std::atomic<bool> jumped{true};
   double positionSamples = 0;
+  double beats = 0;
+
+  // The input, kept as long as the plugin delays it, for when it is bypassed.
+  static const int DRY_ROOM = 16384;
+  std::vector<float> dryL, dryR, heldL, heldR;
+  size_t dryAt = 0;
 
   IPtr<IPlugView> view;
   HWND window = nullptr;
@@ -144,12 +155,20 @@ struct Plugin::Impl : public IComponentHandler, public IPlugFrame {
   tresult PLUGIN_API beginEdit(ParamID) override { return kResultOk; }
   tresult PLUGIN_API performEdit(ParamID id, ParamValue value) override {
     // A control was moved in the plugin's own window: the sound has to follow.
+    edited.store(true);
     std::lock_guard<std::mutex> lock(pendingLock);
     pendingParams.emplace_back(id, value);
     return kResultOk;
   }
   tresult PLUGIN_API endEdit(ParamID) override { return kResultOk; }
-  tresult PLUGIN_API restartComponent(int32) override { return kResultOk; }
+  tresult PLUGIN_API restartComponent(int32 flags) override {
+    if (flags & kLatencyChanged) {
+      if (processor) latency.store((int)processor->getLatencySamples());
+      latencyChanged.store(true);
+    }
+    if (flags & (kParamValuesChanged | kReloadComponent)) edited.store(true);
+    return kResultOk;
+  }
 
   tresult PLUGIN_API resizeView(IPlugView* which, ViewRect* size) override {
     if (!window || !size || which != view.get()) return kInvalidArgument;
@@ -217,6 +236,14 @@ struct Plugin::Impl : public IComponentHandler, public IPlugFrame {
     data.outputParameterChanges = &paramsOut;
     data.processContext = &context;
     data.processMode = offline ? kOffline : kRealtime;
+    paramsIn.setMaxParameters(64);
+    paramsOut.setMaxParameters(64);
+    for (auto* list : {&pendingNotes, &takenNotes, &audioNotes}) list->reserve(512);
+    pendingParams.reserve(256);
+    takenParams.reserve(256);
+    for (auto* line : {&dryL, &dryR}) line->assign(DRY_ROOM, 0.0f);
+    for (auto* held : {&heldL, &heldR}) held->assign((size_t)maxBlock, 0.0f);
+    latency.store((int)processor->getLatencySamples());
     prepared = true;
   }
 
@@ -321,7 +348,12 @@ std::unique_ptr<Plugin> Plugin::load(const std::string& path, const std::string&
 const PluginDescription& Plugin::description() const { return impl->desc; }
 int Plugin::inputChannels() const { return impl->inCh; }
 int Plugin::outputChannels() const { return impl->outCh; }
-int Plugin::latencySamples() const { return (int)impl->processor->getLatencySamples(); }
+int Plugin::latencySamples() const {
+  impl->latency.store((int)impl->processor->getLatencySamples());
+  return impl->latency.load();
+}
+bool Plugin::takeEdited() { return impl->edited.exchange(false); }
+bool Plugin::takeLatencyChanged() { return impl->latencyChanged.exchange(false); }
 double Plugin::tailSeconds() const {
   const uint32 tail = impl->processor->getTailSamples();
   return tail == kInfiniteTail ? -1 : tail / impl->sampleRate;
@@ -336,6 +368,14 @@ void Plugin::setOffline(bool offline) {
   p.offline = offline;
   p.data.processMode = offline ? kOffline : kRealtime;
   p.start();
+  // Stopping and starting empties the plugin of whatever was still ringing; the kept input goes too.
+  std::fill(p.dryL.begin(), p.dryL.end(), 0.0f);
+  std::fill(p.dryR.begin(), p.dryR.end(), 0.0f);
+}
+
+void Plugin::noteFromAudioThread(bool on, int pitch, float velocity, int sampleOffset) {
+  Impl& p = *impl;
+  if (p.audioNotes.size() < p.audioNotes.capacity()) p.audioNotes.push_back({on, pitch, velocity, sampleOffset});
 }
 
 void Plugin::noteOn(int pitch, float velocity, int sampleOffset) {
@@ -356,9 +396,12 @@ void Plugin::setParam(uint32_t id, double value) {
   std::lock_guard<std::mutex> lock(impl->pendingLock);
   impl->pendingParams.emplace_back(id, v);
 }
+// Says where the song is and how fast it goes. While it plays the plugin is
+// kept up to date from there on its own; each call is a fresh starting point.
 void Plugin::setTransport(const Transport& transport) {
   std::lock_guard<std::mutex> lock(impl->pendingLock);
   impl->transport = transport;
+  impl->jumped.store(true);
 }
 
 void Plugin::process(float* left, float* right, int frames) {
@@ -366,15 +409,23 @@ void Plugin::process(float* left, float* right, int frames) {
   if (!p.prepared || frames <= 0) return;
 
   // Pick up what other threads left; if they are busy leaving it, next time will do.
-  std::vector<Impl::Note> notes;
-  std::vector<std::pair<ParamID, ParamValue>> params;
-  Transport transport = p.transport;
+  std::vector<Impl::Note>& notes = p.takenNotes;
+  std::vector<std::pair<ParamID, ParamValue>>& params = p.takenParams;
+  notes.clear();
+  params.clear();
   if (p.pendingLock.try_lock()) {
     notes.swap(p.pendingNotes);
     params.swap(p.pendingParams);
-    transport = p.transport;
+    p.liveTransport = p.transport;
+    if (p.jumped.exchange(false)) p.beats = p.transport.positionBeats;
     p.pendingLock.unlock();
   }
+  const Transport& transport = p.liveTransport;
+  for (const auto& note : p.audioNotes) {
+    if (notes.size() < notes.capacity()) notes.push_back(note);
+  }
+  p.audioNotes.clear();
+  const int kept = std::min(p.latency.load(), (int)Impl::DRY_ROOM - 1);
 
   for (int done = 0; done < frames;) {
     const int n = std::min(p.maxBlock, frames - done);
@@ -424,7 +475,19 @@ void Plugin::process(float* left, float* right, int frames) {
     p.context.timeSigNumerator = transport.meterNum;
     p.context.timeSigDenominator = transport.meterDen;
     p.context.projectTimeSamples = (TSamples)p.positionSamples;
-    p.context.projectTimeMusic = transport.positionBeats + (first ? 0 : done * transport.tempo / (60.0 * p.sampleRate));
+    p.context.projectTimeMusic = p.beats;
+
+    // The input as it will be wanted if the plugin is bypassed: as late as the plugin would have made it.
+    if (kept > 0) {
+      for (int i = 0; i < n; i++) {
+        const size_t from = (p.dryAt + Impl::DRY_ROOM - kept) % Impl::DRY_ROOM;
+        p.heldL[i] = p.dryL[from];
+        p.heldR[i] = p.dryR[from];
+        p.dryL[p.dryAt] = left[done + i];
+        p.dryR[p.dryAt] = right[done + i];
+        p.dryAt = (p.dryAt + 1) % Impl::DRY_ROOM;
+      }
+    }
 
     if (p.data.numInputs > 0) {
       AudioBusBuffers& in = p.data.inputs[0];
@@ -447,9 +510,16 @@ void Plugin::process(float* left, float* right, int frames) {
       AudioBusBuffers& out = p.data.outputs[0];
       std::memcpy(left + done, out.channelBuffers32[0], n * sizeof(float));
       std::memcpy(right + done, out.channelBuffers32[out.numChannels > 1 ? 1 : 0], n * sizeof(float));
+    } else if (kept > 0) {
+      // Bypassed, or failed: the input goes on, held back so the track keeps its place.
+      std::memcpy(left + done, p.heldL.data(), n * sizeof(float));
+      std::memcpy(right + done, p.heldR.data(), n * sizeof(float));
     }
-    // Bypassed, or failed: the input is left as it came (an instrument, having none, gives silence).
-    if (transport.playing) p.positionSamples += n;
+    // (With no delay to make up, the input is simply left as it came.)
+    if (transport.playing) {
+      p.positionSamples += n;
+      p.beats += n * transport.tempo / (60.0 * p.sampleRate);
+    }
     done += n;
   }
 }
@@ -596,17 +666,5 @@ bool Plugin::openEditor(const std::string& title, bool visible) {
 }
 
 void Plugin::closeEditor() { impl->closeEditor(); }
-
-void pumpMessages(int milliseconds) {
-  const DWORD until = GetTickCount() + (DWORD)std::max(0, milliseconds);
-  do {
-    MSG message;
-    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
-      TranslateMessage(&message);
-      DispatchMessageW(&message);
-    }
-    if (GetTickCount() < until) Sleep(5);
-  } while (GetTickCount() < until);
-}
 
 }  // namespace cp

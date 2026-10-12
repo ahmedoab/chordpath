@@ -1,13 +1,31 @@
 {
-  # ChordPath's native audio host: loads VST 3 plugins and (see audio.cpp)
-  # talks to sound cards. Windows only for now. The third-party sources come
-  # from native/deps, which fetch-deps.js fills.
+  # ChordPath's native audio host: loads VST 3 plugins, mixes the tracks that
+  # pass through them and talks to sound cards. Windows only for now. The
+  # third-party sources come from native/deps, which fetch-deps.js fills.
   "targets": [
     {
+      # RtAudio, for playing through Windows' own sound system (WASAPI). ASIO
+      # drivers are spoken to directly instead: see src/asiohost.cpp.
+      "target_name": "rtaudio",
+      "type": "static_library",
+      "sources": ["deps/rtaudio/RtAudio.cpp"],
+      "include_dirs": ["deps/rtaudio", "deps/rtaudio/include"],
+      "defines": ["__WINDOWS_WASAPI__", "NOMINMAX", "_CRT_SECURE_NO_WARNINGS"],
+      "msvs_settings": {
+        "VCCLCompilerTool": { "ExceptionHandling": 1, "AdditionalOptions": ["/std:c++17"], "WarningLevel": 1 }
+      }
+    },
+    {
       "target_name": "chordpath_native",
+      "dependencies": ["rtaudio"],
       "sources": [
         "src/addon.cpp",
+        "src/hostthread.cpp",
         "src/vsthost.cpp",
+        "src/dsp.cpp",
+        "src/mixer.cpp",
+        "src/asiohost.cpp",
+        "src/audio.cpp",
 
         "deps/vst3sdk/public.sdk/source/vst/hosting/module.cpp",
         "deps/vst3sdk/public.sdk/source/vst/hosting/module_win32.cpp",
@@ -45,6 +63,8 @@
       "include_dirs": [
         "<!(node -p \"require('node-addon-api').include_dir\")",
         "deps/vst3sdk",
+        "deps/rtaudio",
+        "deps/rtaudio/include",
         "src"
       ],
       "defines": [
@@ -64,7 +84,7 @@
           "WarningLevel": 2
         }
       },
-      "libraries": ["ole32.lib", "shell32.lib", "user32.lib", "gdi32.lib"]
+      "libraries": ["ole32.lib", "shell32.lib", "user32.lib", "gdi32.lib", "winmm.lib", "ksuser.lib", "mfplat.lib", "mfuuid.lib", "wmcodecdspuuid.lib", "advapi32.lib"]
     }
   ]
 }
