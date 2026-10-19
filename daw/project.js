@@ -10,11 +10,13 @@
   'use strict';
 
   const FORMAT = 'chordpath-daw';
-  const LIMITS = { tracks: 64, clips: 512, notes: 8192, markers: 256, changes: 128, name: 60, title: 120, beats: 100000, audioSeconds: 1200 };
+  const LIMITS = { tracks: 64, clips: 512, notes: 8192, markers: 256, changes: 128, name: 60, title: 120, beats: 100000, audioSeconds: 1200, plugins: 8 };
   const DENOMINATORS = [2, 4, 8, 16];                    // the note a time signature counts in
   // Megabytes that hold about twenty-five minutes of each kind of audio file.
   const AUDIO_MB = { compressed: 25, flac: 130, plain: 260 };
   const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  const PLUGIN_FILE_RE = /^[A-Za-z]:\\[^<>"|?*\u0000-\u001f]{1,1000}\.vst3$/i;   // a full path to a VST 3 plugin
+  const PLUGIN_UID_RE = /^[0-9A-Fa-f]{32}$/;
   const NOTE_RE = /^[A-G][#b]?$/;
   const COLOR_RE = /^#[0-9a-f]{6}$/i;
   const KINDS = ['instrument', 'drums', 'audio'];
@@ -115,7 +117,27 @@
         comp: fx.comp === true,
         reverb: num(fx.reverb, 0, 1, 0), delay: num(fx.delay, 0, 1, 0),
       },
+      plugins: [],                                       // VST plugins the track passes through, in order
       clips: [],
+    };
+  }
+
+  // A plugin on a track (or the master): which file and which plugin in it,
+  // and what to call it. Its settings are not kept here but beside the
+  // project, like recordings (see daw/store.js), so undo history stays small.
+  // Returns null for anything that does not name a plugin.
+  function createPlugin(opts) {
+    opts = opts && typeof opts === 'object' ? opts : {};
+    if (typeof opts.path !== 'string' || !PLUGIN_FILE_RE.test(opts.path)) return null;
+    if (typeof opts.uid !== 'string' || !PLUGIN_UID_RE.test(opts.uid)) return null;
+    return {
+      id: opts.id || uid('p'),
+      path: opts.path,
+      uid: opts.uid.toUpperCase(),
+      name: text(opts.name, LIMITS.title, 'Plugin'),
+      vendor: text(opts.vendor, LIMITS.title, ''),
+      instrument: opts.instrument === true,              // it makes sound from notes rather than changing sound
+      bypass: opts.bypass === true,
     };
   }
 
@@ -137,6 +159,7 @@
       key: typeof opts.key === 'string' && NOTE_RE.test(opts.key) ? opts.key : 'C',
       scale: text(opts.scale, 40, 'major'),
       master: num(opts.master, -60, 6, 0),               // master fader, dB
+      masterPlugins: [],                                 // plugins the whole mix passes through
       loop: { on: false, start: 0, end: 16 },
       markers: [],
       tracks: [],
@@ -419,6 +442,76 @@
     return true;
   }
 
+  // ── Plugins ──────────────────────────────────────────────────────────────
+  // A track's plugins are a chain the sound passes through in order. On a
+  // note track the first may be an instrument, which then plays the notes in
+  // place of the built-in one; there is never more than one, and it is always
+  // first. Audio tracks and the master take effects only.
+  function takesInstrument(track) { return !!track && track.kind !== 'audio'; }
+  function instrumentPlugin(track) {
+    const first = track && track.plugins && track.plugins[0];
+    return first && first.instrument && takesInstrument(track) ? first : null;
+  }
+  function pluginIds(project) {
+    const ids = [];
+    project.tracks.forEach(t => t.plugins.forEach(p => ids.push(p.id)));
+    project.masterPlugins.forEach(p => ids.push(p.id));
+    return ids;
+  }
+  // { plugin, track, list }: track is null for the master. Null when there is no such plugin.
+  function findPlugin(project, pluginId) {
+    for (const track of project.tracks) {
+      const plugin = track.plugins.find(p => p.id === pluginId);
+      if (plugin) return { plugin, track, list: track.plugins };
+    }
+    const plugin = project.masterPlugins.find(p => p.id === pluginId);
+    return plugin ? { plugin, track: null, list: project.masterPlugins } : null;
+  }
+  // Adds a plugin to a track, or to the master when trackId is null.
+  function addPlugin(project, trackId, opts) {
+    const track = trackId == null ? null : findTrack(project, trackId);
+    if (trackId != null && !track) return null;
+    const list = track ? track.plugins : project.masterPlugins;
+    const plugin = createPlugin(Object.assign({}, opts, { id: null, bypass: false }));
+    if (!plugin) return null;
+    if (plugin.instrument) {
+      if (!takesInstrument(track)) return null;
+      if (list[0] && list[0].instrument) list.shift();   // one instrument plays a track
+      list.unshift(plugin);
+      return plugin;
+    }
+    if (list.length >= LIMITS.plugins) return null;
+    list.push(plugin);
+    return plugin;
+  }
+  function removePlugin(project, pluginId) {
+    const found = findPlugin(project, pluginId);
+    if (!found) return false;
+    found.list.splice(found.list.indexOf(found.plugin), 1);
+    return true;
+  }
+  // Moves a plugin earlier (by < 0) or later in its chain.
+  function movePlugin(project, pluginId, by) {
+    const found = findPlugin(project, pluginId);
+    if (!found || found.plugin.instrument) return false;
+    const from = found.list.indexOf(found.plugin);
+    const to = from + (by < 0 ? -1 : 1);
+    if (to < 0 || to >= found.list.length || found.list[to].instrument) return false;
+    found.list.splice(from, 1);
+    found.list.splice(to, 0, found.plugin);
+    return true;
+  }
+  // A saved chain made safe: only whole plugins, each with a name of its own,
+  // an instrument (where one is allowed) first and alone.
+  function cleanPlugins(raw, seen, instrumentAllowed) {
+    const whole = (Array.isArray(raw) ? raw : [])
+      .map(p => (p && typeof p === 'object' ? createPlugin(Object.assign({}, p, { id: keepId(p.id, 'p', seen) })) : null))
+      .filter(p => p && (instrumentAllowed || !p.instrument));
+    const instrument = whole.find(p => p.instrument);
+    const effects = whole.filter(p => !p.instrument).slice(0, LIMITS.plugins);
+    return instrument ? [instrument].concat(effects) : effects;
+  }
+
   // ── Clips ────────────────────────────────────────────────────────────────
   function addClip(track, opts) {
     if (track.clips.length >= LIMITS.clips) return null;
@@ -667,6 +760,7 @@
         volume: rt.volume, pan: rt.pan, mute: rt.mute, solo: rt.solo, armed: rt.armed,
         fx: rt.fx && typeof rt.fx === 'object' ? rt.fx : {},
       });
+      track.plugins = cleanPlugins(rt.plugins, seen, takesInstrument(track));
       (Array.isArray(rt.clips) ? rt.clips : []).forEach(rc => {
         if (!rc || typeof rc !== 'object' || track.clips.length >= LIMITS.clips) return;
         const base = { id: keepId(rc.id, 'c', seen), name: rc.name, start: rc.start, length: rc.length };
@@ -684,6 +778,7 @@
       });
       project.tracks.push(track);
     });
+    project.masterPlugins = cleanPlugins(raw.masterPlugins, seen, false);
     return project;
   }
 
@@ -816,6 +911,7 @@
     clipRate, clipSpan, setStretch, setClipTempo,
     audioFileProblem, audioLengthProblem,
     addTrack, removeTrack,
+    addPlugin, removePlugin, movePlugin, findPlugin, pluginIds, instrumentPlugin,
     addClip, removeClip, moveClip, resizeClip, splitClip, duplicateClip,
     addNote, removeNote, updateNote, quantize, transpose, setVelocity,
     notesWithin, shiftNotes, stretchNotes, removeNotes, copyNotes, pasteNotes,

@@ -70,6 +70,11 @@ class Convolver {
 // ── Echo ────────────────────────────────────────────────────────────────────
 // One channel of a feedback delay with a low-pass filter in the loop: what
 // the page builds from a DelayNode, a BiquadFilterNode and a GainNode.
+//
+// One oddity is copied on purpose. The browser works in blocks of 128
+// frames, and what it feeds back round such a loop is what came out one
+// block ago; so each repeat after the first is 128 frames later than the
+// delay time alone would make it.
 class Echo {
  public:
   Echo(double sampleRate, double maxSeconds);
@@ -85,6 +90,9 @@ class Echo {
   float feedback = 0;
   double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
   double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  static const unsigned BLOCK = 128;
+  float fed[BLOCK] = {};            // the last block's output, on its way back in
+  unsigned fedAt = 0;
 };
 
 // ── Limiter ─────────────────────────────────────────────────────────────────

@@ -475,7 +475,7 @@ bool AudioIO::showControlPanel() { return impl->usingAsio && impl->asio.showCont
 
 bool AudioIO::push(const float* samples, unsigned frames, const int* slots, unsigned slotCount) {
   Impl& m = *impl;
-  if (!m.opened || !samples || !frames) return false;
+  if (!m.opened || !frames || (!samples && slotCount)) return false;
   const unsigned width = m.width;
   if (m.ring.writable() / width < frames) {
     m.waitingGap += frames;

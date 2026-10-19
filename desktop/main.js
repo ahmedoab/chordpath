@@ -11,6 +11,9 @@
  * user asks Muse to look a song up, this shell asks Wikipedia on its behalf
  * (see lookup.js), over a session that can reach that one host and nothing
  * else, and hands back plain text.
+ *
+ * Sound cards and plugins are another process's business entirely: see
+ * audioservice.js, which starts that process and introduces the window to it.
  */
 'use strict';
 
@@ -18,6 +21,7 @@ const { app, BrowserWindow, Menu, protocol, session, shell, dialog, ipcMain } = 
 const path = require('path');
 const fs = require('fs');
 const Lookup = require('./lookup');
+const AudioService = require('./audioservice');
 
 const APP_ROOT = path.join(__dirname, '..');
 const HOST = 'chordpath';
@@ -263,6 +267,7 @@ function createWindow() {
     if (!url.startsWith(ORIGIN + '/')) { event.preventDefault(); openInBrowser(url); }
   });
   win.loadURL(ORIGIN + '/index.html');
+  AudioService.watchFocus(win);
   return win;
 }
 
@@ -278,6 +283,7 @@ if (!app.requestSingleInstanceLock()) {
     blockNetwork();
     handleExports();
     handleLookups();
+    AudioService.install({ origin: ORIGIN });
     buildMenu();
     createWindow();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

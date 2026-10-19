@@ -10,6 +10,12 @@
  * The same Mixer builds the graph for live playback and for offline bounces,
  * and nothing in it is random at run time, so an export is what was heard
  * and two exports of the same project match to far below audibility.
+ *
+ * In the desktop app the mixing can be handed to the audio host instead
+ * (daw/native.js): the tracks are still made here, but each one leaves by a
+ * "tap" after its compressor, and the host puts it through its plugins and
+ * does the fader, pan, sends, master and limiter, out through a sound card
+ * of its choosing. Everything that differs for that is marked "tap" below.
  */
 (function (global) {
   'use strict';
@@ -221,9 +227,10 @@
   }
 
   // ── Mixer: the audio graph for one context ───────────────────────────────
-  function Mixer(ctx, withMeters) {
+  function Mixer(ctx, withMeters, tap) {
     this.ctx = ctx;
     this.withMeters = withMeters;
+    this.tap = tap || null;          // set when the audio host is mixing
     this.strips = new Map();
     this.buffers = new Map();
 
@@ -242,6 +249,7 @@
     this.master.connect(this.limiter);
     this.limiter.connect(ctx.destination);
     this.masterMeter = withMeters ? this.analyser(this.limiter) : null;
+    this.clicks = tap ? tap.direct : this.limiter;     // where the metronome joins
 
     // Reverb: a generated room, darker as it decays.
     this.reverb = ctx.createConvolver();
@@ -299,7 +307,7 @@
       return f;
     };
     const strip = {
-      kind: track.kind, instrument: track.instrument, live: new Set(),
+      trackId: track.id, kind: track.kind, instrument: track.instrument, live: new Set(),
       input: ctx.createGain(),
       low: band('lowshelf', 220), mid: band('peaking', 1100), high: band('highshelf', 4200),
       comp: ctx.createDynamicsCompressor(),
@@ -311,8 +319,15 @@
     };
     strip.mid.Q.value = 0.8;
     strip.fader.gain.value = 0;
-    [strip.input, strip.low, strip.mid, strip.high, strip.comp, strip.fader, strip.pan]
-      .reduce((a, b) => { a.connect(b); return b; });
+    [strip.input, strip.low, strip.mid, strip.high, strip.comp].reduce((a, b) => { a.connect(b); return b; });
+    // Tapped, the strip's sound leaves here: its fader, pan and sends are the host's to do.
+    const out = this.tap ? this.tap.input(track.id) : null;
+    if (out) {
+      strip.comp.connect(out.node, 0, out.index);
+      return strip;
+    }
+    strip.comp.connect(strip.fader);
+    strip.fader.connect(strip.pan);
     strip.pan.connect(this.master);
     strip.pan.connect(strip.reverbSend);
     strip.pan.connect(strip.delaySend);
@@ -327,6 +342,7 @@
     [strip.input, strip.low, strip.mid, strip.high, strip.comp, strip.fader, strip.pan, strip.reverbSend, strip.delaySend]
       .forEach(n => n.disconnect());
     if (strip.meter) strip.meter.node.disconnect();
+    if (this.tap) this.tap.release(strip.trackId);
   };
 
   // Makes the graph match the project's tracks and mixer settings.
@@ -341,6 +357,7 @@
     this.project = project;
     set(this.master.gain, dbToGain(project.master));
     this.delay.delayTime.value = Math.min(1.9, (60 / project.tempo) * 0.75);
+    if (this.tap) this.tap.master(project, dbToGain(project.master));
 
     const alive = new Set(project.tracks.map(t => t.id));
     this.strips.forEach((strip, id) => {
@@ -366,7 +383,13 @@
       strip.comp.knee.value = track.fx.comp ? 8 : 0;
       set(strip.reverbSend.gain, track.fx.reverb);
       set(strip.delaySend.gain, track.fx.delay * 0.7);
+      if (this.tap) {
+        this.tap.strip(track.id, {
+          gain: silent ? 0 : dbToGain(track.volume), pan: track.pan, reverb: track.fx.reverb, echo: track.fx.delay * 0.7,
+        });
+      }
     });
+    if (this.tap) this.tap.plugins(project);
   };
 
   Mixer.prototype.setAudio = function (audioId, sampleRate, channels) {
@@ -378,6 +401,8 @@
   Mixer.prototype.note = function (trackId, midi, when, seconds, velocity) {
     const strip = this.strips.get(trackId);
     if (!strip || strip.kind === 'audio') return;
+    // A track with a plugin instrument on it is played by that, not by the voices here.
+    if (this.tap && this.tap.plays(trackId)) { this.tap.note(trackId, midi, when, seconds, velocity); return; }
     if (strip.kind === 'drums') drum(this, strip, midi, when, velocity);
     else (VOICES[strip.instrument] || VOICES.piano)(this, strip, hz(midi), when, seconds, velocity);
   };
@@ -430,6 +455,7 @@
   Mixer.prototype.cutAll = function () {
     const now = this.ctx.currentTime;
     this.strips.forEach(strip => this.cut(strip, now));
+    if (this.tap) this.tap.silence();
   };
 
   // ── Flattening a project into time-ordered events ────────────────────────
@@ -480,6 +506,9 @@
     this.input = null;               // the open input: { id, stream, source, fellBack }
     this.monitoring = false;         // whether the input is being passed to the output
     this.monitorGain = null;
+    this.native = null;              // the tap, while the audio host is mixing (daw/native.js)
+    this.nativeConfig = null;        // what the host was asked to open
+    this.onLost = null;              // called if the audio host stops while in use
   }
 
   Engine.prototype.ensure = function () {
@@ -487,14 +516,131 @@
     const Ctx = global.AudioContext || global.webkitAudioContext;
     this.ctx = new Ctx({ latencyHint: 'interactive' });
     this.mixer = new Mixer(this.ctx, true);
+    this.adopt();
+  };
+
+  // Gives a new mixer the recordings and the project, and starts the clock that schedules playback.
+  Engine.prototype.adopt = function () {
     this.audio.forEach((a, id) => this.mixer.setAudio(id, a.sampleRate, a.channels));
     if (this.project) this.mixer.sync(this.project, false);
+    if (this.clocked) return;
+    this.clocked = true;
     try {
       this.timer = new Worker(URL.createObjectURL(new Blob([TIMER_SOURCE], { type: 'text/javascript' })));
       this.timer.onmessage = () => this.pump();
     } catch (e) {
       this.timer = null;             // fall back to an ordinary interval
     }
+  };
+
+  // ── Handing the mixing to the audio host, and taking it back ─────────────
+  // Stops everything and lets go of the audio context, so that another can
+  // be made (at another sample rate, or with a tap).
+  Engine.prototype.shutDown = async function () {
+    if (this.recording) {
+      this.recording.countIn.forEach(click => click.disconnect());
+      this.recording = null;
+    }
+    if (this.playing) this.stop();
+    this.monitoring = false;
+    this.dropInput();
+    this.monitorGain = null;
+    this.recorderLoaded = false;
+    const ctx = this.ctx, tap = this.native;
+    this.ctx = null;
+    this.mixer = null;
+    this.native = null;
+    if (tap) {
+      await tap.rack.saveAll();                            // what was set in the plugins is not lost with them
+      tap.dispose();
+    }
+    if (ctx) { try { await ctx.close(); } catch (e) { /* closed already */ } }
+  };
+
+  // How many strips the host's desk needs: one for each track and one to spare.
+  function stripsFor(project) {
+    const tracks = project ? project.tracks.length : 0;
+    return tracks >= 32 ? 64 : tracks >= 16 ? 32 : 16;
+  }
+
+  // Opens a sound card in the audio host and sends the tracks there to be
+  // mixed. config: { api, device, useInput, input, sampleRate, bufferFrames,
+  // firstOutput, firstInput }. Resolves to what was opened. If the card will
+  // not open the promise rejects and the built-in engine is left in charge.
+  Engine.prototype.useNative = async function (config) {
+    const N = global.NativeAudio;
+    await N.connect();
+    await this.shutDown();
+    if (!this.watchingHost) {
+      this.watchingHost = true;
+      N.on('gone', () => this.lostHost());
+    }
+    const opened = await N.call('open', Object.assign({}, config, { strips: stripsFor(this.project) }));
+    const Ctx = global.AudioContext || global.webkitAudioContext;
+    let ctx;
+    // The page's own output is not wanted: its sound leaves by the tap. Where
+    // the browser allows a context with no output at all, that is what it gets.
+    try { ctx = new Ctx({ sampleRate: opened.sampleRate, latencyHint: 'interactive', sinkId: { type: 'none' } }); }
+    catch (e) { ctx = new Ctx({ sampleRate: opened.sampleRate, latencyHint: 'interactive' }); }
+    try {
+      const tap = await N.liveTap(ctx, opened);
+      const mixer = new Mixer(ctx, false, tap);
+      const room = await N.roomOf(mixer.reverb.buffer);
+      await N.call('reverb', room[0], room[1]);
+      this.ctx = ctx;
+      this.native = tap;
+      this.nativeConfig = config;
+      this.mixer = mixer;
+      this.adopt();
+      if (ctx.state !== 'running') await ctx.resume();
+      // The stream starts with the first block the tap sends on.
+      await Promise.race([tap.started, new Promise(resolve => setTimeout(resolve, 3000))]);
+    } catch (e) {
+      this.ctx = null;
+      this.mixer = null;
+      this.native = null;
+      try { await ctx.close(); } catch (closing) { /* closed already */ }
+      N.call('close').catch(() => { /* gone with the host */ });
+      throw e;
+    }
+    return opened;
+  };
+
+  // Back to mixing here, out through whatever the system plays through.
+  Engine.prototype.useBuiltIn = async function () {
+    const N = global.NativeAudio;
+    await this.shutDown();
+    this.nativeConfig = null;
+    if (N && N.connected()) await N.call('close').catch(() => { /* gone with the host */ });
+  };
+
+  Engine.prototype.usingNative = function () { return !!this.native; };
+
+  // The audio host stopped (a plugin crashed, most likely). The song goes on
+  // with the built-in engine; whoever is listening is told.
+  Engine.prototype.lostHost = function () {
+    if (!this.native) return;
+    const ctx = this.ctx;
+    if (this.playing) {
+      this.playing = false;
+      if (this.timer) this.timer.postMessage('stop'); else clearInterval(this.interval);
+    }
+    this.recording = null;
+    this.monitoring = false;
+    this.native.dispose();
+    this.native = null;
+    this.ctx = null;
+    this.mixer = null;
+    if (ctx) ctx.close().catch(() => { /* closed already */ });
+    if (this.onLost) this.onLost();
+  };
+
+  // A project that has outgrown the desk gets a bigger one.
+  Engine.prototype.growNative = function () {
+    if (!this.native || this.growing || !this.project || stripsFor(this.project) <= this.native.strips) return;
+    this.growing = true;
+    const done = () => { this.growing = false; };
+    this.useNative(this.nativeConfig).then(done, done);
   };
 
   // Seconds per beat where `beat` falls: the song may change tempo as it goes.
@@ -521,6 +667,7 @@
     this.project = project;
     this.flat = flatten(project);
     if (this.mixer) this.mixer.sync(project, true);
+    this.growNative();
     if (!this.playing) return;
     if (retimed) {
       // Re-anchor at the playhead so a tempo change takes effect at once.
@@ -631,8 +778,11 @@
   };
 
   Engine.prototype.isPlaying = function () { return this.playing; };
+  // Where the song is. Through the audio host the sound comes out a little
+  // after the page plays it, and this is where the listener is, not the page.
   Engine.prototype.position = function () {
-    return this.playing ? this.beatAt(this.ctx.currentTime) : this.paused;
+    if (!this.playing) return this.paused;
+    return this.beatAt(this.ctx.currentTime - (this.native ? this.native.heardAfter() : 0));
   };
 
   // Audio clips that are already under way at `beat` start part-way through.
@@ -674,7 +824,7 @@
   };
 
   Engine.prototype.sweepLater = function (ms) {
-    setTimeout(() => { if (this.mixer) this.mixer.sweep(this.ctx.currentTime); }, ms);
+    setTimeout(() => { if (this.mixer && this.ctx) this.mixer.sweep(this.ctx.currentTime); }, ms);
   };
 
   Engine.prototype.seek = function (beat) {
@@ -695,7 +845,7 @@
     g.gain.setValueAtTime(0.25, when);
     g.gain.setTargetAtTime(0, when, 0.012);
     o.connect(g);
-    g.connect(this.mixer.limiter);
+    g.connect(this.mixer.clicks);
     o.start(when);
     o.stop(when + 0.08);
     return o;
@@ -765,6 +915,7 @@
   Engine.prototype.levels = function () {
     const tracks = {};
     if (!this.mixer) return { master: -160, tracks };
+    if (this.native) return this.native.levels();
     const read = meter => {
       meter.node.getFloatTimeDomainData(meter.data);
       let peak = 0;
@@ -796,6 +947,7 @@
   // The audio inputs this computer offers, as [{ id, name }]. The system only
   // gives their real names once recording has been allowed.
   Engine.prototype.inputs = async function () {
+    if (this.native) return [];                            // the input is the sound card's own, chosen with the card
     const devices = await global.navigator.mediaDevices.enumerateDevices();
     return devices
       .filter(d => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
@@ -850,8 +1002,9 @@
   // Monitoring: the input is passed straight to the output so players can
   // hear themselves. It is never part of a bounce, and a take records the
   // input itself, not this copy of it.
-  Engine.prototype.setMonitor = async function (on) {
+  Engine.prototype.setMonitor = async function (on, trackId) {
     this.ensure();
+    if (this.native) return this.setNativeMonitor(on, trackId);
     if (!on) {
       if (this.monitoring && this.input) this.input.source.disconnect(this.monitorGain);
       this.monitoring = false;
@@ -871,6 +1024,28 @@
   };
   Engine.prototype.isMonitoring = function () { return this.monitoring; };
 
+  // Through the audio host the input is heard through a track's own strip,
+  // plugins and all, with only the card's delay: a guitar through an
+  // amplifier plugin can be played like that. `trackId` is that track; with
+  // none, a strip kept spare is used.
+  Engine.prototype.setNativeMonitor = async function (on, trackId) {
+    const N = global.NativeAudio, tap = this.native;
+    if (!on) {
+      await N.call('monitor', -1, 1);
+      this.monitoring = false;
+      return { fellBack: false };
+    }
+    if (!tap.opened.inputs) throw new Error('The sound card has no input open');
+    let strip = trackId == null ? null : tap.slotOf(trackId);
+    if (strip == null) {
+      strip = tap.spare;
+      await N.call('strip', strip, { active: true, gain: 1, pan: 0, reverb: 0, echo: 0 });
+    }
+    await N.call('monitor', strip, 1);
+    this.monitoring = true;
+    return { fellBack: false };
+  };
+
   // Opens the input, counts in one bar, then plays from the resting playhead
   // while capturing. Resolves once the input is open, to { fellBack }.
   Engine.prototype.startRecording = async function () {
@@ -878,6 +1053,7 @@
     if (this.recording) return { fellBack: false };
     if (this.ctx.state !== 'running') await this.ctx.resume();
     this.stop();
+    if (this.native) return this.startNativeRecording();
     const input = await this.openInput();
     if (!this.recorderLoaded) {
       await this.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([RECORDER_SOURCE], { type: 'text/javascript' })));
@@ -939,6 +1115,57 @@
     return { sampleRate: rec.sampleRate, channels, latency, startBeat: rec.fromBeat, beats: endsAt - rec.fromBeat };
   };
 
+  // Recording through the audio host: the card's input is kept by the host,
+  // which knows exactly which frame of the stream each sample arrived with.
+  Engine.prototype.startNativeRecording = async function () {
+    const N = global.NativeAudio, tap = this.native;
+    if (!tap.opened.inputs) throw new Error('The sound card has no input open');
+    await N.call('record', true);
+    const bar = P().positionAt(this.project, this.paused);
+    const every = this.spbAt(this.paused) * 4 / bar.den;
+    const first = this.ctx.currentTime + 0.12;
+    const countIn = [];
+    for (let i = 0; i < bar.num; i++) countIn.push(this.tick(first + i * every, i === 0));
+    const startTime = first + bar.num * every;
+    this.recording = { viaHost: true, countIn, startTime, fromBeat: this.paused, sampleRate: this.ctx.sampleRate };
+    await this.play(startTime);
+    return { fellBack: false };
+  };
+
+  // Stops recording and resolves to the take (see stopRecording), or null.
+  // Works whichever engine is recording.
+  Engine.prototype.finishTake = async function () {
+    const rec = this.recording;
+    if (!rec || !rec.viaHost) return this.stopRecording();
+    const N = global.NativeAudio, tap = this.native;
+    this.recording = null;
+    const endTime = this.ctx.currentTime;
+    this.stop();
+    this.paused = rec.fromBeat;
+    rec.countIn.forEach(click => click.disconnect());
+    let got = null;
+    try { got = await N.call('take'); } catch (e) { got = null; }
+    if (!got || !got.left || !got.left.length || !tap || tap.origin == null) return null;
+
+    const rate = rec.sampleRate;
+    const firstFrame = Math.round(rec.startTime * rate);
+    const total = Math.round(endTime * rate) - firstFrame;
+    if (total <= 0) return null;
+    // A sample that arrived while stream frame S was being mixed was played to
+    // what the player was hearing then: the stream as it was before the
+    // desk's delay, the card's way out and the card's way back in.
+    const status = N.status();
+    const behind = (status ? status.latency : 0) + tap.opened.outputLatency + tap.opened.inputLatency;
+    const shift = tap.origin + got.streamAt - behind - tap.match.strip.delay - firstFrame;
+    const channels = [new Float32Array(total), new Float32Array(total)];
+    [got.left, got.right].forEach((data, c) => {
+      const from = Math.max(0, -shift), to = Math.min(data.length, total - shift);
+      if (to > from) channels[c].set(data.subarray(from, to), shift + from);
+    });
+    const endsAt = P().secondsToBeat(this.project, P().beatToSeconds(this.project, rec.fromBeat) + total / rate);
+    return { sampleRate: rate, channels, latency: 0, startBeat: rec.fromBeat, beats: endsAt - rec.fromBeat, dropouts: got.dropouts || 0 };
+  };
+
   Engine.prototype.isRecording = function () { return !!this.recording; };
   // How long the take is so far; nothing during the count-in.
   Engine.prototype.recordedSeconds = function () {
@@ -950,6 +1177,8 @@
   // Resolves to { sampleRate, channels } ready for Wav.encode.
   async function render(project, audio, options) {
     options = options || {};
+    // While the audio host is mixing, a mixdown goes through it too: same desk, same plugins.
+    if (live && live.native && !options.builtIn) return renderThroughHost(project, audio, options, live.native);
     const sampleRate = options.sampleRate || 44100;
     const source = P().sanitize(JSON.parse(JSON.stringify(project)));
     if (options.onlyTrackId) {
@@ -995,6 +1224,105 @@
     const channels = [];
     for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
     return { sampleRate: buffer.sampleRate, channels };
+  }
+
+  // The same render with the audio host doing the mixing. The tracks are made
+  // here, off-line, a stretch at a time; each stretch is handed to the host,
+  // which puts it through the plugins and the desk and hands back the mix.
+  async function renderThroughHost(project, audio, options, liveTap) {
+    const N = global.NativeAudio;
+    const rate = liveTap.rate;
+    const source = P().sanitize(JSON.parse(JSON.stringify(project)));
+    if (options.onlyTrackId) {
+      source.tracks = source.tracks.filter(t => t.id === options.onlyTrackId);
+      source.tracks.forEach(t => { t.mute = false; t.solo = false; });
+    }
+    const timeOf = beat => P().beatToSeconds(source, beat);
+    const wanted = Math.ceil(Math.max(0.5, timeOf(P().endBeat(source)) + (options.tail == null ? 2.5 : options.tail)) * rate);
+    const strips = Math.max(1, source.tracks.length);
+    const rack = liveTap.rack;
+    await rack.work;                                       // plugins still loading are waited for
+    const hosts = entries => (entries || []).map(e => rack.loaded.get(e.id)).filter(p => p && p.hostId).map(p => p.hostId);
+
+    await N.call('mixBegin', { strips });
+    try {
+      const match = await N.measure(rate);
+      await N.call('mixMaster', N.masterFor(source, dbToGain(source.master), match));
+      for (let i = 0; i < source.tracks.length; i++) await N.call('mixChain', i, hosts(source.tracks[i].plugins));
+      // Plugins that take time make the whole mix late by so much: that much
+      // more is rendered, and cut from the front. (The limiter's own short
+      // delay stays, as it does when the mixing is done here.)
+      const late = Math.max(0, await N.call('mixChain', -1, options.onlyTrackId ? [] : hosts(source.masterPlugins)) - match.limiter.delay);
+      await N.call('mixTransport', { tempo: source.tempo, playing: true, position: 0, meterNum: source.meter.num, meterDen: source.meter.den });
+
+      const LUMP = N.MIX_FRAMES;
+      const frames = Math.ceil((wanted + late) / LUMP) * LUMP;
+      const Offline = global.OfflineAudioContext || global.webkitOfflineAudioContext;
+      const ctx = new Offline(1, frames, rate);
+      const tap = await N.mixTap(ctx, strips, rack);
+      const mixer = new Mixer(ctx, false, tap);
+      const sounds = new Map(audio || []);
+      for (const want of wantedFits(source).values()) {
+        const raw = sounds.get(want.audioId);
+        if (raw && !sounds.has(want.key)) {
+          sounds.set(want.key, { sampleRate: raw.sampleRate, channels: await global.Stretch.stretch(raw.channels, raw.sampleRate, want.rate) });
+        }
+      }
+      sounds.forEach((a, id) => mixer.setAudio(id, a.sampleRate, a.channels));
+      mixer.sync(source, false);
+      for (const [slot, settings] of tap.settings) await N.call('mixStrip', slot, settings);
+      const room = await N.roomOf(mixer.reverb.buffer);
+      await N.call('mixReverb', room[0], room[1]);
+
+      const flat = flatten(source);
+      flat.clips.forEach(c => mixer.playClip(c.trackId, c.clip, timeOf(c.beat), 0, timeOf(c.end) - timeOf(c.beat), P().clipRate(source, c.clip)));
+      let cursor = 0;
+      const scheduleUntil = time => {
+        const beat = P().secondsToBeat(source, time);
+        while (cursor < flat.notes.length && flat.notes[cursor].beat < beat) {
+          const ev = flat.notes[cursor++];
+          const starts = timeOf(ev.beat);
+          mixer.note(ev.trackId, ev.n, starts, timeOf(ev.beat + ev.d) - starts, ev.v);
+        }
+      };
+
+      const left = new Float32Array(frames), right = new Float32Array(frames);
+      let done = 0;
+      // Everything the tap has made up to `upTo` frames goes through the desk.
+      const pass = async upTo => {
+        for (let tries = 0; tap.received < upTo && tries < 5000; tries++) await new Promise(resolve => setTimeout(resolve, 1));
+        if (tap.received < upTo) throw new Error('The render stalled');
+        while (tap.notes.length) await N.call('mixNotes', tap.notes.splice(0, 2000));
+        const lump = tap.take();
+        if (!lump.frames) return;
+        const mixed = await N.call('mixProcess', lump.samples, lump.frames, lump.slots);
+        left.set(mixed.left, done);
+        right.set(mixed.right, done);
+        done += lump.frames;
+      };
+
+      const CHUNK = LUMP * Math.max(1, Math.round(2 * rate / LUMP));    // about two seconds, in whole lumps
+      let failed = null;
+      scheduleUntil(CHUNK / rate);
+      for (let f = CHUNK; f < frames; f += CHUNK) {
+        ctx.suspend(f / rate).then(async () => {
+          try {
+            mixer.sweep(f / rate);
+            scheduleUntil((f + CHUNK) / rate);
+            await pass(f);
+          } catch (e) {
+            failed = failed || e;
+          }
+          ctx.resume();
+        });
+      }
+      await ctx.startRendering();
+      if (failed) throw failed;
+      await pass(frames);
+      return { sampleRate: rate, channels: [left.slice(late, late + wanted), right.slice(late, late + wanted)] };
+    } finally {
+      await N.call('mixEnd').catch(() => { /* gone with the host */ });
+    }
   }
 
   let live = null;

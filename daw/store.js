@@ -1,22 +1,26 @@
 /* ChordPath — daw/store.js
- * Where DAW projects and recordings live: the app's own local database
- * (IndexedDB) on this computer. Projects are small JSON; recordings are kept
- * as raw samples so nothing is lost to compression.
+ * Where DAW projects, recordings and plugin settings live: the app's own
+ * local database (IndexedDB) on this computer. Projects are small JSON;
+ * recordings are kept as raw samples so nothing is lost to compression; a
+ * plugin's settings are kept as the bytes the plugin itself hands over.
  */
 (function (global) {
   'use strict';
 
   const DB_NAME = 'chordpath-daw';
+  const DB_VERSION = 2;              // 2 added the plugins store
   let dbPromise = null;
 
   function open() {
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
-      const req = global.indexedDB.open(DB_NAME, 1);
+      const req = global.indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = () => {
         const db = req.result;
-        db.createObjectStore('projects', { keyPath: 'id' });
-        db.createObjectStore('audio', { keyPath: 'id' }).createIndex('projectId', 'projectId');
+        const has = name => db.objectStoreNames.contains(name);
+        if (!has('projects')) db.createObjectStore('projects', { keyPath: 'id' });
+        if (!has('audio')) db.createObjectStore('audio', { keyPath: 'id' }).createIndex('projectId', 'projectId');
+        if (!has('plugins')) db.createObjectStore('plugins', { keyPath: 'id' }).createIndex('projectId', 'projectId');
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => { dbPromise = null; reject(req.error); };
@@ -48,16 +52,17 @@
   }
 
   function deleteProject(id) {
-    return run('projects', 'readwrite', store => store.delete(id)).then(() => pruneAudio(id, []));
+    return run('projects', 'readwrite', store => store.delete(id))
+      .then(() => Promise.all([pruneAudio(id, []), prunePlugins(id, [])]));
   }
 
-  // Deletes a project's recordings except those in keepIds, and resolves to
-  // how many went. Walks keys only, so no audio is loaded to do it.
-  function pruneAudio(projectId, keepIds) {
+  // Deletes what a project keeps in one store except the entries in keepIds,
+  // and resolves to how many went. Walks keys only, so nothing is loaded to do it.
+  function prune(storeName, projectId, keepIds) {
     const keep = new Set(keepIds);
     return open().then(db => new Promise((resolve, reject) => {
-      const tx = db.transaction('audio', 'readwrite');
-      const store = tx.objectStore('audio');
+      const tx = db.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
       const cursor = store.index('projectId').openKeyCursor(global.IDBKeyRange.only(projectId));
       let removed = 0;
       cursor.onsuccess = () => {
@@ -70,6 +75,8 @@
       tx.onerror = tx.onabort = () => reject(tx.error);
     }));
   }
+  function pruneAudio(projectId, keepIds) { return prune('audio', projectId, keepIds); }
+  function prunePlugins(projectId, keepIds) { return prune('plugins', projectId, keepIds); }
 
   // channels: Float32Array per channel at `sampleRate`.
   function putAudio(id, projectId, sampleRate, channels) {
@@ -84,5 +91,21 @@
     });
   }
 
-  global.DawStore = { saveProject, loadProject, deleteProject, putAudio, getAudio, pruneAudio };
+  // A plugin's settings, under the id the project knows the plugin by.
+  // state: Uint8Array, as the plugin gave it.
+  function putPluginState(id, projectId, state) {
+    return run('plugins', 'readwrite', store => store.put({ id, projectId, state }));
+  }
+
+  // Resolves to the bytes, or null when nothing has been saved for it.
+  function getPluginState(id) {
+    return run('plugins', 'readonly', store => store.get(id))
+      .then(row => (row && row.state instanceof Uint8Array && row.state.length ? row.state : null));
+  }
+
+  global.DawStore = {
+    saveProject, loadProject, deleteProject,
+    putAudio, getAudio, pruneAudio,
+    putPluginState, getPluginState, prunePlugins,
+  };
 })(typeof window !== 'undefined' ? window : globalThis);

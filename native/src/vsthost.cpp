@@ -150,6 +150,8 @@ struct Plugin::Impl : public IComponentHandler, public IPlugFrame {
 
   IPtr<IPlugView> view;
   HWND window = nullptr;
+  std::atomic<bool> windowOpen{false};
+  bool onTop = false;
 
   // ── What the plugin may ask of its host ──
   tresult PLUGIN_API beginEdit(ParamID) override { return kResultOk; }
@@ -263,6 +265,7 @@ struct Plugin::Impl : public IComponentHandler, public IPlugFrame {
     if (window) {
       HWND w = window;
       window = nullptr;
+      windowOpen.store(false);
       SetWindowLongPtrW(w, GWLP_USERDATA, 0);
       DestroyWindow(w);
     }
@@ -610,7 +613,12 @@ bool Plugin::hasEditor() const {
   return view && view->isPlatformTypeSupported(kPlatformTypeHWND) == kResultTrue;
 }
 
-bool Plugin::editorOpen() const { return impl->window != nullptr; }
+bool Plugin::editorOpen() const { return impl->windowOpen.load(); }
+
+void Plugin::setEditorOnTop(bool onTop) {
+  impl->onTop = onTop;
+  if (impl->window) SetWindowPos(impl->window, onTop ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
 
 void Plugin::editorSize(int& width, int& height) const {
   width = height = 0;
@@ -624,7 +632,11 @@ void Plugin::editorSize(int& width, int& height) const {
 bool Plugin::openEditor(const std::string& title, bool visible) {
   Impl& p = *impl;
   if (p.window) {
-    if (visible) { ShowWindow(p.window, SW_SHOWNORMAL); SetForegroundWindow(p.window); }
+    if (visible) {
+      ShowWindow(p.window, SW_SHOWNORMAL);
+      SetWindowPos(p.window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+      SetForegroundWindow(p.window);
+    }
     return true;
   }
   if (!p.controller) return false;
@@ -647,9 +659,10 @@ bool Plugin::openEditor(const std::string& title, bool visible) {
   const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | (resizable ? WS_THICKFRAME | WS_MAXIMIZEBOX : 0);
   ViewRect size(0, 0, 640, 400);
   p.view->getSize(&size);
-  p.window = CreateWindowExW(0, WINDOW_CLASS, widen(title.empty() ? p.desc.name : title).c_str(), style,
+  p.window = CreateWindowExW(p.onTop ? WS_EX_TOPMOST : 0, WINDOW_CLASS, widen(title.empty() ? p.desc.name : title).c_str(), style,
     CW_USEDEFAULT, CW_USEDEFAULT, 640, 400, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
   if (!p.window) { p.view = nullptr; return false; }
+  p.windowOpen.store(true);
   SetWindowLongPtrW(p.window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&p));
   p.fitWindow(size.getWidth(), size.getHeight());
 

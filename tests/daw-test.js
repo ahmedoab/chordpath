@@ -771,6 +771,91 @@ section('Tab from notes');
   check('bass clips stay on the three low strings', bassClips > 0 && bassLow === bassClips);
 }
 
+// ── Plugins on tracks ──────────────────────────────────────────────────────
+section('Plugins on tracks');
+{
+  const P = DawProject;
+  const NOVA = { path: 'C:\\Program Files\\Common Files\\VST3\\TDR Nova.vst3', uid: '0123456789ABCDEF0123456789ABCDEF', name: 'TDR Nova', vendor: 'Tokyo Dawn Labs', instrument: false };
+  const VERB = { path: 'C:\\Program Files\\Common Files\\VST3\\ValhallaSupermassive.vst3', uid: 'ABCDEF0123456789ABCDEF0123456789', name: 'ValhallaSupermassive', vendor: 'Valhalla DSP', instrument: false };
+  const SURGE = { path: 'C:\\Program Files\\Common Files\\VST3\\Surge Synth Team\\Surge XT.vst3', uid: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', name: 'Surge XT', vendor: 'Surge Synth Team', instrument: true };
+
+  const project = P.createProject({ title: 'Plugged' });
+  const keys = P.addTrack(project, 'instrument', { name: 'Keys' });
+  const take = P.addTrack(project, 'audio', { name: 'Guitar' });
+  eq('a new track and a new project start with no plugins', [keys.plugins, take.plugins, project.masterPlugins], [[], [], []]);
+
+  const eqd = P.addPlugin(project, take.id, NOVA);
+  check('a plugin is added to a track with what is needed to find it again',
+    !!eqd && /^p/.test(eqd.id) && eqd.path === NOVA.path && eqd.uid === NOVA.uid && eqd.name === 'TDR Nova' && eqd.vendor === 'Tokyo Dawn Labs' &&
+    eqd.instrument === false && eqd.bypass === false && take.plugins.length === 1);
+  const verb = P.addPlugin(project, take.id, VERB);
+  eq('the next one goes after it', take.plugins.map(q => q.name), ['TDR Nova', 'ValhallaSupermassive']);
+  check('the same plugin can be used twice, as two of it', P.addPlugin(project, keys.id, NOVA).id !== eqd.id);
+  const onMaster = P.addPlugin(project, null, VERB);
+  check('the master takes plugins too', !!onMaster && project.masterPlugins.length === 1);
+
+  check('an instrument cannot go on an audio track', P.addPlugin(project, take.id, SURGE) === null && take.plugins.length === 2);
+  check('nor on the master', P.addPlugin(project, null, SURGE) === null && project.masterPlugins.length === 1);
+  const synth = P.addPlugin(project, keys.id, SURGE);
+  eq('on a note track it goes first, ahead of the effects', keys.plugins.map(q => q.name), ['Surge XT', 'TDR Nova']);
+  check('and is what plays the track', P.instrumentPlugin(keys) === synth && P.instrumentPlugin(take) === null);
+  const other = P.addPlugin(project, keys.id, Object.assign({}, SURGE, { name: 'Another synth', uid: 'B'.repeat(32) }));
+  eq('a second instrument takes the place of the first', keys.plugins.map(q => q.name), ['Another synth', 'TDR Nova']);
+  check('each plugin on the project has a name of its own', new Set(P.pluginIds(project)).size === 5 && P.pluginIds(project).includes(other.id));
+
+  check('something that is not a plugin file is refused', P.addPlugin(project, take.id, { path: 'C:\\Windows\\notepad.exe', uid: NOVA.uid, name: 'x' }) === null);
+  check('so is one without the number that says which plugin in the file', P.addPlugin(project, take.id, { path: NOVA.path, uid: 'nope', name: 'x' }) === null);
+  check('and one for a track that is not there', P.addPlugin(project, 'no-such-track', NOVA) === null);
+
+  const found = P.findPlugin(project, verb.id);
+  check('a plugin can be found again, with the track it is on', found.plugin === verb && found.track === take && found.list === take.plugins);
+  check('one on the master says so', P.findPlugin(project, onMaster.id).track === null && P.findPlugin(project, 'nothing') === null);
+
+  check('a plugin can be moved earlier', P.movePlugin(project, verb.id, -1) === true);
+  eq('which changes the order the sound passes through them', take.plugins.map(q => q.name), ['ValhallaSupermassive', 'TDR Nova']);
+  check('not past the ends', P.movePlugin(project, verb.id, -1) === false && P.movePlugin(project, eqd.id, 1) === false);
+  check('an instrument stays first: nothing moves ahead of it, and it does not move', P.movePlugin(project, keys.plugins[1].id, -1) === false && P.movePlugin(project, other.id, 1) === false);
+
+  for (let i = 0; i < 20; i++) P.addPlugin(project, take.id, NOVA);
+  check(`a track holds at most ${P.LIMITS.plugins} plugins`, P.LIMITS.plugins === 8 && take.plugins.length === 8);
+
+  // Saving and loading.
+  verb.bypass = true;
+  const again = P.deserialize(P.serialize(project)).project;
+  eq('plugins survive saving and loading, in order', again.tracks[1].plugins.map(q => [q.id, q.name, q.bypass]), take.plugins.map(q => [q.id, q.name, q.bypass]));
+  eq('and so do those on the master', again.masterPlugins.map(q => q.name), ['ValhallaSupermassive']);
+  const dirty = JSON.parse(JSON.stringify(project));
+  dirty.tracks[1].plugins = [
+    { id: 'p1', path: NOVA.path, uid: NOVA.uid, name: 'Kept', vendor: 7, bypass: 'yes', extra: 'dropped' },
+    { id: 'p1', path: NOVA.path, uid: NOVA.uid, name: 'Same id' },
+    { id: 'p3', path: 'relative.vst3', uid: NOVA.uid, name: 'No folder' },
+    { id: 'p4', path: NOVA.path, uid: 'short', name: 'Bad uid' },
+    { id: 'p5', path: SURGE.path, uid: SURGE.uid, name: 'Instrument on audio', instrument: true },
+    'nonsense', null,
+  ];
+  dirty.tracks[0].plugins = [
+    { id: 'q1', path: NOVA.path, uid: NOVA.uid, name: 'Effect' },
+    { id: 'q2', path: SURGE.path, uid: SURGE.uid, name: 'Late instrument', instrument: true },
+    { id: 'q3', path: SURGE.path, uid: SURGE.uid, name: 'Second instrument', instrument: true },
+  ];
+  dirty.masterPlugins = 'none';
+  const cleaned = P.sanitize(dirty);
+  const kept = cleaned.tracks[1].plugins;
+  eq('a damaged list is cleaned: only whole plugins stay, as plain values', kept.map(q => [q.name, q.vendor, q.bypass, 'extra' in q]), [['Kept', '', false, false], ['Same id', '', false, false]]);
+  check('and no two share a name', kept[0].id !== kept[1].id);
+  eq('an instrument is put first, and there is only one', cleaned.tracks[0].plugins.map(q => q.name), ['Late instrument', 'Effect']);
+  eq('a missing list is an empty one', cleaned.masterPlugins, []);
+  eq('a project from before plugins opens with none', P.sanitize({ tracks: [{ kind: 'audio', name: 'Old' }] }).tracks[0].plugins, []);
+
+  // Undo knows about them.
+  const history = new P.History(10);
+  history.push(project);
+  check('a plugin can be removed', P.removePlugin(project, verb.id) === true && P.findPlugin(project, verb.id) === null && P.removePlugin(project, verb.id) === false);
+  history.push(project);
+  const undone = P.sanitize(history.undo());
+  check('and undo puts it back, the very same one', undone.tracks[1].plugins.some(q => q.id === verb.id));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) {
   console.error('\nFailed checks:');

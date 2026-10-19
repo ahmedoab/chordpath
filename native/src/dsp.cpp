@@ -153,6 +153,7 @@ Echo::Echo(double sampleRate, double maxSeconds) : rate(sampleRate) {
 
 void Echo::clear() {
   std::fill(line.begin(), line.end(), 0.0f);
+  std::fill(fed, fed + BLOCK, 0.0f);
   x1 = x2 = y1 = y2 = 0;
 }
 
@@ -185,7 +186,9 @@ void Echo::process(const float* in, float* out, unsigned frames) {
     x2 = x1; x1 = delayed;
     y2 = y1; y1 = y;
 
-    line[writeAt] = in[i] + feedback * (float)y;
+    line[writeAt] = in[i] + feedback * fed[fedAt];
+    fed[fedAt] = (float)y;
+    fedAt = fedAt + 1 < BLOCK ? fedAt + 1 : 0;
     writeAt = writeAt + 1 < size ? writeAt + 1 : 0;
     out[i] = (float)y;
   }

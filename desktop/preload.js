@@ -24,4 +24,19 @@ contextBridge.exposeInMainWorld('Desktop', {
   lookup(kind, words) {
     return ipcRenderer.invoke('lookup', { kind: String(kind), words: String(words) });
   },
+  // The audio host: the separate program that holds the sound card and the
+  // plugins. connect() resolves to { ok, error }; when it is ok the page is
+  // handed its channel to the host in a window message, { chordpath: 'audio-ports' }.
+  audio: {
+    info() { return ipcRenderer.invoke('audio-info'); },
+    connect() { return ipcRenderer.invoke('audio-connect'); },
+    // The plugins installed here: { plugins: [{ path, uid, name, vendor, category, instrument }], failed: [{ name, error }] }.
+    plugins(rescan) { return ipcRenderer.invoke('audio-plugins', { rescan: rescan === true }); },
+    onGone(handler) { ipcRenderer.on('audio-gone', () => handler()); },
+  },
+});
+
+// Channels cannot be returned from a call, only posted, so they reach the page this way.
+ipcRenderer.on('audio-ports', event => {
+  window.postMessage({ chordpath: 'audio-ports' }, '*', event.ports);
 });

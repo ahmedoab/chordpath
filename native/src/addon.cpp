@@ -136,6 +136,34 @@ cp::Transport transportFrom(const Napi::Object& o) {
 // ── Plugin ──────────────────────────────────────────────────────────────────
 using PluginPtr = std::shared_ptr<cp::Plugin>;
 
+struct PluginFacts {
+  int inputs = 0, outputs = 0, latency = 0;
+  double tail = 0;
+  bool editor = false;
+};
+
+struct Loaded {
+  PluginPtr plugin;
+  PluginFacts facts;
+};
+
+PluginFacts factsOf(cp::Plugin& p) {
+  return PluginFacts{p.inputChannels(), p.outputChannels(), p.latencySamples(), p.tailSeconds(), p.hasEditor()};
+}
+
+Napi::Object describe(Napi::Env env, const cp::PluginDescription& d);
+
+Napi::Object factsObject(Napi::Env env, cp::Plugin& p, const PluginFacts& f) {
+  Napi::Object o = describe(env, p.description());
+  o.Set("inputs", f.inputs);
+  o.Set("outputs", f.outputs);
+  o.Set("latency", f.latency);
+  o.Set("tail", f.tail);
+  o.Set("hasEditor", f.editor);
+  o.Set("bypassed", p.bypassed());
+  return o;
+}
+
 class PluginWrap : public Napi::ObjectWrap<PluginWrap> {
  public:
   static Napi::FunctionReference constructor;
@@ -165,6 +193,8 @@ class PluginWrap : public Napi::ObjectWrap<PluginWrap> {
       InstanceMethod("openEditor", &PluginWrap::openEditor),
       InstanceMethod("closeEditor", &PluginWrap::closeEditor),
       InstanceMethod("editor", &PluginWrap::editor),
+      InstanceMethod("setEditorOnTop", &PluginWrap::setEditorOnTop),
+      InstanceMethod("refresh", &PluginWrap::refresh),
       InstanceMethod("changes", &PluginWrap::changes),
       InstanceMethod("dispose", &PluginWrap::dispose),
     });
@@ -187,13 +217,19 @@ class PluginWrap : public Napi::ObjectWrap<PluginWrap> {
     const int block = (int)numberIn(o, "blockSize", 512);
     if (path.empty()) throw Napi::TypeError::New(env, "path must be text");
     if (!(rate >= 8000 && rate <= 384000)) throw Napi::RangeError::New(env, "sampleRate is out of range");
-    return hostLater<PluginPtr>(env,
+    return hostLater<Loaded>(env,
       [path, uid, rate, block] {
+        Loaded made;
         // Whoever lets go of it last, it is the host thread that takes it apart.
-        return PluginPtr(cp::Plugin::load(path, uid, rate, block).release(), [](cp::Plugin* p) { cp::postToHost([p] { delete p; }); });
+        made.plugin = PluginPtr(cp::Plugin::load(path, uid, rate, block).release(), [](cp::Plugin* p) { cp::postToHost([p] { delete p; }); });
+        made.facts = factsOf(*made.plugin);
+        return made;
       },
-      [](Napi::Env env, PluginPtr& loaded) -> Napi::Value {
-        return constructor.New({Napi::External<PluginPtr>::New(env, &loaded)});
+      [](Napi::Env env, Loaded& made) -> Napi::Value {
+        Napi::Object wrapped = constructor.New({Napi::External<PluginPtr>::New(env, &made.plugin)});
+        // What it said about itself as it was loaded: reading this later costs the host thread nothing.
+        wrapped.Set("about", factsObject(env, *made.plugin, made.facts));
+        return wrapped;
       });
   }
 
@@ -209,16 +245,16 @@ class PluginWrap : public Napi::ObjectWrap<PluginWrap> {
   Napi::Value info(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     const PluginPtr p = live(info);
-    struct Facts { int inputs, outputs, latency; double tail; bool editor; };
-    const Facts f = hostNow(env, [&p] { return Facts{p->inputChannels(), p->outputChannels(), p->latencySamples(), p->tailSeconds(), p->hasEditor()}; });
-    Napi::Object o = describe(env, p->description());
-    o.Set("inputs", f.inputs);
-    o.Set("outputs", f.outputs);
-    o.Set("latency", f.latency);
-    o.Set("tail", f.tail);
-    o.Set("hasEditor", f.editor);
-    o.Set("bypassed", p->bypassed());
-    return o;
+    const PluginFacts f = hostNow(env, [&p] { return factsOf(*p); });
+    return factsObject(env, *p, f);
+  }
+
+  // refresh() → Promise of the same facts, asked for without waiting on the host thread.
+  Napi::Value refresh(const Napi::CallbackInfo& info) {
+    const PluginPtr p = live(info);
+    return hostLater<PluginFacts>(info.Env(),
+      [p] { return factsOf(*p); },
+      [p](Napi::Env env, PluginFacts& f) -> Napi::Value { return factsObject(env, *p, f); });
   }
 
   Napi::Value parameters(const Napi::CallbackInfo& info) {
@@ -346,13 +382,22 @@ class PluginWrap : public Napi::ObjectWrap<PluginWrap> {
     return o;
   }
 
-  // changes() → { edited, latency }: what the plugin has done of its own accord since last asked.
+  // changes() → { edited, latency, editorOpen }: what the plugin has done of its
+  // own accord since last asked, and whether its window is up. Never waits.
   Napi::Value changes(const Napi::CallbackInfo& info) {
     const PluginPtr p = live(info);
     Napi::Object o = Napi::Object::New(info.Env());
     o.Set("edited", p->takeEdited());
     o.Set("latency", p->takeLatencyChanged());
+    o.Set("editorOpen", p->editorOpen());
     return o;
+  }
+
+  // setEditorOnTop(onTop): keeps the window above others, or not. Does not wait.
+  void setEditorOnTop(const Napi::CallbackInfo& info) {
+    const PluginPtr p = live(info);
+    const bool onTop = info.Length() > 0 && info[0].ToBoolean().Value();
+    cp::postToHost([p, onTop] { p->setEditorOnTop(onTop); });
   }
 
   void dispose(const Napi::CallbackInfo&) { plugin.reset(); }

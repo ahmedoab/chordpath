@@ -336,12 +336,16 @@ async function desk({ novaPath, surgePath }) {
   const clap = new Float32Array(SR);
   clap[10] = 0.5;
   out = d.process(lump([[clap, clap]]), SR, [0]);
-  const firstEcho = rms(out.left, 12000, 12100), secondEcho = rms(out.left, 24000, 24100);
+  // The browser feeds an echo back round its loop a block of 128 frames late, so each repeat after the first comes
+  // that much later than the delay time alone would put it; the desk does the same, to sound the same.
+  const firstEcho = rms(out.left, 12000, 12100), secondEcho = rms(out.left, 24128, 24228);
+  const secondAt = peakAt(out.left.subarray(23000, 26000)) + 23000;
   // Each repeat has been through the loop's gain (0.34) and its low-pass once more; the filter's small bump at its
   // corner (half a decibel) is the most it can add back.
   check(`an echo repeats at the time set, each one quieter and duller (${firstEcho.toFixed(4)} then ${secondEcho.toFixed(4)})`,
     out.left[10] === 0.5 && Math.abs(peakAt(out.left.subarray(11000, 13000)) + 11000 - 12010) <= 6 &&
     secondEcho < firstEcho * 0.34 * 1.06 && secondEcho > firstEcho * 0.34 * 0.5 && rms(out.left, 1000, 11000) < 1e-6);
+  check(`and the second repeat comes a block later than twice the delay, as in the browser (at ${secondAt})`, Math.abs(secondAt - (24010 + 128)) <= 8);
 
   // ── Limiter ──
   d = make(1);
@@ -491,6 +495,8 @@ async function card({ surgePath }) {
   const collector = setInterval(collect, 100);
   await feedFor(io, 1500, [0], next);
   clearInterval(collector);
+  // Levels are the highest since they were last read, and topping the stream up reads them: give them a moment.
+  await wait(60);
   const s = io.status();
   check(`the card asks for blocks steadily and is never kept waiting (${s.blocks} blocks, ${s.underruns} dropouts, ${(s.load * 100).toFixed(1)}% of its time used)`,
     s.open && s.flowing && s.blocks > 200 && s.underruns === 0 && s.lost === 0 && s.idleSeconds < 0.2);

@@ -12,7 +12,7 @@
       "include_dirs": ["deps/rtaudio", "deps/rtaudio/include"],
       "defines": ["__WINDOWS_WASAPI__", "NOMINMAX", "_CRT_SECURE_NO_WARNINGS"],
       "msvs_settings": {
-        "VCCLCompilerTool": { "ExceptionHandling": 1, "AdditionalOptions": ["/std:c++17"], "WarningLevel": 1 }
+        "VCCLCompilerTool": { "ExceptionHandling": 1, "AdditionalOptions": ["/std:c++17"], "WarningLevel": 1, "DebugInformationFormat": 0 }
       }
     },
     {
@@ -81,8 +81,10 @@
         "VCCLCompilerTool": {
           "ExceptionHandling": 1,
           "AdditionalOptions": ["/std:c++17", "/utf-8", "/bigobj"],
-          "WarningLevel": 2
-        }
+          "WarningLevel": 2,
+          "DebugInformationFormat": 0
+        },
+        "VCLinkerTool": { "GenerateDebugInformation": "false" }
       },
       "libraries": ["ole32.lib", "shell32.lib", "user32.lib", "gdi32.lib", "winmm.lib", "ksuser.lib", "mfplat.lib", "mfuuid.lib", "wmcodecdspuuid.lib", "advapi32.lib"]
     }

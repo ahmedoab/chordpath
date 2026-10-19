@@ -103,8 +103,10 @@ class Plugin {
 
   bool openEditor(const std::string& title, bool visible);
   void closeEditor();
-  bool editorOpen() const;
+  bool editorOpen() const;        // any thread
   void editorSize(int& width, int& height) const;
+  // Keeps the window above other windows, or lets it take its turn again.
+  void setEditorOnTop(bool onTop);
 
  private:
   Plugin();
