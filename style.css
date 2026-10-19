@@ -950,6 +950,62 @@ button.small { font-size: 0.72rem; padding: 0.2rem 0.5rem; }
 .wz-sec-chords { font-family: var(--font-mono); font-size: 0.78rem; flex: 1; }
 .wz-section-row .ghost.small { margin-left: auto; }
 
+/* Starting a song: the writer's own choices, key first. */
+.start .start-block { margin-top: 1.3rem; }
+.start .start-block > h4, .start summary h4 { margin-bottom: 0.45rem; }
+.start-tonics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.35rem; max-width: 640px; }
+.start-tonic, .start-meter {
+  font: inherit; font-size: 0.86rem; font-weight: 600; padding: 0.55rem 0.3rem;
+  background: var(--surface); color: var(--ink-2); border: 1px solid var(--line); border-radius: var(--radius-s); cursor: pointer;
+}
+.start-tonic:hover, .start-meter:hover { border-color: var(--line-2); color: var(--ink); background: var(--surface); }
+.start-tonic.chosen, .start-meter.chosen { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.start-meters { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.start-meter { min-width: 3.4rem; font-family: var(--font-mono); }
+.start-row { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; margin-top: 0.55rem; }
+.start-row select { width: auto; }
+.start-key-info { margin-top: 0.7rem; padding: 0.7rem 0.85rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); max-width: 640px; }
+.start-key-info p { margin: 0 0 0.45rem; font-size: 0.86rem; }
+.start-chords { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.45rem; }
+.start-chord { display: inline-flex; flex-direction: column; align-items: center; min-width: 3rem; padding: 0.3rem 0.45rem; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); }
+.start-chord .name { font-weight: 600; font-size: 0.88rem; }
+.start-chord .roman { font-family: var(--font-mono); font-size: 0.68rem; color: var(--accent); }
+.start-wait { margin-top: 0.6rem; }
+.start-feel { margin: 0.55rem 0 0.4rem; font-size: 0.84rem; max-width: 640px; line-height: 1.45; }
+.start-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.2rem; max-width: 760px; }
+.start-two input[type="text"] { width: 100%; }
+.start-tempos { display: inline-flex; gap: 0.25rem; flex-wrap: wrap; }
+.start-feeling summary { cursor: pointer; list-style: none; }
+.start-feeling summary::-webkit-details-marker { display: none; }
+.start-feelings { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.chip.chosen { background: var(--accent-2); border-color: var(--accent); color: var(--ink); }
+@media (max-width: 720px) {
+  .start-tonics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .start-two { grid-template-columns: 1fr; }
+}
+
+/* Ideas: things to try, heard first and used only when chosen. */
+.pane-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; gap: 2px; }
+.pane-switch button { font: inherit; font-size: 0.74rem; font-weight: 600; padding: 0.22rem 0.75rem; border: 0; border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; }
+.pane-switch button.active { background: var(--surface-2); color: var(--ink); }
+.ideas { display: flex; flex-direction: column; gap: 1rem; overflow: auto; min-height: 0; padding-right: 0.2rem; }
+.idea-group > h4 { display: flex; align-items: baseline; gap: 0.5rem; }
+.idea-group > h4 .meta { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.idea-list { display: flex; flex-direction: column; gap: 0.35rem; }
+.idea {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.2rem 0.6rem; align-items: center;
+  padding: 0.5rem 0.65rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s);
+}
+.idea.current { border-color: var(--accent); background: var(--accent-2); }
+.idea-name { font-weight: 600; font-size: 0.84rem; color: var(--ink); }
+.idea-tip { grid-column: 1 / -1; font-size: 0.74rem; color: var(--ink-2); line-height: 1.4; }
+.idea-chart { grid-column: 1 / -1; margin: 0.2rem 0 0; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.35; color: var(--ink-2); white-space: pre; overflow-x: auto; }
+.idea-chords { font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink-2); }
+.idea-actions { display: flex; gap: 0.3rem; }
+.idea-actions button { font-size: 0.74rem; padding: 0.22rem 0.6rem; }
+.meter-pick { display: flex; align-items: center; gap: 0.4rem; }
+.meter-pick select { width: auto; font-family: var(--font-mono); }
+
 /* ── Overview ── */
 .overview { max-width: 1100px; margin: 0 auto; }
 .ov-head { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }

@@ -189,6 +189,9 @@
     opts = opts || {};
     pattern = pattern || {};
     const beatsPerChord = opts.beatsPerChord || 4;
+    // Patterns are written for a chord of four beats; under a shorter one
+    // (a bar of 3/4 or 6/8) the same shape is squeezed to fit it.
+    const fit = Math.min(1, beatsPerChord / 4);
     const preferFlats = S.FLAT_KEYS.has(key) || key.includes('b');
     const scalePcs = makeScalePcs(scaleId, key);
     const range = pattern.range || [60, 76];
@@ -216,8 +219,8 @@
         out.push({
           midi,
           name: midiToName(midi, preferFlats),
-          beatStart: ci * beatsPerChord + cell,
-          beats: durations[j] || 0.5,
+          beatStart: ci * beatsPerChord + cell * fit,
+          beats: (durations[j] || 0.5) * fit,
           layer: 'vocal',
         });
         lastMidi = midi;
@@ -245,6 +248,7 @@
     pattern = pattern || {};
     if (!pattern || pattern.type === 'none') return [];
     const beatsPerChord = opts.beatsPerChord || 4;
+    const fit = Math.min(1, beatsPerChord / 4);
     const preferFlats = S.FLAT_KEYS.has(key) || key.includes('b');
     const scalePcs = makeScalePcs(scaleId, key);
     const out = [];
@@ -272,8 +276,8 @@
         cells.forEach(cell => out.push({
           midi,
           name: midiToName(midi, preferFlats),
-          beatStart: ci * beatsPerChord + cell,
-          beats: 0.65,
+          beatStart: ci * beatsPerChord + cell * fit,
+          beats: 0.65 * fit,
           layer: 'under',
         }));
       });
@@ -290,8 +294,8 @@
           out.push({
             midi: shifted,
             name: midiToName(shifted, preferFlats),
-            beatStart: ci * beatsPerChord + cell,
-            beats: 0.6,
+            beatStart: ci * beatsPerChord + cell * fit,
+            beats: 0.6 * fit,
             layer: 'under',
           });
         });
@@ -308,8 +312,8 @@
           out.push({
             midi,
             name: midiToName(midi, preferFlats),
-            beatStart: ci * beatsPerChord + cell,
-            beats: 0.8,
+            beatStart: ci * beatsPerChord + cell * fit,
+            beats: 0.8 * fit,
             layer: 'under',
           });
         });

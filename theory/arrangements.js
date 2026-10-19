@@ -441,22 +441,72 @@
     };
   }
 
-  function makePlaybackPattern(rhythmId, drumId) {
-    const rhythm = byId(RHYTHMS, rhythmId);
-    const drums = byId(DRUMS, drumId);
+  // What a section plays: its rhythm and drums, in its time signature.
+  //
+  // In 4/4 the style rhythms above play as they always have; a rhythm or
+  // groove written as a chart (theory/meters.js) plays as its chart. Any other
+  // time plays charts written for it: a 4/4 pattern asked to play in 3/4 gives
+  // way to one made for 3/4. No rhythm chosen means plain chords; no drums
+  // chosen means no drums.
+  function makePlaybackPattern(rhythmId, drumId, meter) {
+    const Mt = global.Meters;
+    const four = !meter || !Mt || Mt.id(meter) === '4/4';
+    const exact = (list, wanted) => (wanted ? list.find(item => item.id === wanted) || null : null);
+    const styleRhythm = exact(RHYTHMS, rhythmId);
+    const styleDrums = exact(DRUMS, drumId);
+    const chartRhythm = Mt ? Mt.findRhythm(rhythmId, meter || '4/4') : null;
+    const chartGroove = Mt ? Mt.findGroove(drumId, meter || '4/4') : null;
+    const fits = item => item && Mt && item.meter === Mt.id(meter || '4/4');
+    const lanes = groove => ({
+      kick: Mt.laneSteps(groove.kick), snare: Mt.laneSteps(groove.snare),
+      hhClosed: Mt.laneSteps(groove.hat), hhOpen: Mt.laneSteps(groove.open),
+    });
+    const none = { kick: [], snare: [], hhClosed: [], hhOpen: [] };
+
+    if (four && !fits(chartRhythm)) {
+      const kit = fits(chartGroove) ? lanes(chartGroove) : styleDrums ? {
+        kick: styleDrums.kick.slice(), snare: styleDrums.snare.slice(),
+        hhClosed: styleDrums.hhClosed.slice(), hhOpen: styleDrums.hhOpen.slice(),
+      } : none;
+      return {
+        drums: kit,
+        bass: styleRhythm ? styleRhythm.bass : 'root',
+        chords: styleRhythm ? styleRhythm.chords : 'block',
+        swing: styleRhythm && styleRhythm.swing ? styleRhythm.swing : 0,
+        human: styleDrums && styleDrums.human != null ? styleDrums.human : 8,
+        rhythm: styleRhythm,
+        drum: styleDrums || (fits(chartGroove) ? chartGroove : null),
+      };
+    }
+
+    // A chart: one bar of strokes, bass and drums, repeated through the section.
+    const key = Mt.id(meter || '4/4');
+    // No rhythm chosen: the chords held where each beat starts. One chosen for another time: this time's plainest strum.
+    const rhythm = fits(chartRhythm) ? chartRhythm
+      : rhythmId ? Mt.findRhythm(Mt.defaultRhythm(key), key) : Mt.styleChart(key, 'block');
+    let kit = none, drum = null;
+    if (fits(chartGroove)) { kit = lanes(chartGroove); drum = chartGroove; }
+    else if (key === '4/4' && styleDrums) {
+      kit = { kick: styleDrums.kick.slice(), snare: styleDrums.snare.slice(), hhClosed: styleDrums.hhClosed.slice(), hhOpen: styleDrums.hhOpen.slice() };
+      drum = styleDrums;
+    } else if (drumId) {
+      // Drums were chosen, but for another time: the plainest groove of this one stands in.
+      drum = Mt.findGroove(Mt.defaultGroove(key), key);
+      kit = lanes(drum);
+    }
     return {
-      drums: {
-        kick: (drums && drums.kick || []).slice(),
-        snare: (drums && drums.snare || []).slice(),
-        hhClosed: (drums && drums.hhClosed || []).slice(),
-        hhOpen: (drums && drums.hhOpen || []).slice(),
+      steps: {
+        meter: key, length: Mt.stepsPerBar(key), chords: rhythm.chords, bass: rhythm.bass,
+        accents: drum && drum.kick && typeof drum.kick === 'string'
+          ? Mt.laneAccents(drum.kick).concat(Mt.laneAccents(drum.snare)) : [],
       },
-      bass: rhythm ? rhythm.bass : 'root',
-      chords: rhythm ? rhythm.chords : 'block',
-      swing: rhythm && rhythm.swing ? rhythm.swing : 0,
-      human: drums && drums.human != null ? drums.human : 8,
+      drums: kit,
+      bass: 'chart',
+      chords: 'chart',
+      swing: 0,
+      human: drum && drum.human != null ? drum.human : 6,
       rhythm,
-      drum: drums,
+      drum,
     };
   }
 

@@ -342,14 +342,18 @@
     });
     project.markers = laid.sections.map(sec => ({ beat: sec.start, name: sec.name }));
     if (laid.sections.length) project.loop.end = laid.sections[0].beats;
-    // A section with a tempo of its own becomes a tempo change where it starts.
+    // A section with a tempo or a time signature of its own is a change where it starts.
     let tempo = project.tempo;
+    let meter = createMeter(song.meter);
+    project.meter = meter;
     laid.sections.forEach(sec => {
       const wanted = Math.round(num(sec.tempo, 40, 240, tempo));
-      if (wanted === tempo) return;
+      const time = createMeter(sec.meter);
+      if (wanted === tempo && time.num === meter.num && time.den === meter.den) return;
       tempo = wanted;
-      if (sec.start > 0) project.changes.push({ beat: sec.start, tempo, num: 4, den: 4 });
-      else project.tempo = tempo;
+      meter = time;
+      if (sec.start > 0) project.changes.push({ beat: sec.start, tempo, num: time.num, den: time.den });
+      else { project.tempo = tempo; project.meter = time; }
     });
     return project;
   }

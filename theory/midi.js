@@ -35,6 +35,16 @@
   Buf.prototype.bytesArr = function () { return this.bytes.slice(); };
 
   // ── Build a chord progression as MIDI events ─────────────────────────────
+  // The four bytes of a MIDI time signature: beats, the beat's note as a
+  // power of two, MIDI clocks per metronome click (a dotted quarter in 6/8,
+  // 9/8 and 12/8), and 32nds per quarter.
+  function timeSignatureBytes(meter) {
+    const m = meter && Number.isInteger(meter.num) && [2, 4, 8, 16].includes(meter.den) ? meter : { num: 4, den: 4 };
+    const compound = m.den === 8 && m.num % 3 === 0 && m.num >= 6;
+    const clocks = compound ? 36 : Math.round(24 * 4 / m.den);
+    return [m.num, Math.round(Math.log2(m.den)), clocks, 8];
+  }
+
   function buildSMF(opts) {
     const tempo    = opts.tempo || 92;
     const chords   = opts.chords || [];
@@ -70,10 +80,10 @@
     trk.u8((microPerQuarter >> 8) & 0xff);
     trk.u8(microPerQuarter & 0xff);
 
-    // Time signature 4/4 (denom=2 means 2^2=4, 24 ticks per click, 8 32nds per quarter)
+    // Time signature: the section's own (4/4 unless given).
     trk.varlen(0);
     trk.u8(0xff); trk.u8(0x58); trk.u8(0x04);
-    trk.u8(4); trk.u8(2); trk.u8(24); trk.u8(8);
+    timeSignatureBytes(opts.meter).forEach(b => trk.u8(b));
 
     // Program change: channel 0 = Acoustic Grand Piano (0), channel 1 = Acoustic Bass (32),
     // channel 2 = Square Lead Synth (80) for melody.
@@ -204,7 +214,7 @@
     // ── Conductor track ────────────────────────────────────────────────────
     const cond = new Buf();
     metaText(cond, 0, 0x03, song.title || 'ChordPath song');
-    metaEvent(cond, 0, 0x58, [4, 2, 24, 8]);   // 4/4
+    metaEvent(cond, 0, 0x58, timeSignatureBytes(items[0].meter));
     const sig = song.scale === 'major' ? KEY_SIGS[song.key]
       : song.scale === 'natural_minor' ? MINOR_SIGS[song.key] : undefined;
     if (sig !== undefined) {
@@ -212,12 +222,19 @@
     }
     let condLast = 0;
     let lastTempo = null;
+    let lastMeter = timeSignatureBytes(items[0].meter).join(',');
     timeline.forEach(entry => {
       const delta = entry.startTick - condLast;
       let used = false;
+      const meterBytes = timeSignatureBytes(entry.item.meter);
+      if (meterBytes.join(',') !== lastMeter) {
+        metaEvent(cond, delta, 0x58, meterBytes);
+        lastMeter = meterBytes.join(',');
+        used = true;
+      }
       if (entry.item.tempo !== lastTempo) {
         const mpq = Math.round(60000000 / entry.item.tempo);
-        metaEvent(cond, delta, 0x51, [(mpq >> 16) & 0xff, (mpq >> 8) & 0xff, mpq & 0xff]);
+        metaEvent(cond, used ? 0 : delta, 0x51, [(mpq >> 16) & 0xff, (mpq >> 8) & 0xff, mpq & 0xff]);
         lastTempo = entry.item.tempo;
         used = true;
       }
@@ -249,7 +266,23 @@
 
     const chordEvents = [], bassEvents = [], vocalEvents = [], underEvents = [], drumEvents = [];
     let prevVoicing = null;
+    const toTicks = beats => Math.round(beats * TICKS_PER_QUARTER);
     timeline.forEach(({ item, startTick }) => {
+      // A section played from a chart is written note for note as the DAW lays it out.
+      if (item.pattern && item.pattern.steps && global.Parts) {
+        const laid = global.Parts.fromItem(item);
+        const put = (list, notes, vel, minLength) => notes.forEach(ev => {
+          const start = startTick + toTicks(ev.t);
+          list.push({ t: start, kind: 'on', n: ev.n, v: Math.max(1, Math.min(127, Math.round(vel(ev) * 127))) });
+          list.push({ t: start + Math.max(minLength, toTicks(ev.d)), kind: 'off', n: ev.n, v: 0 });
+        });
+        put(chordEvents, laid.chords, ev => ev.v, 10);
+        put(bassEvents, laid.bass, ev => ev.v, 20);
+        put(vocalEvents, laid.vocal, () => 0.75, 20);
+        put(underEvents, laid.under, () => 0.55, 20);
+        put(drumEvents, laid.drums, ev => ev.v, Math.round(TICKS_PER_QUARTER / 8));
+        return;
+      }
       const ticksPerChord = item.beatsPerChord * TICKS_PER_QUARTER;
       // Chords (smart voice leading chained across the whole song).
       item.chords.forEach((ch, idx) => {

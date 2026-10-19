@@ -560,24 +560,54 @@
   }
 
   // ── Drum grid ────────────────────────────────────────────────────────────
-  function renderDrumGrid(drumPattern, opts) {
+  // A drum grid, one column per sixteenth. Takes a 4/4 kit (lists of steps)
+  // or a groove chart for any time (theory/meters.js), with its time.
+  function renderDrumGrid(drumPattern, meter) {
     if (!drumPattern) return '(no drum pattern)';
-    if (!drumPattern.kick.length && !drumPattern.snare.length &&
-        !drumPattern.hhClosed.length && !drumPattern.hhOpen.length) {
+    const Mt = global.Meters;
+    const charted = typeof drumPattern.kick === 'string';
+    const lane = (list, chart) => (charted ? (Mt ? Mt.laneSteps(drumPattern[chart]) : []) : (list || []));
+    const kit = {
+      kick: lane(drumPattern.kick, 'kick'), snare: lane(drumPattern.snare, 'snare'),
+      hhClosed: lane(drumPattern.hhClosed, 'hat'), hhOpen: lane(drumPattern.hhOpen, 'open'),
+    };
+    if (!kit.kick.length && !kit.snare.length && !kit.hhClosed.length && !kit.hhOpen.length) {
       return '(no drums in this section)';
     }
+    const time = meter || (charted ? drumPattern.meter : null);
+    const steps = Mt && time ? Mt.stepsPerBar(time) : 16;
     const rows = [
-      { label: 'OH', steps: drumPattern.hhOpen, mark: 'o' },
-      { label: 'HH', steps: drumPattern.hhClosed, mark: 'x' },
-      { label: 'SN', steps: drumPattern.snare, mark: 'x' },
-      { label: 'KK', steps: drumPattern.kick, mark: 'x' },
+      { label: 'OH', steps: kit.hhOpen, mark: 'o' },
+      { label: 'HH', steps: kit.hhClosed, mark: 'x' },
+      { label: 'SN', steps: kit.snare, mark: 'x' },
+      { label: 'KK', steps: kit.kick, mark: 'x' },
     ];
     const lines = rows.map(r => {
-      const cells = Array(16).fill('-');
-      (r.steps || []).forEach(s => { if (s >= 0 && s <= 15) cells[s] = r.mark; });
+      const cells = Array(steps).fill('-');
+      (r.steps || []).forEach(s => { if (s >= 0 && s < steps) cells[s] = r.mark; });
       return r.label + '|' + cells.join('') + '|';
     });
-    lines.push('   1e+a2e+a3e+a4e+a');
+    if (steps === 16 && (!time || !Mt || Mt.id(time) === '4/4')) lines.push('   1e+a2e+a3e+a4e+a');
+    else if (Mt) lines.push('   ' + Mt.countRow(time).map(c => (c || ' ').slice(-1)).join(''));
+    return lines.join('\n');
+  }
+
+  // A strum chart: the count, the strokes and the bass under it, two columns
+  // to a sixteenth so it reads at a glance.
+  function renderStrumChart(rhythm, meter) {
+    const Mt = global.Meters;
+    if (!rhythm || !Mt || typeof rhythm.chords !== 'string') return '(no rhythm chosen)';
+    const time = meter || rhythm.meter;
+    const cell = text => (String(text || '') + '  ').slice(0, 2);
+    const row = (label, cells) => (label + '       ').slice(0, 7) + cells.map(cell).join('').replace(/\s+$/, '');
+    const strokes = rhythm.chords.split('');
+    const lines = [
+      row('Count', Mt.countRow(time)),
+      row('Strum', Mt.arrows(rhythm.chords).split('')),
+    ];
+    const hard = strokes.map(c => (c === 'D' || c === 'U' ? '>' : ''));
+    if (hard.some(Boolean) && strokes.some(c => c === 'd' || c === 'u')) lines.push(row('Hard', hard));
+    lines.push(row('Bass', rhythm.bass.split('').map(c => (c === '.' || c === '-' ? '' : c === '>' ? '↗' : c))));
     return lines.join('\n');
   }
 
@@ -585,7 +615,7 @@
     TUNING_MIDI, STRING_LABELS, OPEN_PCS, REGISTERS,
     findChordShape,
     mapEventsToFrets, placeNotes, countLabels,
-    renderMelodyTab, renderNotesTab, renderChordTab, renderBassTab, renderDrumGrid,
+    renderMelodyTab, renderNotesTab, renderChordTab, renderBassTab, renderDrumGrid, renderStrumChart,
     bassEvents,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

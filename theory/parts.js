@@ -205,6 +205,70 @@
 
   function byTime(a, b) { return a.t - b.t || a.n - b.n; }
 
+  function bassRoot(chord) { return 40 + ((chord.rootPc - 4 + 12) % 12); }   // E2 to D#3, as the bass tab has it
+
+  // A section whose rhythm is a chart (theory/meters.js): the bar's strokes,
+  // bass notes and drum hits, bar after bar, each falling on whichever chord
+  // is sounding at that point and never ringing on into the next.
+  function fromChart(item, voicings, bpc, beats) {
+    const Mt = global.Meters;
+    const chart = item.pattern.steps;
+    const barBeats = chart.length / 4;
+    const bars = Math.ceil(beats / barBeats - 1e-9);
+    const chordAt = t => Math.min(item.chords.length - 1, Math.floor(t / bpc + 1e-9));
+    const until = (t, length) => Math.min(t + length / 4, (chordAt(t) + 1) * bpc, beats) - t;
+    const chords = [], bass = [], drums = [];
+    const strokes = Mt.chordHits(chart.chords), lows = Mt.bassHits(chart.bass);
+    for (let bar = 0; bar < bars; bar++) {
+      const at0 = bar * barBeats;
+      strokes.forEach((h, k) => {
+        const t = at0 + h.step / 4;
+        if (t >= beats - 1e-9) return;
+        const ci = chordAt(t);
+        const voicing = voicings[ci];
+        const seed = (bar + 1) * 67 + k * 13;
+        const d = Math.max(0.05, until(t, h.length) - 0.02);
+        if (h.kind === 'pick') {
+          const n = voicing[(h.tone - 1) % voicing.length];
+          chords.push({ t: round(t), d: round(d), n, v: round(humanVelocity(0.62, seed, 0.1)) });
+          return;
+        }
+        if (h.kind === 'chuck') {
+          voicing.slice(-4).forEach((n, j) => chords.push({ t: round(t + j * 0.004), d: 0.06, n, v: round(humanVelocity(0.3, seed + j, 0.08)) }));
+          return;
+        }
+        const notes = h.kind === 'up' ? voicing.slice(-Math.min(4, voicing.length)).reverse() : voicing;
+        const base = h.kind === 'up' ? (h.accent ? 0.6 : 0.42) : (h.accent ? 0.8 : 0.56);
+        notes.forEach((n, j) => chords.push({ t: round(t + j * 0.012), d: round(Math.max(0.05, d - j * 0.012)), n, v: round(humanVelocity(base, seed + j, 0.12)) }));
+      });
+      lows.forEach(h => {
+        const t = at0 + h.step / 4;
+        if (t >= beats - 1e-9) return;
+        const ci = chordAt(t);
+        const chord = item.chords[ci];
+        const root = bassRoot(chord);
+        const next = item.chords[(ci + 1) % item.chords.length];
+        const n = h.degree === 'fifth' ? root + 7 - (root + 7 > 51 ? 12 : 0)
+          : h.degree === 'octave' ? root + 12
+          : h.degree === 'third' ? root + (chord.intervals.includes(3) && !chord.intervals.includes(4) ? 3 : 4)
+          : h.degree === 'approach' ? bassRoot(next) - 1
+          : root;
+        bass.push({ t: round(t), d: round(Math.max(0.1, until(t, h.length) - 0.05)), n, v: 0.85 });
+      });
+      for (const lane of Object.keys(DRUM_NOTES)) {
+        const accents = new Set(chart.accents || []);
+        (item.pattern.drums[lane] || []).forEach(step => {
+          const t = at0 + step / 4;
+          if (t >= beats - 1e-9) return;
+          const base = lane === 'kick' ? 0.82 : lane === 'snare' ? (accents.has(step) ? 0.86 : 0.66) : lane === 'hhOpen' ? 0.38 : 0.28;
+          drums.push({ t: round(t), d: DRUM_LENGTHS[lane], n: DRUM_NOTES[lane],
+            v: round(humanVelocity(base, (bar + 1) * 101 + step * 7 + lane.length * 13, lane === 'kick' ? 0.16 : 0.12)) });
+        });
+      }
+    }
+    return { chords, bass, drums };
+  }
+
   // item: one entry of Song.buildPlayback(song).
   function fromItem(item) {
     const V = global.Voicings;
@@ -213,6 +277,25 @@
     const pattern = item.pattern || {};
     const swing = typeof pattern.swing === 'number' ? pattern.swing : (pattern.swing ? 0.18 : 0);
     const beatMs = 60000 / (item.tempo || 100);
+
+    const line = (events, vel) => (events || [])
+      .filter(ev => ev.beatStart < beats)
+      .map(ev => ({ t: round(ev.beatStart), d: round(Math.min(ev.beats, beats - ev.beatStart)), n: ev.midi, v: vel }));
+
+    if (pattern.steps && global.Meters) {
+      let before = null;
+      const voicings = item.chords.map(chord => {
+        const voiced = V.voice(chord, 'smart', { previous: before });
+        before = voiced;
+        return performanceVoicing(chord, voiced);
+      });
+      const laid = fromChart(item, voicings, bpc, beats);
+      return {
+        beats,
+        chords: laid.chords.sort(byTime), bass: laid.bass.sort(byTime), drums: laid.drums.sort(byTime),
+        vocal: line(item.melody, 0.85).sort(byTime), under: line(item.under, 0.55).sort(byTime),
+      };
+    }
 
     const chords = [];
     let previous = null;
@@ -253,10 +336,6 @@
       }
     }
 
-    const line = (events, vel) => (events || [])
-      .filter(ev => ev.beatStart < beats)
-      .map(ev => ({ t: round(ev.beatStart), d: round(Math.min(ev.beats, beats - ev.beatStart)), n: ev.midi, v: vel }));
-
     return {
       beats,
       chords: chords.sort(byTime), bass: bass.sort(byTime), drums: drums.sort(byTime),
@@ -273,7 +352,8 @@
       const parts = fromItem(Object.assign({}, item, { tempo }));
       const reps = Math.max(1, item.repeat || 1);
       for (let r = 0; r < reps; r++) {
-        sections.push({ id: item.sectionId, name: item.name, role: item.role, start, beats: parts.beats, repeat: r, tempo, parts });
+        sections.push({ id: item.sectionId, name: item.name, role: item.role, start, beats: parts.beats, repeat: r, tempo,
+          meter: item.meter || { num: 4, den: 4 }, parts });
         start += parts.beats;
       }
     });

@@ -3,6 +3,10 @@
  * feeling, progression, arrangement, and instrument roster. Chord objects are
  * never persisted — sections store "root:quality" specs and rebuild through
  * Chords.buildChord, matching the app-wide convention.
+ *
+ * A song has a key and a time signature that its sections follow unless one
+ * has its own. A chord lasts a bar of its section's time unless the section
+ * says otherwise (beatsPerChord, in quarter-note beats).
  */
 (function (global) {
   'use strict';
@@ -32,7 +36,7 @@
       role: 'verse',
       name: 'Verse',
       feelingId: null,          // null = inherit song.feelingId
-      beatsPerChord: 4,
+      beatsPerChord: null,      // quarter beats; null = a bar of the section's time
       repeat: 1,
       progSpecs: [],
       rhythmPattern: '',
@@ -48,6 +52,7 @@
       roster: [],
       keyOverride: null,
       tempoOverride: null,
+      meterOverride: null,      // { num, den }; null = the song's time
       notes: '',
     }, partial);
   }
@@ -60,11 +65,12 @@
       id: newId('song'),
       title: 'Untitled song',
       genreId: 'pop',
-      feelingId: 'nostalgic',
+      feelingId: null,          // a feeling to aim for, if the writer has one in mind
       energy: 'mid',
       key: 'C',
       scale: 'major',
       tempo: 100,
+      meter: { num: 4, den: 4 },
       sections: [],
       progress: { writing: false, arrangement: false, recording: false, mixing: false },
       notes: '',
@@ -77,7 +83,25 @@
 
   function sectionKey(song, section) { return (section && section.keyOverride) || song.key; }
   function sectionTempo(song, section) { return (section && section.tempoOverride) || song.tempo; }
-  function sectionFeeling(song, section) { return (section && section.feelingId) || song.feelingId; }
+  function sectionFeeling(song, section) { return (section && section.feelingId) || song.feelingId || null; }
+
+  // ── Time signatures ──────────────────────────────────────────────────────
+  // theory/meters.js knows them in full; these few sums stand in for it where it is not loaded.
+  function readMeter(value) {
+    if (global.Meters) return global.Meters.parse(value);
+    let num, den;
+    if (value && typeof value === 'object') { num = value.num; den = value.den; }
+    else if (typeof value === 'string' && /^\s*\d{1,2}\s*\/\s*\d{1,2}\s*$/.test(value)) { [num, den] = value.split('/').map(v => parseInt(v, 10)); }
+    return Number.isInteger(num) && num >= 1 && num <= 32 && [2, 4, 8, 16].includes(den) ? { num, den } : null;
+  }
+  function barQuarters(meter) { const m = readMeter(meter) || { num: 4, den: 4 }; return m.num * 4 / m.den; }
+  function sectionMeter(song, section) {
+    return readMeter(section && section.meterOverride) || readMeter(song && song.meter) || { num: 4, den: 4 };
+  }
+  // How many quarter beats each chord of the section lasts.
+  function chordBeats(song, section) {
+    return (section && section.beatsPerChord) || barQuarters(sectionMeter(song, section));
+  }
 
   function getSection(song, sectionId) {
     return (song.sections || []).find(s => s.id === sectionId) || null;
@@ -116,17 +140,20 @@
     }
   }
 
-  function sectionBeats(section) {
-    return (section.progSpecs || []).length * (section.beatsPerChord || 4) * (section.repeat || 1);
+  // With the song given, the section's own time decides how long a chord and a bar are.
+  function sectionBeats(section, song) {
+    const each = song ? chordBeats(song, section) : (section.beatsPerChord || 4);
+    return (section.progSpecs || []).length * each * (section.repeat || 1);
   }
 
-  function sectionBars(section) {
-    return Math.max(1, Math.round(sectionBeats(section) / 4));
+  function sectionBars(section, song) {
+    const bar = song ? barQuarters(sectionMeter(song, section)) : 4;
+    return Math.max(1, Math.round(sectionBeats(section, song) / bar));
   }
 
   function songDurationSec(song) {
     return song.sections.reduce((sum, sec) =>
-      sum + sectionBeats(sec) * (60 / sectionTempo(song, sec)), 0);
+      sum + sectionBeats(sec, song) * (60 / sectionTempo(song, sec)), 0);
   }
 
   // ── Playback assembly ─────────────────────────────────────────────────────
@@ -139,15 +166,17 @@
       .map(sec => {
         const chords = chordsOf(song, sec);
         const key = sectionKey(song, sec);
+        const meter = sectionMeter(song, sec);
+        const beatsPerChord = chordBeats(song, sec);
         const vocalPat = A.byId(A.VOCAL_MELODIES, sec.vocalPattern);
         const underPat = A.byId(A.UNDER_MELODIES, sec.underPattern);
         const melody = sec.vocalPattern
           ? M.generatePatternMelody(chords, song.scale, key, vocalPat,
-              { beatsPerChord: sec.beatsPerChord, section: sec.role, seed: sec.melodySeed })
+              { beatsPerChord, section: sec.role, seed: sec.melodySeed })
           : [];
         const under = underPat && underPat.type !== 'none'
           ? M.generateUnderMelody(chords, song.scale, key, underPat,
-              { beatsPerChord: sec.beatsPerChord, seed: sec.underSeed })
+              { beatsPerChord, seed: sec.underSeed })
           : [];
         return {
           sectionId: sec.id,
@@ -156,9 +185,11 @@
           chords,
           melody,
           under,
-          pattern: A.makePlaybackPattern(sec.rhythmPattern, sec.drumPattern),
+          pattern: A.makePlaybackPattern(sec.rhythmPattern, sec.drumPattern, meter),
           tempo: sectionTempo(song, sec),
-          beatsPerChord: sec.beatsPerChord || 4,
+          meter,
+          beatsPerChord,
+          stepsPerChord: Math.round(beatsPerChord * 4),
           repeat: sec.repeat || 1,
           levels: sec.levels || { chords: 100, bass: 100, drums: 100, melody: 100 },
           tones: {
@@ -178,7 +209,7 @@
   const LIMITS = {
     sections: 128, chords: 64, roster: 40,
     title: 120, name: 60, id: 64, token: 40, notes: 8000,
-    repeat: 16, beatsPerChord: 16,
+    repeat: 16, beatsPerChord: 24,
   };
   const SPEC_RE = /^[A-G][#b]?:[A-Za-z0-9_/]{1,12}$/;
   const NOTE_RE = /^[A-G][#b]?$/;
@@ -227,8 +258,12 @@
       id: cleanId(raw.id, 'sec'),
       role,
       name: cleanStr(raw.name, LIMITS.name, '') || role.charAt(0).toUpperCase() + role.slice(1),
-      feelingId: typeof raw.feelingId === 'string' ? raw.feelingId.slice(0, LIMITS.token) : null,
-      beatsPerChord: cleanInt(raw.beatsPerChord, 1, LIMITS.beatsPerChord, d.beatsPerChord),
+      feelingId: typeof raw.feelingId === 'string' && raw.feelingId ? raw.feelingId.slice(0, LIMITS.token) : null,
+      // In half beats, so a chord can fill a bar of 7/8; none given means a bar of the section's time.
+      beatsPerChord: (() => {
+        const n = cleanNum(raw.beatsPerChord, -Infinity, Infinity, null);
+        return n === null || n <= 0 ? null : Math.round(Math.min(LIMITS.beatsPerChord, Math.max(0.5, n)) * 2) / 2;
+      })(),
       repeat: cleanInt(raw.repeat, 1, LIMITS.repeat, d.repeat),
       progSpecs: (Array.isArray(raw.progSpecs) ? raw.progSpecs : [])
         .filter(sp => typeof sp === 'string' && SPEC_RE.test(sp))
@@ -253,6 +288,7 @@
         .slice(0, LIMITS.roster),
       keyOverride: cleanNote(raw.keyOverride, null),
       tempoOverride: raw.tempoOverride == null ? null : cleanInt(raw.tempoOverride, 20, 300, null),
+      meterOverride: readMeter(raw.meterOverride),
       notes: cleanStr(raw.notes, LIMITS.notes, ''),
     };
     carryUnknown(sec, raw, SECTION_KEYS);
@@ -271,11 +307,12 @@
       id: cleanId(raw.id, 'song'),
       title: cleanStr(raw.title, LIMITS.title, '') || d.title,
       genreId: cleanStr(raw.genreId, LIMITS.token, d.genreId),
-      feelingId: cleanStr(raw.feelingId, LIMITS.token, d.feelingId),
+      feelingId: cleanStr(raw.feelingId, LIMITS.token, d.feelingId) || null,
       energy: ['low', 'mid', 'high'].includes(raw.energy) ? raw.energy : d.energy,
       key: cleanNote(raw.key, d.key),
       scale: typeof raw.scale === 'string' && (!S || S.SCALES[raw.scale]) ? raw.scale : d.scale,
       tempo: cleanInt(raw.tempo, 20, 300, d.tempo),
+      meter: readMeter(raw.meter) || { num: 4, den: 4 },
       sections: (Array.isArray(raw.sections) ? raw.sections : [])
         .slice(0, LIMITS.sections).map(sanitizeSection),
       progress: {
@@ -386,7 +423,7 @@
   global.Song = {
     SCHEMA_VERSION, ROLES, PROGRESS_STEPS,
     newId, createSong, createSection,
-    touch, getSection, sectionKey, sectionTempo, sectionFeeling,
+    touch, getSection, sectionKey, sectionTempo, sectionFeeling, sectionMeter, chordBeats, barQuarters,
     chordsOf, setProgression, autoNameSections,
     sectionBeats, sectionBars, songDurationSec,
     buildPlayback,

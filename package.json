@@ -8,7 +8,7 @@
   "main": "desktop/main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node tests/run.js && node tests/audio-test.js && node tests/muse-test.js && node tests/daw-test.js && node tests/research-test.js && node tests/native-test.js",
+    "test": "node tests/run.js && node tests/meter-test.js && node tests/ideas-test.js && node tests/audio-test.js && node tests/muse-test.js && node tests/daw-test.js && node tests/research-test.js && node tests/native-test.js",
     "test:e2e": "node tests/e2e.js && node tests/e2e-engine.js && node tests/e2e-daw.js",
     "dist": "electron-builder --win --x64",
     "test:packaged": "node tests/e2e-packaged.js",

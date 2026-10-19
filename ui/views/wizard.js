@@ -1,6 +1,9 @@
 /* ChordPath — ui/views/wizard.js
- * New-song wizard: 1) feeling + energy, 2) genre, 3) generated preview with
- * rerolls, then create. Every choice regenerates a full draft song.
+ * Starting a song. Nothing is written for the writer here: they choose the
+ * key (that comes first, and it is the one thing that must be chosen), the
+ * time signature, the tempo and a title, and if they like a feeling for the
+ * ideas to lean towards. The song starts empty, and they go straight to
+ * writing its first section.
  */
 (function (global) {
   'use strict';
@@ -8,197 +11,198 @@
   const doc = global.document;
   const UI = () => global.UI;
   const F = () => global.Feelings;
-  const G = () => global.Genres;
   const Song = () => global.Song;
+  const M = () => global.Meters;
 
-  const state = { step: 0, feelingId: null, energy: 'mid', genreId: null, seed: 1, draft: null };
+  const TONICS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const SHOWN = { 'C#': 'C♯ / D♭', 'D#': 'D♯ / E♭', 'F#': 'F♯ / G♭', 'G#': 'G♯ / A♭', 'A#': 'A♯ / B♭' };
+  // Chords a guitarist can play without a barre.
+  const OPEN = new Set(['C', 'D', 'E', 'G', 'A', 'Am', 'Dm', 'Em']);
+  const STARTS = [
+    { id: 'verse', name: 'One verse', roles: ['verse'] },
+    { id: 'pair', name: 'Verse and chorus', roles: ['verse', 'chorus'] },
+    { id: 'three', name: 'Verse, chorus, bridge', roles: ['verse', 'chorus', 'bridge'] },
+  ];
+  const TEMPOS = [[66, 'Slow'], [84, 'Easy'], [100, 'Walking'], [120, 'Up'], [144, 'Fast']];
+
+  const state = {};
+  function reset() {
+    Object.assign(state, { key: null, scale: 'major', meter: '4/4', tempo: 100, title: '', feelingId: null, start: 'verse' });
+  }
+  reset();
 
   function root() { return doc.getElementById('wizardRoot'); }
+  function esc(v) { return UI().esc(v); }
 
-  function reset() {
-    state.step = 0;
-    state.feelingId = null;
-    state.energy = 'mid';
-    state.genreId = null;
-    state.seed = Date.now() & 0xffff;
-    state.draft = null;
+  function keyChords() {
+    if (!state.key) return [];
+    return global.Chords.diatonicChords(state.key, state.scale, { sevenths: false });
   }
 
-  function dots() {
-    return `<div class="wizard-dots">${[0, 1, 2].map(i =>
-      `<span class="wdot${i === state.step ? ' active' : ''}"></span>`).join('')}</div>`;
+  function keyPanel() {
+    if (!state.key) {
+      return '<p class="meta start-wait">Choose a key to see the chords that live in it.</p>';
+    }
+    const chords = keyChords();
+    const open = chords.filter(c => OPEN.has(c.shortName)).map(c => c.shortName);
+    const scaleName = (global.Scales.getScaleMeta(state.scale) || {}).name || state.scale;
+    return `
+      <div class="start-key-info">
+        <p><strong>${esc(state.key)} ${esc(scaleName)}</strong> — the chords that live in it:</p>
+        <div class="start-chords">${chords.map(c => `
+          <span class="start-chord"><span class="name">${esc(c.shortName)}</span><span class="roman">${esc(c.roman || '')}</span></span>`).join('')}</div>
+        <p class="meta">${open.length >= 4
+          ? `Good on guitar: ${esc(open.join(', '))} need no barre.`
+          : open.length ? `On guitar, ${esc(open.join(', '))} ${open.length === 1 ? 'is' : 'are'} open; the rest want a barre or a capo.`
+          : 'On guitar this key is all barre chords; a capo can bring it to open shapes.'}</p>
+        <button type="button" class="ghost small" id="startHearKey">▶ Hear the key</button>
+      </div>`;
   }
 
   function render() {
-    if (state.step === 0) renderFeelingStep();
-    else if (state.step === 1) renderGenreStep();
-    else renderPreviewStep();
-  }
-
-  // ── Step 1: feeling + energy ─────────────────────────────────────────────
-  function renderFeelingStep() {
-    const ui = UI();
-    const groups = F().groupedFeelings();
-    const cards = Object.entries(groups).map(([group, list]) => `
-      <div class="feel-group">
-        <h4>${ui.esc(group)}</h4>
-        <div class="feel-cards">
-          ${list.map(f => `
-            <button type="button" class="feel-card${state.feelingId === f.id ? ' selected' : ''}" data-feel="${f.id}">
-              <span class="feel-name">${ui.esc(f.name)}</span>
-              <span class="feel-vibe">${ui.esc(f.vibe)}</span>
-            </button>`).join('')}
-        </div>
+    const meter = M().get(state.meter);
+    const scaleOptions = global.Scales.SCALE_GROUPS.slice(0, 3).map(group => `
+      <optgroup label="${esc(group.label)}">${group.ids.map(id => {
+        const meta = global.Scales.getScaleMeta(id);
+        return meta ? `<option value="${id}"${id === state.scale ? ' selected' : ''}>${esc(meta.name)}</option>` : '';
+      }).join('')}</optgroup>`).join('');
+    const feelings = Object.entries(F().groupedFeelings()).map(([group, list]) => `
+      <div class="feel-group"><h4>${esc(group)}</h4>
+        <div class="start-feelings">${list.map(f => `
+          <button type="button" class="chip clickable${state.feelingId === f.id ? ' chosen' : ''}" data-feel="${f.id}" title="${esc(f.vibe)}">${esc(f.name)}</button>`).join('')}</div>
       </div>`).join('');
 
     root().innerHTML = `
-      <div class="wizard">
-        ${dots()}
-        <h3>What do you want people to feel?</h3>
-        <p class="meta">This drives everything: key, chords, tempo, structure, arrangement. Each section can get its own feeling later.</p>
-        ${cards}
-        <div class="wizard-row">
-          <span class="label">Energy</span>
-          <div class="seg" id="energySeg">
-            <button type="button" data-energy="low"${state.energy === 'low' ? ' class="active"' : ''}>Low — slow burn</button>
-            <button type="button" data-energy="mid"${state.energy === 'mid' ? ' class="active"' : ''}>Mid — steady</button>
-            <button type="button" data-energy="high"${state.energy === 'high' ? ' class="active"' : ''}>High — driving</button>
+      <div class="wizard start">
+        <h3>Start a song</h3>
+        <p class="meta">Choose the key first. Everything you write is yours: ChordPath plays it back, and offers ideas when you ask for them.</p>
+
+        <section class="start-block" aria-labelledby="startKeyLabel">
+          <h4 id="startKeyLabel">Key</h4>
+          <div class="start-tonics" role="group" aria-label="Key">
+            ${TONICS.map(k => `<button type="button" class="start-tonic${state.key === k ? ' chosen' : ''}" data-key="${k}">${esc(SHOWN[k] || k)}</button>`).join('')}
           </div>
-        </div>
+          <div class="start-row">
+            <div class="seg" id="startMode">
+              <button type="button" data-scale="major"${state.scale === 'major' ? ' class="active"' : ''}>Major</button>
+              <button type="button" data-scale="natural_minor"${state.scale === 'natural_minor' ? ' class="active"' : ''}>Minor</button>
+            </div>
+            <label class="meta">or another colour <select id="startScale">${scaleOptions}</select></label>
+          </div>
+          <div id="startKeyInfo">${keyPanel()}</div>
+        </section>
+
+        <section class="start-block" aria-labelledby="startTimeLabel">
+          <h4 id="startTimeLabel">Time signature</h4>
+          <div class="start-meters" role="group" aria-label="Time signature">
+            ${M().LIST.map(m => `<button type="button" class="start-meter${state.meter === m.id ? ' chosen' : ''}" data-meter="${m.id}" title="${esc(m.name)}">${esc(m.id)}</button>`).join('')}
+          </div>
+          <p class="start-feel">${esc(meter.feel)} <span class="meta">Count it: ${esc(meter.count)}.${meter.examples.length ? ' Heard in ' + esc(meter.examples.join(', ')) + '.' : ''}</span></p>
+          <button type="button" class="ghost small" id="startHearTime">▶ Hear it</button>
+        </section>
+
+        <section class="start-block start-two">
+          <div>
+            <h4>Tempo</h4>
+            <div class="start-row">
+              <label class="chip chip-input">♩ <input id="startTempo" type="number" min="40" max="240" value="${esc(state.tempo)}" /> BPM</label>
+              <span class="start-tempos">${TEMPOS.map(([bpm, name]) => `<button type="button" class="ghost small" data-tempo="${bpm}">${esc(name)}</button>`).join('')}</span>
+            </div>
+          </div>
+          <div>
+            <h4>Title</h4>
+            <input id="startTitle" type="text" maxlength="60" placeholder="Untitled song" value="${esc(state.title)}" />
+          </div>
+        </section>
+
+        <section class="start-block">
+          <h4>Start with</h4>
+          <div class="seg" id="startShape">
+            ${STARTS.map(s => `<button type="button" data-start="${s.id}"${state.start === s.id ? ' class="active"' : ''}>${esc(s.name)}</button>`).join('')}
+          </div>
+          <p class="meta">Empty sections, for you to fill. You can add, move and remove sections any time.</p>
+        </section>
+
+        <details class="start-block start-feeling"${state.feelingId ? ' open' : ''}>
+          <summary><h4>A feeling to aim for <span class="meta">(if you have one)</span></h4></summary>
+          <p class="meta">Chord ideas will lean towards it. Nothing is written for you.</p>
+          ${feelings}
+        </details>
+
         <div class="wizard-nav">
           <button type="button" class="ghost" id="wzCancel">Cancel</button>
-          <button type="button" class="primary" id="wzNext" ${state.feelingId ? '' : 'disabled'}>Next: pick a genre →</button>
+          <button type="button" class="primary" id="wzCreate"${state.key ? '' : ' disabled title="Choose a key first"'}>Start writing</button>
         </div>
       </div>`;
-
-    root().querySelectorAll('[data-feel]').forEach(b => {
-      b.addEventListener('click', () => { state.feelingId = b.dataset.feel; render(); });
-    });
-    root().querySelectorAll('#energySeg [data-energy]').forEach(b => {
-      b.addEventListener('click', () => { state.energy = b.dataset.energy; render(); });
-    });
-    doc.getElementById('wzCancel').addEventListener('click', () => global.Nav.go('songs'));
-    doc.getElementById('wzNext').addEventListener('click', () => { state.step = 1; render(); });
+    wire();
   }
 
-  // ── Step 2: genre ────────────────────────────────────────────────────────
-  function renderGenreStep() {
-    const ui = UI();
-    const focused = G().FOCUSED_GENRES;
-    const broad = G().BROAD_GENRES;
-    const groupsDef = [
-      ['Pop & Rock', ['pop', 'indie', 'classic_rock', 'hardrock', 'metal', 'synthwave']],
-      ['Soul, Jazz & Blues', ['soul', 'gospel', 'jazz', 'blues', 'funk', 'bossa']],
-      ['Folk & Country', ['folk', 'country', 'celtic', 'flamenco']],
-      ['Electronic & Cinematic', ['house', 'lofi', 'cinematic', 'baroque', 'impressionist', 'reggae']],
-    ];
-    const card = g => `
-      <button type="button" class="genre-card${state.genreId === g.id ? ' selected' : ''}" data-genre="${g.id}">
-        <span class="genre-name">${ui.esc(g.name)}</span>
-        <span class="genre-tip">${ui.esc((g.rhythm && g.rhythm.tip ? g.rhythm.tip.split('.')[0] : '') + '.')}</span>
-      </button>`;
-
-    root().innerHTML = `
-      <div class="wizard">
-        ${dots()}
-        <h3>What world does it live in?</h3>
-        <p class="meta">Feeling: <strong>${ui.esc((F().getFeeling(state.feelingId) || {}).name || '')}</strong> · ${ui.esc(state.energy)} energy</p>
-        <div class="feel-group"><h4>Your styles</h4>
-          <div class="genre-cards">${focused.map(card).join('')}</div></div>
-        ${groupsDef.map(([label, ids]) => `
-          <div class="feel-group"><h4>${label}</h4>
-            <div class="genre-cards">${ids.map(id => broad.find(g => g.id === id)).filter(Boolean).map(card).join('')}</div></div>`).join('')}
-        <div class="wizard-nav">
-          <button type="button" class="ghost" id="wzBack">← Back</button>
-          <button type="button" class="primary" id="wzNext" ${state.genreId ? '' : 'disabled'}>Next: hear the draft →</button>
-        </div>
-      </div>`;
-
-    root().querySelectorAll('[data-genre]').forEach(b => {
-      b.addEventListener('click', () => { state.genreId = b.dataset.genre; render(); });
+  function wire() {
+    const r = root();
+    r.querySelectorAll('[data-key]').forEach(b => b.addEventListener('click', () => { state.key = b.dataset.key; render(); }));
+    r.querySelectorAll('#startMode [data-scale]').forEach(b => b.addEventListener('click', () => { state.scale = b.dataset.scale; render(); }));
+    doc.getElementById('startScale').addEventListener('change', e => { state.scale = e.target.value; render(); });
+    r.querySelectorAll('[data-meter]').forEach(b => b.addEventListener('click', () => { state.meter = b.dataset.meter; render(); }));
+    r.querySelectorAll('[data-tempo]').forEach(b => b.addEventListener('click', () => { state.tempo = parseInt(b.dataset.tempo, 10); render(); }));
+    doc.getElementById('startTempo').addEventListener('change', e => {
+      const v = parseInt(e.target.value, 10);
+      state.tempo = Number.isFinite(v) ? Math.max(40, Math.min(240, v)) : state.tempo;
+      e.target.value = state.tempo;
     });
-    doc.getElementById('wzBack').addEventListener('click', () => { state.step = 0; render(); });
-    doc.getElementById('wzNext').addEventListener('click', () => {
-      state.step = 2;
-      generateDraft();
+    doc.getElementById('startTitle').addEventListener('input', e => { state.title = e.target.value; });
+    r.querySelectorAll('#startShape [data-start]').forEach(b => b.addEventListener('click', () => { state.start = b.dataset.start; render(); }));
+    r.querySelectorAll('[data-feel]').forEach(b => b.addEventListener('click', () => {
+      state.feelingId = state.feelingId === b.dataset.feel ? null : b.dataset.feel;
       render();
-    });
+    }));
+    const hearKey = doc.getElementById('startHearKey');
+    if (hearKey) hearKey.addEventListener('click', hearTheKey);
+    doc.getElementById('startHearTime').addEventListener('click', hearTheTime);
+    doc.getElementById('wzCancel').addEventListener('click', () => { stop(); global.Nav.go('songs'); });
+    doc.getElementById('wzCreate').addEventListener('click', create);
   }
 
-  // ── Step 3: preview ──────────────────────────────────────────────────────
-  function generateDraft(sectionSeedOverrides) {
-    state.draft = F().generateSongSpec({
-      feelingId: state.feelingId,
-      genreId: state.genreId,
-      energy: state.energy,
-      seed: state.seed,
-    });
+  function stop() { if (global.Audio) global.Audio.stop(); }
+
+  // I, IV, V and home again, in the key and time chosen.
+  function hearTheKey() {
+    const chords = keyChords();
+    if (!chords.length || !global.Audio) return;
+    const pick = degree => chords.find(c => c.scaleDegree === degree) || chords[0];
+    const meter = M().parse(state.meter);
+    global.Audio.playProgression([pick(1), pick(4), pick(5), pick(1)], {
+      tempo: state.tempo, style: 'strum', voicing: 'smart', withBass: true,
+      meter, beatsPerChord: M().barQuarters(meter),
+    }).catch(() => UI().toast('Audio could not start'));
   }
 
-  function renderPreviewStep() {
-    const ui = UI();
-    const s = state.draft;
-    const rows = s.sections.map((sec, i) => {
-      const chordNames = Song().chordsOf(s, sec).map(c => c.shortName).join(' · ');
-      const fid = Song().sectionFeeling(s, sec);
-      return `
-        <div class="wz-section-row">
-          <span class="wz-sec-name">${ui.esc(sec.name)}</span>
-          ${ui.feelingChipHTML(fid)}
-          <span class="wz-sec-chords">${ui.esc(chordNames)}</span>
-          <span class="meta">${ui.esc((global.Arrangements.byId(global.Arrangements.RHYTHMS, sec.rhythmPattern) || {}).name || '')}</span>
-          <button type="button" class="ghost small" data-reroll="${i}" title="Reroll this section">↻</button>
-        </div>`;
-    }).join('');
-
-    root().innerHTML = `
-      <div class="wizard">
-        ${dots()}
-        <h3>Your draft song</h3>
-        <div class="wz-summary">
-          <input id="wzTitle" type="text" placeholder="Song title…" maxlength="60" value="${ui.esc(s.title === 'Untitled song' ? '' : s.title)}" />
-          <span class="chip">${ui.esc(s.key)} ${ui.esc((global.Scales.getScaleMeta(s.scale) || {}).name || s.scale)}</span>
-          <span class="chip">${ui.esc(s.tempo)} BPM</span>
-          ${ui.genreChipHTML(s.genreId)}${ui.feelingChipHTML(s.feelingId)}
-        </div>
-        <div class="wz-sections">${rows}</div>
-        <div class="wizard-nav">
-          <button type="button" class="ghost" id="wzBack">← Back</button>
-          <button type="button" class="ghost" id="wzReroll">↻ Reroll everything</button>
-          <button type="button" class="primary" id="wzCreate">Create song</button>
-        </div>
-      </div>`;
-
-    doc.getElementById('wzBack').addEventListener('click', () => { state.step = 1; render(); });
-    doc.getElementById('wzReroll').addEventListener('click', () => {
-      state.seed = (state.seed * 31 + 7) & 0xffff;
-      generateDraft();
-      render();
-    });
-    root().querySelectorAll('[data-reroll]').forEach(b => {
-      b.addEventListener('click', () => {
-        const i = parseInt(b.dataset.reroll, 10);
-        const sec = state.draft.sections[i];
-        const fid = Song().sectionFeeling(state.draft, sec);
-        const fresh = F().generateSectionSpec(state.draft, sec.role, fid, Date.now() & 0xffff);
-        state.draft.sections[i] = Object.assign(fresh, { id: sec.id, name: sec.name });
-        render();
-      });
-    });
-    doc.getElementById('wzCreate').addEventListener('click', () => {
-      const title = doc.getElementById('wzTitle').value.trim();
-      state.draft.title = title || suggestTitle();
-      global.Storage.saveProject(state.draft);
-      const id = state.draft.id;
-      UI().toast(`"${state.draft.title}" created`);
-      reset();
-      global.Nav.go('overview', id);
-    });
+  // Two bars of the time signature: its plainest strum and groove, on the home chord.
+  function hearTheTime() {
+    if (!global.Audio) return;
+    const meter = M().parse(state.meter);
+    const home = global.Chords.buildChord(state.key || 'C', state.scale === 'major' || !/minor|dorian|phrygian|aeolian|locrian/.test(state.scale) ? 'maj' : 'm');
+    const pattern = global.Arrangements.makePlaybackPattern(M().defaultRhythm(meter), M().defaultGroove(meter), meter);
+    global.Audio.playBacking([home, home], {
+      tempo: state.tempo, voicing: 'smart', withBass: true, pattern, stepsPerChord: M().stepsPerBar(meter), metronome: false,
+    }).catch(() => UI().toast('Audio could not start'));
   }
 
-  function suggestTitle() {
-    const f = F().getFeeling(state.feelingId);
-    return (f ? f.name : 'New') + ' sketch';
+  function create() {
+    if (!state.key) { UI().toast('Choose a key first'); return; }
+    stop();
+    const S = Song();
+    const shape = STARTS.find(s => s.id === state.start) || STARTS[0];
+    const song = S.createSong({
+      title: state.title.trim() || 'Untitled song',
+      key: state.key, scale: state.scale, tempo: state.tempo,
+      meter: M().parse(state.meter), feelingId: state.feelingId,
+    });
+    shape.roles.forEach(role => song.sections.push(S.createSection({ role })));
+    S.autoNameSections(song);
+    if (!global.Storage.saveProject(song)) { UI().toast('Could not save the song'); return; }
+    UI().toast(`"${song.title}" started in ${song.key} ${(global.Scales.getScaleMeta(song.scale) || {}).name || ''}`);
+    reset();
+    global.Nav.go('section', song.id, song.sections[0].id);
   }
 
   function enter() {

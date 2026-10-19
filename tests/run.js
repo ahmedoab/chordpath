@@ -340,7 +340,7 @@ check('legacy migration keeps chord level', migrated.sections[0].levels.chords =
   const sec0 = clean.sections[0], sec1 = clean.sections[1];
 
   check('migrate caps a runaway repeat count', sec0.repeat >= 1 && sec0.repeat <= 16);
-  check('migrate replaces a nonsense beatsPerChord', sec0.beatsPerChord >= 1 && sec0.beatsPerChord <= 16);
+  check('migrate replaces a nonsense beatsPerChord (a chord then lasts a bar)', sec0.beatsPerChord === null && Song.chordBeats(clean, sec0) === 4);
   check('migrate drops a non-numeric tempo override', sec0.tempoOverride === null);
   check('sectionTempo is always a finite number',
     clean.sections.every(sec => Number.isFinite(Song.sectionTempo(clean, sec))));

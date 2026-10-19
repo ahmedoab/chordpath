@@ -462,6 +462,83 @@
     return typeof opts.loop === 'function' ? !!opts.loop() : !!opts.loop;
   }
 
+  const SHARP_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  function midiName(midi) { return SHARP_NAMES[((midi % 12) + 12) % 12] + (Math.floor(midi / 12) - 1); }
+  function bassRootMidi(chord) { return 40 + ((chord.rootPc - 4 + 12) % 12); }   // E2–D#3, as the bass tab has it
+
+  // The felt beats of one bar of `meter`, for the click and the beat lights:
+  // the strong ones (where each group starts) click higher.
+  function scheduleMeterBeats(barStartMs, stepMs, meter, opts) {
+    const M = global.Meters;
+    if (!M || !opts) return;
+    M.pulses(meter).forEach((p, i) => {
+      const t = barStartMs + p.step * stepMs;
+      timers.push(setTimeout(() => {
+        if (stopFlag) return;
+        if (opts.metronome) { try { clickInst.triggerAttackRelease(p.strong ? 'C6' : 'C5', '32n'); } catch(e){} }
+        if (opts.onBeat) opts.onBeat(i % 4);
+      }, Math.max(0, t)));
+    });
+  }
+
+  // One bar of a section played from a chart (theory/meters.js): strokes,
+  // picked notes, chucks and bass, each on the chord sounding at that point
+  // and none ringing on into the next chord.
+  function scheduleChartBar(chart, bar, chords, voicings, stepsPerChord, totalSteps, startOffset, stepMs, opts, withBass) {
+    const M = global.Meters;
+    const L = chart.length;
+    M.chordHits(chart.chords).forEach((h, k) => {
+      const abs = bar * L + h.step;
+      if (abs >= totalSteps) return;
+      const ci = Math.min(chords.length - 1, Math.floor(abs / stepsPerChord));
+      const ch = chords[ci];
+      const voicing = voicings[ci];
+      const ringSteps = Math.min(h.length, (ci + 1) * stepsPerChord - abs, totalSteps - abs);
+      const dur = Math.max(0.06, ringSteps * stepMs / 1000 - 0.03);
+      const at = startOffset + abs * stepMs;
+      const seed = (bar + 1) * 97 + k * 31;
+      if (h.kind === 'pick') {
+        const n = voicing[(h.tone - 1) % voicing.length];
+        timers.push(setTimeout(() => {
+          if (stopFlag) return;
+          notifyNote(opts, ci, ch, n);
+          try { chordInst.triggerAttackRelease(n, dur, undefined, humanVelocity(0.62, seed, 0.1)); } catch(e){}
+        }, Math.max(0, at + humanOffset(6, seed))));
+        return;
+      }
+      const top = voicing.slice(-Math.min(4, voicing.length));
+      const notes = h.kind === 'up' ? top.slice().reverse() : h.kind === 'chuck' ? top : voicing;
+      const spread = h.kind === 'down' ? 14 : h.kind === 'up' ? 10 : 4;
+      const vel = h.kind === 'chuck' ? 0.28 : h.kind === 'up' ? (h.accent ? 0.6 : 0.42) : (h.accent ? 0.8 : 0.55);
+      notes.forEach((n, j) => {
+        timers.push(setTimeout(() => {
+          if (stopFlag) return;
+          notifyNote(opts, ci, ch, n);
+          try { chordInst.triggerAttackRelease(n, h.kind === 'chuck' ? 0.05 : dur, undefined, humanVelocity(vel, seed + j, 0.12)); } catch(e){}
+        }, Math.max(0, at + j * spread + humanOffset(5, seed + j))));
+      });
+    });
+    if (!withBass) return;
+    M.bassHits(chart.bass).forEach(h => {
+      const abs = bar * L + h.step;
+      if (abs >= totalSteps) return;
+      const ci = Math.min(chords.length - 1, Math.floor(abs / stepsPerChord));
+      const ch = chords[ci];
+      const next = chords[(ci + 1) % chords.length];
+      const root = bassRootMidi(ch);
+      const midi = h.degree === 'fifth' ? root + 7 - (root + 7 > 51 ? 12 : 0)
+        : h.degree === 'octave' ? root + 12
+        : h.degree === 'third' ? root + (ch.intervals.includes(3) && !ch.intervals.includes(4) ? 3 : 4)
+        : h.degree === 'approach' ? bassRootMidi(next) - 1
+        : root;
+      const ringSteps = Math.min(h.length, (ci + 1) * stepsPerChord - abs, totalSteps - abs);
+      timers.push(setTimeout(() => {
+        if (stopFlag) return;
+        try { bassInst.triggerAttackRelease(midiName(midi), Math.max(0.08, ringSteps * stepMs / 1000 - 0.06)); } catch(e){}
+      }, Math.max(0, startOffset + abs * stepMs)));
+    });
+  }
+
   // Schedule click track (one beep per beat). If accent, first beat is louder.
   function scheduleClick(startMs, beatMs, beats, opts) {
     if (!opts || !opts.metronome) return;
@@ -484,11 +561,20 @@
 
   // ── Simple chord-by-chord playback ───────────────────────────────────────
   async function playProgression(chords, opts) {
+    opts = opts || {};
+    // In another time than 4/4 the plain styles are played as charts made for that time.
+    const M = global.Meters;
+    if (opts.meter && M && M.id(opts.meter) !== '4/4') {
+      const chart = M.styleChart(opts.meter, opts.style || 'block');
+      return playBacking(chords, Object.assign({}, opts, {
+        pattern: { steps: { meter: M.id(opts.meter), length: M.stepsPerBar(opts.meter), chords: chart.chords, bass: chart.bass, accents: [] },
+          drums: { kick: [], snare: [], hhClosed: [], hhOpen: [] }, swing: 0, human: 6 },
+      }));
+    }
     await start();
     stopPlayback();
     stopPreview();
     stopFlag = false;
-    opts = opts || {};
     const tempo = clamp(opts.tempo || 90, 40, 240);
     const style = opts.style || 'block';
     const withBass = opts.withBass !== false;
@@ -591,6 +677,8 @@
     const pattern = opts.pattern || { drums:{kick:[0,8],snare:[4,12],hhClosed:[0,2,4,6,8,10,12,14],hhOpen:[]}, bass:'root', chords:'block' };
     const sixteenthMs = (60000 / tempo) / 4;
     const beatMs = sixteenthMs * 4;
+    const chart = pattern.steps && global.Meters ? pattern.steps : null;
+    if (chart) return scheduleChartSection(chords, opts, startOffset, pattern, chart, sixteenthMs, beatMs);
     const stepsPerChord = 16;
     // pattern.swing may be a tuned number (0-0.3) or legacy boolean true (=0.18)
     const swingAmt = (opts.swing != null ? opts.swing
@@ -646,6 +734,52 @@
     return startOffset + chords.length * stepsPerChord * sixteenthMs;
   }
 
+  // A section played from a chart, bar after bar, in any time. A chord lasts
+  // opts.stepsPerChord sixteenths (a bar unless the section says otherwise).
+  function scheduleChartSection(chords, opts, startOffset, pattern, chart, sixteenthMs, beatMs) {
+    const L = chart.length;
+    const stepsPerChord = Math.max(1, Math.round(opts.stepsPerChord || L));
+    const totalSteps = chords.length * stepsPerChord;
+    const bars = Math.ceil(totalSteps / L);
+    const voicingMode = opts.voicing || 'smart';
+    const withBass = opts.withBass !== false;
+    const drumHuman = pattern.human != null ? pattern.human : 6;
+    let prevVoicing = null;
+    const voicings = chords.map(ch => {
+      const raw = voiceChord(ch, voicingMode, prevVoicing);
+      prevVoicing = raw;
+      return performanceVoicing(ch, raw, 6);
+    });
+    for (let bar = 0; bar < bars; bar++) {
+      const barStartMs = startOffset + bar * L * sixteenthMs;
+      scheduleMeterBeats(barStartMs, sixteenthMs, chart.meter, opts);
+      scheduleDrumGroove(pattern.drums, bar, bars, barStartMs, sixteenthMs, 0, drumHuman, pattern.drum, L);
+      scheduleChartBar(chart, bar, chords, voicings, stepsPerChord, totalSteps, startOffset, sixteenthMs, opts, withBass);
+    }
+    chords.forEach((ch, ci) => {
+      timers.push(setTimeout(() => {
+        if (!stopFlag && opts.onChordStart) opts.onChordStart(ci, ch);
+      }, startOffset + ci * stepsPerChord * sixteenthMs));
+    });
+    scheduleMelodyEvents(opts.melody, leadInst, startOffset, beatMs, 0.85, opts);
+    scheduleMelodyEvents(opts.underMelody, underInst, startOffset, beatMs, 0.55, opts);
+    return startOffset + totalSteps * sixteenthMs;
+  }
+
+  // A count-in: one bar of the time being played (four beats when no time is given).
+  function countIn(opts) {
+    const tempo = clamp(opts.tempo || 90, 40, 240);
+    const beatMs = 60000 / tempo;
+    const M = global.Meters;
+    const meter = opts.meter || (opts.pattern && opts.pattern.steps ? opts.pattern.steps.meter : null);
+    if (meter && M && M.id(meter) !== '4/4') {
+      scheduleMeterBeats(0, beatMs / 4, meter, opts);
+      return M.stepsPerBar(meter) * beatMs / 4;
+    }
+    scheduleClick(0, beatMs, 4, opts);
+    return 4 * beatMs;
+  }
+
   async function playBacking(chords, opts) {
     await start();
     stopPlayback();
@@ -653,12 +787,7 @@
     stopFlag = false;
     opts = opts || {};
     let startOffset = 0;
-    if (opts.metronome && opts.countIn) {
-      const tempo = clamp(opts.tempo || 90, 40, 240);
-      const beatMs = (60000 / tempo);
-      scheduleClick(0, beatMs, 4, opts);
-      startOffset = 4 * beatMs;
-    }
+    if (opts.metronome && opts.countIn) startOffset = countIn(opts);
     const total = scheduleBacking(chords, opts, startOffset) + 50;
     timers.push(setTimeout(() => {
       if (stopFlag) return;
@@ -707,6 +836,7 @@
       const total = scheduleBacking(item.chords, {
         tempo: item.tempo,
         pattern: item.pattern,
+        stepsPerChord: item.stepsPerChord,
         voicing: opts.voicing || 'smart',
         withBass: opts.withBass !== false,
         melody: item.melody,
@@ -737,25 +867,28 @@
     const drumHuman = pattern.drum && pattern.drum.human != null
       ? pattern.drum.human
       : (bandOptions.drums === 'hazy' || bandOptions.drums === 'distant' ? 18 : 7);
+    const chart = pattern.steps && global.Meters ? pattern.steps : null;
+    const barSteps = chart ? chart.length : 16;
 
     let startOffset = 0;
-    if (opts.metronome && opts.countIn) {
-      scheduleClick(0, beatMs, 4, opts);
-      startOffset = 4 * beatMs;
-    }
+    if (opts.metronome && opts.countIn) startOffset = countIn(Object.assign({}, opts, { tempo }));
 
     for (let bar = 0; bar < bars; bar++) {
-      const barStartMs = startOffset + bar * 16 * sixteenthMs;
-      if (opts.onBeat) {
-        for (let b = 0; b < 4; b++) {
-          timers.push(setTimeout(() => { if (!stopFlag) opts.onBeat(b); }, barStartMs + b * beatMs));
+      const barStartMs = startOffset + bar * barSteps * sixteenthMs;
+      if (chart) {
+        scheduleMeterBeats(barStartMs, sixteenthMs, chart.meter, opts);
+      } else {
+        if (opts.onBeat) {
+          for (let b = 0; b < 4; b++) {
+            timers.push(setTimeout(() => { if (!stopFlag) opts.onBeat(b); }, barStartMs + b * beatMs));
+          }
         }
+        if (opts.metronome) scheduleClick(barStartMs, beatMs, 4, opts);
       }
-      if (opts.metronome) scheduleClick(barStartMs, beatMs, 4, opts);
-      scheduleDrumGroove(pattern.drums, bar, bars, barStartMs, sixteenthMs, swingAmt, drumHuman, pattern.drum);
+      scheduleDrumGroove(pattern.drums, bar, bars, barStartMs, sixteenthMs, chart ? 0 : swingAmt, drumHuman, pattern.drum, barSteps);
     }
 
-    const total = startOffset + bars * 16 * sixteenthMs + 50;
+    const total = startOffset + bars * barSteps * sixteenthMs + 50;
     timers.push(setTimeout(() => {
       if (stopFlag) return;
       if (shouldLoop(opts)) { playDrums(opts); return; }
@@ -776,8 +909,14 @@
     });
   }
 
-  function scheduleDrumGroove(drums, barIdx, totalBars, startMs, stepMs, swingAmt, drumHuman, meta) {
-    const d = varyDrumPattern(drums || {}, barIdx, totalBars, meta);
+  // barSteps: sixteenths in the bar. Only 4/4 bars get the style fills; a
+  // groove written for another time plays as written.
+  function scheduleDrumGroove(drums, barIdx, totalBars, startMs, stepMs, swingAmt, drumHuman, meta, barSteps) {
+    const plain = barSteps && barSteps !== 16;
+    const d = plain ? {
+      kick: (drums && drums.kick || []).slice(), snare: (drums && drums.snare || []).slice(),
+      hhClosed: (drums && drums.hhClosed || []).slice(), hhOpen: (drums && drums.hhOpen || []).slice(),
+    } : varyDrumPattern(drums || {}, barIdx, totalBars, meta);
     function swungOffset(step) {
       return swingAmt > 0 && (step % 2 === 1) ? stepMs * swingAmt : 0;
     }
@@ -787,7 +926,7 @@
         const at = startMs + step * stepMs + swungOffset(step) + humanOffset(drumHuman, seed);
         timers.push(setTimeout(() => {
           if (stopFlag) return;
-          const ghostSnare = layer === 'snare' && step !== 4 && step !== 12;
+          const ghostSnare = !plain && layer === 'snare' && step !== 4 && step !== 12;
           const baseVel = layer === 'kick' ? 0.82 : ghostSnare ? 0.32 : layer === 'snare' ? 0.68 : layer === 'hhOpen' ? 0.38 : 0.28;
           const vel = humanVelocity(baseVel, seed + 5, layer === 'kick' ? 0.18 : 0.14);
           try {
