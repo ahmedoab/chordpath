@@ -731,6 +731,23 @@ const Midi = globalThis.Midi;
     single && String.fromCharCode(...single.slice(0, 4)) === 'MThd');
 }
 
+// ── Where test runs open the window ────────────────────────────────────────
+section('Desktop: where test windows open');
+{
+  const Screens = require(path.join(ROOT, 'desktop/screens.js'));
+  const tv = { id: 1, internal: false, workArea: { x: 0, y: 0, width: 1536, height: 816 } };
+  const laptop = { id: 2, internal: true, workArea: { x: 1536, y: 0, width: 1536, height: 816 } };
+  const side = { id: 3, internal: false, workArea: { x: -1920, y: 0, width: 1920, height: 1040 } };
+  const at = (displays, primaryId) => Screens.testPlacement(displays, primaryId, 1440);
+  const onLaptop = at([tv, laptop], 1);
+  check('a test window opens on the laptop screen, not the main one', onLaptop.x >= 1536 && onLaptop.x + 1440 <= 3072 && onLaptop.y === 0);
+  check('centred across it', onLaptop.x === 1536 + 48);
+  check('on the laptop screen even when it is the main one', at([laptop, side], 2).x >= 1536);
+  check('with no built-in screen, on any screen but the main one', at([tv, side], 1).x < 0);
+  check('with one screen, on that one', at([tv], 1).x === 48);
+  check('a window wider than the screen starts at its left edge', Screens.testPlacement([laptop], 2, 2000).x === 1536);
+}
+
 // ── Summary ────────────────────────────────────────────────────────────────
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) {

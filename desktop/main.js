@@ -17,10 +17,11 @@
  */
 'use strict';
 
-const { app, BrowserWindow, Menu, protocol, session, shell, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, protocol, session, shell, dialog, ipcMain, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const Lookup = require('./lookup');
+const Screens = require('./screens');
 const AudioService = require('./audioservice');
 
 const APP_ROOT = path.join(__dirname, '..');
@@ -252,6 +253,8 @@ function buildMenu() {
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440, height: 900, minWidth: 980, minHeight: 620,
+    // Test runs open on the laptop's own screen, out of the way of the main one.
+    ...(E2E ? Screens.testPlacement(screen.getAllDisplays(), screen.getPrimaryDisplay().id, 1440) : {}),
     title: 'ChordPath', backgroundColor: '#1a1916', show: false,
     icon: path.join(__dirname, 'icon.ico'),
     webPreferences: {

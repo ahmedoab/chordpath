@@ -36,6 +36,12 @@ const ARTICLE = `"Lantern Road" is a song by the English rock band The Hollow Pi
     section('Desktop shell');
     check('window opens with the app title', /ChordPath/.test(await page.title()));
     check('page is served from the private app address', page.url() === 'app://chordpath/index.html');
+    check('a test run opens on the laptop screen, not the main one', await app.evaluate(({ BrowserWindow, screen }) => {
+      const shown = screen.getDisplayMatching(BrowserWindow.getAllWindows()[0].getBounds());
+      const all = screen.getAllDisplays();
+      const builtIn = all.find(d => d.internal);
+      return builtIn ? shown.id === builtIn.id : all.length === 1 || shown.id !== screen.getPrimaryDisplay().id;
+    }));
     check('the audio library is bundled and loaded', await page.evaluate(() => typeof window.Tone === 'object' && !!window.Tone.Transport));
     await page.evaluate(() => document.fonts.ready);
     check('the bundled fonts are in use', await page.evaluate(() =>
