@@ -103,28 +103,34 @@
     wireEvents();
   }
 
+  function glyph(name) { return String(name).replace('#', '♯').replace(/^([A-G])b/, '$1♭'); }
+
+  // One button for each of the twelve notes, named the way the song's mode
+  // names its key (D♭ major, C♯ minor). The song's key is lit by its note,
+  // however an older song spelled it.
   function buildKeyGrid() {
-    const disp = { 'C#': 'C♯', 'D#': 'D♯', 'F#': 'F♯', 'G#': 'G♯', 'A#': 'A♯' };
     const host = $('keyGrid');
     host.innerHTML = '';
-    ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].forEach(k => {
+    for (let pc = 0; pc < 12; pc++) {
       const b = doc.createElement('button');
       b.type = 'button';
-      b.textContent = disp[k] || k;
-      b.dataset.key = k;
+      b.dataset.pc = pc;
       b.addEventListener('click', () => {
         App().mutate(s => {
-          s.key = k;
           const mode = doc.querySelector('#keyModeToggle button.active');
           if ((s.scale === 'major' || s.scale === 'natural_minor') && mode) {
             s.scale = mode.dataset.mode === 'minor' ? 'natural_minor' : 'major';
           }
+          s.key = S().keyName(pc, s.scale);
         });
         renderAll();
       });
       host.appendChild(b);
-    });
+    }
   }
+
+  // The song's key, renamed for a new scale: C♯ when D♭ major turns minor.
+  function respellKey(s) { s.key = S().keyName(S().noteIndex(s.key), s.scale); }
 
   function buildScaleSelect() {
     const sel = $('scaleSelect');
@@ -1022,7 +1028,13 @@
   }
 
   function renderKeyGrid() {
-    [...$('keyGrid').children].forEach(b => b.classList.toggle('active', b.dataset.key === song().key));
+    const s = song();
+    const home = S().noteIndex(s.key);
+    [...$('keyGrid').children].forEach(b => {
+      const pc = parseInt(b.dataset.pc, 10);
+      b.classList.toggle('active', pc === home);
+      b.textContent = glyph(pc === home ? s.key : S().keyName(pc, s.scale));
+    });
   }
 
   function renderHeading() {
@@ -1059,7 +1071,8 @@
   // ── Event wiring (once) ──────────────────────────────────────────────────
   function wireEvents() {
     $('scaleSelect').addEventListener('change', () => {
-      App().mutate(s => { s.scale = $('scaleSelect').value; });
+      App().mutate(s => { s.scale = $('scaleSelect').value; respellKey(s); });
+      syncControls();
       renderAll();
     });
 
@@ -1224,6 +1237,7 @@
       b.addEventListener('click', () => {
         App().mutate(s => {
           s.scale = b.dataset.mode === 'minor' ? 'natural_minor' : 'major';
+          respellKey(s);
         });
         buildScaleSelect();
         renderAll();

@@ -41,7 +41,10 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
     await page.click('#btnNewSong');
     await page.waitForSelector('#wizardRoot .start');
     check('nothing can start until a key is chosen', await page.isDisabled('#wzCreate'));
+    const blackKey = async () => (await page.textContent('.start-tonic[data-pc="1"]')).trim();
+    check(`in a major key the note above C is named D♭ first (${await blackKey()})`, /^D♭/.test(await blackKey()));
     await page.click('#startMode [data-scale="natural_minor"]');
+    check(`and in a minor key, C♯ (${await blackKey()})`, /^C♯/.test(await blackKey()));
     await page.click('.start-tonic[data-key="E"]');
     await page.click('.start-meter[data-meter="3/4"]');
     await page.fill('#startTitle', 'Paper Boats');
@@ -204,6 +207,31 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
     const ideasBefore = await page.isVisible('#ideas');
     await page.keyboard.press('i');
     check('I switches between the next chord and ideas', (await page.isVisible('#ideas')) === !ideasBefore && (await page.isVisible('#options')) === ideasBefore);
+
+    // ── Keys are named the way musicians name them ─────────────────────────
+    section('Key names');
+    await page.click('#navTabs [data-nav="songs"]');
+    await page.click('#btnNewSong');
+    await page.waitForSelector('#wizardRoot .start');
+    await page.click('.start-tonic[data-pc="1"]');
+    await page.click('#wzCreate');
+    await page.waitForSelector('#view-section:not([hidden]) #progression');
+    s = await song();
+    check(`a song started on the key above C, in major, is in D♭ (${s.key})`, s.key === 'Db' && s.scale === 'major');
+    const active = async () => page.$eval('#keyGrid button.active', b => ({ pc: b.dataset.pc, text: b.textContent.trim() }));
+    let on = await active();
+    check(`the key grid shows it as D♭ (${on.text})`, on.pc === '1' && on.text === 'D♭');
+    await page.click('#keyModeToggle [data-mode="minor"]');
+    s = await song();
+    on = await active();
+    check(`switched to minor, it becomes C♯ minor (${s.key}, ${on.text})`, s.key === 'C#' && s.scale === 'natural_minor' && on.pc === '1' && on.text === 'C♯');
+    await page.click('#keyModeToggle [data-mode="major"]');
+    check('and back to D♭ major', (await song()).key === 'Db');
+    await page.click('#keyGrid button[data-pc="10"]');
+    check('a key chosen in the grid is named for the mode too: B♭', (await song()).key === 'Bb' && (await active()).text === 'B♭');
+    await page.evaluate(() => { window.App.mutate(sg => { sg.key = 'A#'; }); window.Views.Section.renderAll(); });
+    on = await active();
+    check(`an older song saved in A# still lights the right key (${on.text})`, on.pc === '10');
 
     // ── Health ─────────────────────────────────────────────────────────────
     section('Health');

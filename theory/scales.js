@@ -160,9 +160,43 @@
     { label:'Rare & exotic', ids:['dorian_b2','lydian_aug','mixolydian_b6','locrian_nat2','lydian_s2','ukrainian_dorian','neapolitan_min','neapolitan_maj','persian','enigmatic','romanian_minor','indian_bhairav'] },
   ];
 
+  // ── Naming a key ─────────────────────────────────────────────────────────
+  // The name musicians give a key: a white note is its letter; a black note
+  // is the spelling whose scale needs the fewest sharps and flats (Db major,
+  // not C# major; C# minor, not Db minor). Where both need as many, as F# and
+  // Gb major or D# and Eb minor do, the usual choice wins:
+  // major C Db D Eb E F F# G Ab A Bb B, minor C C# D Eb E F F# G G# A Bb B.
+  const LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+  const LETTER_PCS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+  const KEY_NAMES = {
+    major: ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'],
+    minor: ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'G#', 'A', 'Bb', 'B'],
+  };
+  function isMinorScale(scaleId) { return /minor|dorian|phrygian|locrian|aeolian/.test(String(scaleId || '')); }
+  // How many sharps and flats a seven-note scale needs when its first note is called `name`.
+  function accidentalsFrom(name, intervals) {
+    const pc = noteIndex(name);
+    const first = LETTERS.indexOf(name[0]);
+    return intervals.reduce((sum, iv, i) => {
+      let off = (pc + iv - LETTER_PCS[LETTERS[(first + i) % 7]]) % 12;
+      if (off > 6) off -= 12;
+      if (off < -6) off += 12;
+      return sum + Math.abs(off);
+    }, 0);
+  }
+  function keyName(pc, scaleId) {
+    const p = ((Math.round(pc) % 12) + 12) % 12;
+    const usual = KEY_NAMES[isMinorScale(scaleId) ? 'minor' : 'major'][p];
+    const meta = SCALES[scaleId];
+    if (NOTE_NAMES_SHARP[p] === NOTE_NAMES_FLAT[p] || !meta || meta.intervals.length !== 7) return usual;
+    const sharp = accidentalsFrom(NOTE_NAMES_SHARP[p], meta.intervals);
+    const flat = accidentalsFrom(NOTE_NAMES_FLAT[p], meta.intervals);
+    return sharp === flat ? usual : sharp < flat ? NOTE_NAMES_SHARP[p] : NOTE_NAMES_FLAT[p];
+  }
+
   global.Scales = {
     NOTE_NAMES_SHARP, NOTE_NAMES_FLAT, FLAT_KEYS,
-    noteIndex, noteName,
+    noteIndex, noteName, keyName,
     buildScale, getIntervals, getScaleMeta, getChordPool, isHeptatonic, listScales,
     SCALES, SCALE_GROUPS,
   };

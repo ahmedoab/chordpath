@@ -44,6 +44,16 @@ check('C major spelled correctly',
   Scales.buildScale('C', 'major').join(' ') === 'C D E F G A B');
 check('Eb major uses flats',
   Scales.buildScale('Eb', 'major').join(' ') === 'Eb F G Ab Bb C D');
+{
+  const names = scale => [1, 3, 6, 8, 10].map(pc => Scales.keyName(pc, scale)).join(' ');
+  check(`major keys are named as musicians name them: Db Eb F# Ab Bb (${names('major')})`, names('major') === 'Db Eb F# Ab Bb');
+  check(`minor keys too: C# Eb F# G# Bb (${names('natural_minor')})`, names('natural_minor') === 'C# Eb F# G# Bb');
+  check('a natural note is just its letter', Scales.keyName(0, 'major') === 'C' && Scales.keyName(4, 'natural_minor') === 'E' && Scales.keyName(11, 'lydian') === 'B');
+  check('a mode takes the name with the fewest sharps or flats', Scales.keyName(3, 'phrygian') === 'D#' && Scales.keyName(6, 'lydian') === 'Gb' && Scales.keyName(1, 'dorian') === 'C#' && Scales.keyName(10, 'dorian') === 'Bb');
+  check('harmonic and melodic minor are minor keys', Scales.keyName(8, 'harmonic_minor') === 'G#' && Scales.keyName(1, 'melodic_minor') === 'C#');
+  check('scales of other sizes follow major or minor', Scales.keyName(1, 'major_pent') === 'Db' && Scales.keyName(1, 'minor_pent') === 'C#' && Scales.keyName(10, 'blues_minor') === 'Bb');
+  check('any spelling of a key is understood', Scales.keyName(Scales.noteIndex('A#'), 'major') === 'Bb');
+}
 for (const g of Scales.SCALE_GROUPS) {
   for (const id of g.ids) {
     check(`scale group "${g.label}" id "${id}" exists`, !!Scales.SCALES[id]);

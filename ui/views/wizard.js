@@ -14,8 +14,6 @@
   const Song = () => global.Song;
   const M = () => global.Meters;
 
-  const TONICS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  const SHOWN = { 'C#': 'C♯ / D♭', 'D#': 'D♯ / E♭', 'F#': 'F♯ / G♭', 'G#': 'G♯ / A♭', 'A#': 'A♯ / B♭' };
   // Chords a guitarist can play without a barre.
   const OPEN = new Set(['C', 'D', 'E', 'G', 'A', 'Am', 'Dm', 'Em']);
   const STARTS = [
@@ -25,22 +23,33 @@
   ];
   const TEMPOS = [[66, 'Slow'], [84, 'Easy'], [100, 'Walking'], [120, 'Up'], [144, 'Fast']];
 
+  // pc: the key's note, 0–11, or null until one is chosen. Its name follows
+  // the mode: the same note is D♭ major but C♯ minor.
   const state = {};
   function reset() {
-    Object.assign(state, { key: null, scale: 'major', meter: '4/4', tempo: 100, title: '', feelingId: null, start: 'verse' });
+    Object.assign(state, { pc: null, scale: 'major', meter: '4/4', tempo: 100, title: '', feelingId: null, start: 'verse' });
   }
   reset();
 
   function root() { return doc.getElementById('wizardRoot'); }
   function esc(v) { return UI().esc(v); }
+  function glyph(name) { return String(name).replace('#', '♯').replace(/^([A-G])b/, '$1♭'); }
+  function keyFor(pc) { return global.Scales.keyName(pc, state.scale); }
+  function chosenKey() { return state.pc == null ? null : keyFor(state.pc); }
+  // A key's name in the chosen mode, with its other name after it: D♭ / C♯.
+  function tonicLabel(pc) {
+    const name = keyFor(pc);
+    const other = [global.Scales.NOTE_NAMES_SHARP[pc], global.Scales.NOTE_NAMES_FLAT[pc]].find(n => n !== name);
+    return other ? glyph(name) + ' / ' + glyph(other) : glyph(name);
+  }
 
   function keyChords() {
-    if (!state.key) return [];
-    return global.Chords.diatonicChords(state.key, state.scale, { sevenths: false });
+    if (state.pc == null) return [];
+    return global.Chords.diatonicChords(chosenKey(), state.scale, { sevenths: false });
   }
 
   function keyPanel() {
-    if (!state.key) {
+    if (state.pc == null) {
       return '<p class="meta start-wait">Choose a key to see the chords that live in it.</p>';
     }
     const chords = keyChords();
@@ -48,7 +57,7 @@
     const scaleName = (global.Scales.getScaleMeta(state.scale) || {}).name || state.scale;
     return `
       <div class="start-key-info">
-        <p><strong>${esc(state.key)} ${esc(scaleName)}</strong> — the chords that live in it:</p>
+        <p><strong>${esc(glyph(chosenKey()))} ${esc(scaleName)}</strong> — the chords that live in it:</p>
         <div class="start-chords">${chords.map(c => `
           <span class="start-chord"><span class="name">${esc(c.shortName)}</span><span class="roman">${esc(c.roman || '')}</span></span>`).join('')}</div>
         <p class="meta">${open.length >= 4
@@ -80,7 +89,7 @@
         <section class="start-block" aria-labelledby="startKeyLabel">
           <h4 id="startKeyLabel">Key</h4>
           <div class="start-tonics" role="group" aria-label="Key">
-            ${TONICS.map(k => `<button type="button" class="start-tonic${state.key === k ? ' chosen' : ''}" data-key="${k}">${esc(SHOWN[k] || k)}</button>`).join('')}
+            ${Array.from({ length: 12 }, (unused, pc) => `<button type="button" class="start-tonic${state.pc === pc ? ' chosen' : ''}" data-pc="${pc}" data-key="${esc(keyFor(pc))}">${esc(tonicLabel(pc))}</button>`).join('')}
           </div>
           <div class="start-row">
             <div class="seg" id="startMode">
@@ -131,7 +140,7 @@
 
         <div class="wizard-nav">
           <button type="button" class="ghost" id="wzCancel">Cancel</button>
-          <button type="button" class="primary" id="wzCreate"${state.key ? '' : ' disabled title="Choose a key first"'}>Start writing</button>
+          <button type="button" class="primary" id="wzCreate"${state.pc != null ? '' : ' disabled title="Choose a key first"'}>Start writing</button>
         </div>
       </div>`;
     wire();
@@ -139,7 +148,7 @@
 
   function wire() {
     const r = root();
-    r.querySelectorAll('[data-key]').forEach(b => b.addEventListener('click', () => { state.key = b.dataset.key; render(); }));
+    r.querySelectorAll('.start-tonic[data-pc]').forEach(b => b.addEventListener('click', () => { state.pc = parseInt(b.dataset.pc, 10); render(); }));
     r.querySelectorAll('#startMode [data-scale]').forEach(b => b.addEventListener('click', () => { state.scale = b.dataset.scale; render(); }));
     doc.getElementById('startScale').addEventListener('change', e => { state.scale = e.target.value; render(); });
     r.querySelectorAll('[data-meter]').forEach(b => b.addEventListener('click', () => { state.meter = b.dataset.meter; render(); }));
@@ -180,7 +189,7 @@
   function hearTheTime() {
     if (!global.Audio) return;
     const meter = M().parse(state.meter);
-    const home = global.Chords.buildChord(state.key || 'C', state.scale === 'major' || !/minor|dorian|phrygian|aeolian|locrian/.test(state.scale) ? 'maj' : 'm');
+    const home = global.Chords.buildChord(chosenKey() || 'C', state.scale === 'major' || !/minor|dorian|phrygian|aeolian|locrian/.test(state.scale) ? 'maj' : 'm');
     const pattern = global.Arrangements.makePlaybackPattern(M().defaultRhythm(meter), M().defaultGroove(meter), meter);
     global.Audio.playBacking([home, home], {
       tempo: state.tempo, voicing: 'smart', withBass: true, pattern, stepsPerChord: M().stepsPerBar(meter), metronome: false,
@@ -188,19 +197,19 @@
   }
 
   function create() {
-    if (!state.key) { UI().toast('Choose a key first'); return; }
+    if (state.pc == null) { UI().toast('Choose a key first'); return; }
     stop();
     const S = Song();
     const shape = STARTS.find(s => s.id === state.start) || STARTS[0];
     const song = S.createSong({
       title: state.title.trim() || 'Untitled song',
-      key: state.key, scale: state.scale, tempo: state.tempo,
+      key: chosenKey(), scale: state.scale, tempo: state.tempo,
       meter: M().parse(state.meter), feelingId: state.feelingId,
     });
     shape.roles.forEach(role => song.sections.push(S.createSection({ role })));
     S.autoNameSections(song);
     if (!global.Storage.saveProject(song)) { UI().toast('Could not save the song'); return; }
-    UI().toast(`"${song.title}" started in ${song.key} ${(global.Scales.getScaleMeta(song.scale) || {}).name || ''}`);
+    UI().toast(`"${song.title}" started in ${glyph(song.key)} ${(global.Scales.getScaleMeta(song.scale) || {}).name || ''}`);
     reset();
     global.Nav.go('section', song.id, song.sections[0].id);
   }
