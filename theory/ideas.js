@@ -224,7 +224,9 @@
   // nearest of its kind there.
   function patternsFor(section, fromMeter, toMeter) {
     const to = Mt().id(toMeter);
-    const out = { rhythmPattern: section.rhythmPattern || '', drumPattern: section.drumPattern || '' };
+    // Older songs write "no drums" as 'none'.
+    const drums = section.drumPattern === 'none' ? '' : section.drumPattern;
+    const out = { rhythmPattern: section.rhythmPattern || '', drumPattern: drums || '' };
     if (out.rhythmPattern) {
       const chart = Mt().findRhythm(out.rhythmPattern, fromMeter);
       if (!chart || chart.meter !== to) {

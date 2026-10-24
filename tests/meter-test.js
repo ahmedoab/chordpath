@@ -181,6 +181,80 @@ section('Seeing a rhythm');
   check('a groove in 6/8 is drawn twelve steps wide', grid.split('\n').some(line => /^K/.test(line) && (line.match(/[x\-.o]/gi) || []).length >= 12));
 }
 
+// ── Chords that last half a bar, or two ────────────────────────────────────
+section('Chords half a bar or two bars long');
+{
+  const C = Chords.chordFromSpec('C:maj'), G = Chords.chordFromSpec('G:maj');
+  const inside = (events, bpc) => events.every(e => {
+    const end = (Math.floor(e.beatStart / bpc + 1e-9) + 1) * bpc;
+    return e.beatStart + e.beats <= end + 1e-9;
+  });
+  const halves = Tabs.bassEvents([C, G], 'root-fifth', 2);
+  check(`a bass line keeps each half-bar chord's notes inside it (${halves.map(e => e.midi + '@' + e.beatStart).join(' ')})`,
+    inside(halves, 2) && halves.length === 2 && halves[0].midi === 48 && halves[1].midi === 43);
+  const walk = Tabs.bassEvents([C, G], 'walking', 8);
+  check(`a walking bass walks every bar of a two-bar chord (${walk.length} notes)`, walk.length === 16 && inside(walk, 8));
+  check('leading into the next chord only at the end of the chord',
+    walk.find(e => e.beatStart === 3).midi === 60 && walk.find(e => e.beatStart === 7).midi === 42);
+  eq('a chord a bar long walks as it always did', Tabs.bassEvents([C, G], 'walking', 4).map(e => e.midi), [48, 52, 55, 42, 43, 47, 50, 47]);
+
+  const song = Song.createSong({ key: 'C', tempo: 100 });
+  const sec = Song.createSection({ progSpecs: ['C:maj', 'G:maj', 'A:m', 'F:maj'], rhythmPattern: 'shoegaze_wash', beatsPerChord: 2 });
+  song.sections.push(sec);
+  const laid = Parts.fromItem(Song.playbackItem(song, sec));
+  const ringsOn = laid.chords.filter(n => n.t + n.d > (Math.floor(n.t / 2 + 1e-9) + 1) * 2 + 1e-6);
+  check(`in the DAW, no chord rings on into the next one (${ringsOn.length} do)`, laid.chords.length > 0 && ringsOn.length === 0);
+  check('and the section is two bars long', laid.beats === 8);
+}
+
+// ── A section as tab ───────────────────────────────────────────────────────
+section('A section as tab');
+{
+  const song = Song.createSong({ key: 'G', tempo: 90, meter: { num: 3, den: 4 } });
+  const sec = Song.createSection({ progSpecs: ['G:maj', 'C:maj', 'D:maj', 'G:maj'], rhythmPattern: 'waltz_strum', drumPattern: 'waltz_kit', vocalPattern: 'folk_lilt' });
+  song.sections.push(sec);
+  const chords = Tabs.sectionTab(song, sec, 'chords');
+  check('the chord tab is written in bars of 3/4', /^e \|[^|\n]{24}\|/m.test(chords) && !/^e \|[^|\n]{32}\|/m.test(chords));
+  check('with the strum chart above it, counted in three', /Count\s+1\s+&\s+2\s+&\s+3/.test(chords) && /Strum/.test(chords));
+  check('the drum grid is the waltz groove, a 3/4 bar wide', /^KK\|x-{11}\|$/m.test(Tabs.sectionTab(song, sec, 'drums')));
+  const bass = Tabs.sectionTab(song, sec, 'bass');
+  check('the bass tab holds the chart\'s notes: G, C and D roots, one to a bar', /^E \|3-{23}\|/m.test(bass) && /^A \|[^|]*\|3-{23}\|/m.test(bass) && /^D \|0-{23}\|/m.test(bass));
+  check('the vocal tab is in 3/4 bars too', /^e \|[^|\n]{24}\|/m.test(Tabs.sectionTab(song, sec, 'melody')) || /^B \|[^|\n]{24}\|/m.test(Tabs.sectionTab(song, sec, 'melody')));
+  const bare = Song.createSection({ progSpecs: ['G:maj'] });
+  song.sections.push(bare);
+  check('with no melody chosen it says so, and sings nothing', /no vocal melody/i.test(Tabs.sectionTab(song, bare, 'melody')));
+  check('with no drums chosen it says so', /no drums/i.test(Tabs.sectionTab(song, bare, 'drums')));
+  check('an empty section has no tab yet', /no chords/i.test(Tabs.sectionTab(song, Song.createSection({}), 'chords')));
+  const four = Song.createSong({ key: 'C' });
+  const plain = Song.createSection({ progSpecs: ['C:maj', 'A:m'], rhythmPattern: 'pop_eights' });
+  four.sections.push(plain);
+  eq('a 4/4 section in a style is the chord tab it always was', Tabs.sectionTab(four, plain, 'chords'), Tabs.renderChordTab(Song.chordsOf(four, plain), { beatsPerChord: 4 }));
+}
+
+// ── Naming what a section plays ────────────────────────────────────────────
+section('Naming what a section plays');
+{
+  const A = Arrangements;
+  check('no rhythm chosen is no rhythm, not the first one on the list', A.rhythmFor('', '4/4') === null && A.rhythmFor(null) === null);
+  check('a 4/4 style rhythm is found by its id', (A.rhythmFor('jangle_arp', '4/4') || {}).id === 'jangle_arp');
+  check('with no time given, 4/4 is meant', (A.rhythmFor('jangle_arp') || {}).id === 'jangle_arp');
+  check('a chart for the time is found by its id', (A.rhythmFor('waltz_strum', '3/4') || {}).id === 'waltz_strum');
+  check('a 4/4 style is not the rhythm of a section in 3/4', A.rhythmFor('jangle_arp', '3/4') === null);
+  check('nor is a chart written for another time', A.rhythmFor('waltz_strum', '6/8') === null);
+  check('a chart made for a time nobody wrote charts for is found', (A.rhythmFor('pulse_11/8', '11/8') || {}).id === 'pulse_11/8');
+  check('an unknown rhythm is no rhythm', A.rhythmFor('no_such_rhythm', '4/4') === null);
+  check('no drums chosen is no drums', A.drumsFor('', '4/4') === null && A.drumsFor('none', '4/4') === null && A.drumsFor(undefined) === null);
+  check('a 4/4 kit is found by its id', (A.drumsFor('motorik_backbeat', '4/4') || {}).id === 'motorik_backbeat');
+  check('a groove for the time is found by its id', (A.drumsFor('six_eight_ballad', '6/8') || {}).id === 'six_eight_ballad');
+  check('a 4/4 kit is not the drums of a section in 6/8', A.drumsFor('motorik_backbeat', '6/8') === null);
+  check('no melody chosen is no melody', A.vocalFor('') === null && A.vocalFor('nope') === null && (A.vocalFor('chorus_lift') || {}).id === 'chorus_lift');
+  check('an under-melody of "none" is none', A.underFor('none') === null && A.underFor('') === null && (A.underFor('high_drone') || {}).id === 'high_drone');
+  eq('an empty section is described as plain chords and no drums', A.describeCombo('pop', '', '', '', 'none', '4/4'), 'Pop · Plain chords · No drums');
+  eq('a section played from charts is described by them', A.describeCombo('folk', 'six_eight_sway', 'six_eight_ballad', 'folk_lilt', 'high_drone', '6/8'),
+    'Folk / Acoustic · Swaying strum · 6/8 ballad · Folk lilt · High drone');
+  eq('an unknown genre is described as pop, not as the first genre on the list', A.describeCombo('no_such_genre', '', '', '', '', '4/4'), 'Pop · Plain chords · No drums');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) {
   console.error('\nFailed checks:');

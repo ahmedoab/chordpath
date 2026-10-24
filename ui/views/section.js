@@ -1,6 +1,8 @@
 /* ChordPath — ui/views/section.js
- * The writing workspace, ported from the old single-screen app.js onto the
- * multi-section song model. All edits flow through App.mutate() → autosave.
+ * The writing workspace for one section of a song. The chords are the
+ * writer's: the next-chord list and the Ideas pane only offer, every idea
+ * can be heard before it is used, and every change to the chords can be
+ * undone. All edits flow through App.mutate() → autosave.
  * Editor-only preferences (instrument, viz, filters…) live in App.prefs.
  */
 (function (global) {
@@ -19,9 +21,10 @@
   const E = () => global.Emotions;
   const D = () => global.Descriptions;
   const Sg = () => global.Songs;
-  const M = () => global.Melody;
   const F = () => global.Feelings;
   const T = () => global.Tabs;
+  const Mt = () => global.Meters;
+  const I = () => global.Ideas;
   const Song = () => global.Song;
   const Au = () => global.Audio;
   const UI = () => global.UI;
@@ -32,6 +35,10 @@
   let shapePreviewChord = null;
   let currentTab = 'chords';
   let chordCache = [];
+  let playing = false;
+  let ideaSeed = 1;               // which handful of ideas is on show
+  let shownIdeas = {};            // group → the ideas on screen, for their buttons
+  const history = new Map();      // section id → the chords before each change, for Undo
 
   // ── Accessors ────────────────────────────────────────────────────────────
   function song() { return App().state.song; }
@@ -41,6 +48,13 @@
     return Song().getSection(s, App().state.sectionId) || s.sections[0] || null;
   }
   function prefs() { return App().prefs; }
+  // The section's own key, time, tempo and chord length (each the song's unless it has one of its own).
+  function key() { return Song().sectionKey(song(), section()); }
+  function meter() { return Song().sectionMeter(song(), section()); }
+  function tempo() { return Song().sectionTempo(song(), section()); }
+  function chordBeats() { return Song().chordBeats(song(), section()); }
+  // What the section plays: chords, patterns, melodies.
+  function item() { return Song().playbackItem(song(), section()); }
 
   function chords() { return chordCache; }
   function refreshChords() {
@@ -53,6 +67,30 @@
 
   function displayChord() {
     return shapePreviewChord || chords()[chords().length - 1] || null;
+  }
+
+  // ── Changing the chords, and undoing it ──────────────────────────────────
+  // Every change to the chords goes through here, so that Undo can put back
+  // what was there before: a chord added or taken out, a progression from
+  // the ideas, a starter sound, a cleared section.
+  function editChords(change) {
+    const sec = section();
+    const before = sec.progSpecs.slice();
+    App().mutate(() => change(sec));
+    if (before.join(' ') === sec.progSpecs.join(' ')) return;
+    const past = history.get(sec.id) || [];
+    past.push(before);
+    if (past.length > 100) past.shift();
+    history.set(sec.id, past);
+  }
+
+  function undo() {
+    const sec = section();
+    const past = history.get(sec.id) || [];
+    if (!past.length) { UI().toast('Nothing to undo'); return; }
+    const before = past.pop();
+    App().mutate(() => { sec.progSpecs = before; });
+    renderAll();
   }
 
   // ── Static builds (once) ─────────────────────────────────────────────────
@@ -109,6 +147,9 @@
   function buildFeelingSelect() {
     const sel = $('emotionSelect');
     sel.innerHTML = '';
+    const none = doc.createElement('option');
+    none.value = ''; none.textContent = 'No particular feeling';
+    sel.appendChild(none);
     const groups = F().groupedFeelings();
     Object.entries(groups).forEach(([group, list]) => {
       const og = doc.createElement('optgroup');
@@ -120,17 +161,69 @@
       });
       sel.appendChild(og);
     });
-    sel.value = sectionFeelingId();
+    const f = F().getFeeling(sectionFeelingId());
+    sel.value = f ? f.id : '';
   }
 
+  // The pattern pickers list what can play in the section's time: plain
+  // chords (or no drums) first, then the charts written for that time, and
+  // in 4/4 the style patterns too. A chosen pattern that does not fit the
+  // time shows as the one that plays in its place.
   function buildArrangementControls() {
     const sec = section();
+    const m = meter();
+    const time = Mt().id(m);
+    const four = time === '4/4';
+    const forTime = 'For ' + time;
+    const sounding = R().makePlaybackPattern(sec.rhythmPattern, sec.drumPattern, m);
+
     UI().addOptions($('paletteStyle'), R().GENRE_PROFILES.map(p => ({ ...p, family: '' })), song().genreId, p => p.name);
     UI().addOptions($('sectionRole'), R().SECTIONS, sec.role, s => s.name);
-    UI().addOptions($('rhythmPattern'), R().RHYTHMS, sec.rhythmPattern, r => r.name);
-    UI().addOptions($('drumPattern'), R().DRUMS, sec.drumPattern, d => d.name);
-    UI().addOptions($('vocalPattern'), R().VOCAL_MELODIES, sec.vocalPattern, v => v.name);
-    UI().addOptions($('underPattern'), R().UNDER_MELODIES, sec.underPattern, u => u.name);
+
+    const rhythms = [{ id: '', name: 'Plain chords', family: '' }]
+      .concat(Mt().rhythmsFor(m).map(r => ({ id: r.id, name: r.name, family: forTime })))
+      .concat(four ? R().RHYTHMS : []);
+    const rhythmShown = !sec.rhythmPattern ? ''
+      : R().rhythmFor(sec.rhythmPattern, m) ? sec.rhythmPattern
+      : (sounding.rhythm && sounding.rhythm.id) || '';
+    UI().addOptions($('rhythmPattern'), rhythms, rhythmShown, r => r.name);
+
+    const drums = [{ id: '', name: 'No drums', family: '' }]
+      .concat(Mt().groovesFor(m).map(g => ({ id: g.id, name: g.name, family: forTime })))
+      .concat(four ? R().DRUMS.filter(d => d.id !== 'none') : []);
+    const drumShown = R().drumsFor(sec.drumPattern, m) ? sec.drumPattern
+      : sec.drumPattern && sec.drumPattern !== 'none' && sounding.drum && sounding.drum.id !== 'none' ? sounding.drum.id : '';
+    UI().addOptions($('drumPattern'), drums, drumShown, d => d.name);
+
+    UI().addOptions($('vocalPattern'), [{ id: '', name: 'No melody', family: '' }].concat(R().VOCAL_MELODIES),
+      R().vocalFor(sec.vocalPattern) ? sec.vocalPattern : '', v => v.name);
+    UI().addOptions($('underPattern'), R().UNDER_MELODIES, R().underFor(sec.underPattern) ? sec.underPattern : 'none', u => u.name);
+    buildTimeControls();
+  }
+
+  // The section's time signature, and how long each chord lasts in it.
+  function buildTimeControls() {
+    const s = song();
+    const m = meter();
+    const time = Mt().id(m);
+    const songTime = Mt().id(s.meter);
+    const list = Mt().LIST.map(t => t.id);
+    if (!list.includes(time)) list.push(time);
+    $('sectionMeter').innerHTML = list.map(id =>
+      `<option value="${UI().esc(id)}">${UI().esc(id)}${id === songTime ? ' (song)' : ''}</option>`).join('');
+    $('sectionMeter').value = time;
+
+    // Half a bar where that falls on a beat or a half beat, then one, two or four bars.
+    const bar = Song().barQuarters(m);
+    const lengths = [];
+    if (Number.isInteger(bar)) lengths.push({ beats: bar / 2, label: '½ bar' });
+    [[1, '1 bar'], [2, '2 bars'], [4, '4 bars']].forEach(([n, label]) => {
+      if (bar * n <= 24) lengths.push({ beats: bar * n, label });
+    });
+    const now = chordBeats();
+    if (!lengths.some(l => l.beats === now)) lengths.push({ beats: now, label: now + ' beats' });
+    $('chordLength').innerHTML = lengths.map(l => `<option value="${l.beats}">${UI().esc(l.label)}</option>`).join('');
+    $('chordLength').value = String(now);
   }
 
   // ── Section switcher ─────────────────────────────────────────────────────
@@ -151,18 +244,17 @@
     if (add) add.addEventListener('click', promptAddSection);
   }
 
+  // A new section starts empty, for the writer to fill.
   function promptAddSection() {
     const ui = UI();
     const roles = R().SECTIONS.map(r =>
       `<button type="button" class="ghost" data-role="${r.id}">${ui.esc(r.name)} <span class="meta">${ui.esc(r.target)}</span></button>`
     ).join('');
-    ui.openModal(`<div class="role-picker"><h3>Add a section</h3><div class="role-list">${roles}</div></div>`);
+    ui.openModal(`<div class="role-picker"><h3>Add a section</h3><p class="meta">It starts empty, in the song's key and time.</p><div class="role-list">${roles}</div></div>`);
     doc.querySelectorAll('#modalContent [data-role]').forEach(b => {
       b.addEventListener('click', () => {
-        const role = b.dataset.role;
         const s = song();
-        const feeling = F().contrastFor(s.feelingId, role);
-        const sec = F().generateSectionSpec(s, role, feeling, Date.now() & 0xffff);
+        const sec = Song().createSection({ role: b.dataset.role });
         App().mutate(sg => {
           sg.sections.push(sec);
           Song().autoNameSections(sg);
@@ -190,7 +282,7 @@
       card.className = 'prog-chord ' + ch.category;
       card.dataset.idx = i;
       card.draggable = true;
-      const fn = A().functionalLabel(ch, s.key, s.scale);
+      const fn = A().functionalLabel(ch, key(), s.scale);
       card.innerHTML = `
         <div class="name">${UI().esc(ch.shortName)}</div>
         <div class="roman">${UI().esc(ch.roman || '')}</div>
@@ -215,10 +307,9 @@
         const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
         const to = parseInt(card.dataset.idx, 10);
         if (Number.isFinite(from) && Number.isFinite(to) && from !== to) {
-          App().mutate(() => {
-            const specs = section().progSpecs;
-            const [moved] = specs.splice(from, 1);
-            specs.splice(to, 0, moved);
+          editChords(sec => {
+            const [moved] = sec.progSpecs.splice(from, 1);
+            sec.progSpecs.splice(to, 0, moved);
           });
           renderAll();
         }
@@ -226,7 +317,7 @@
       card.addEventListener('click', (e) => {
         if (e.target.classList.contains('del')) {
           e.stopPropagation();
-          App().mutate(() => section().progSpecs.splice(i, 1));
+          editChords(sec => sec.progSpecs.splice(i, 1));
           renderAll();
         } else {
           previewShapeChord(ch);
@@ -253,13 +344,36 @@
     else Viz().renderFretboard(displayChord());
   }
 
+  // ── The left pane: next chord, or ideas ──────────────────────────────────
+  function showPane(which) {
+    prefs().pane = which === 'ideas' ? 'ideas' : 'next';
+    App().savePrefs();
+    renderPane();
+  }
+
+  function renderPane() {
+    const ideas = prefs().pane === 'ideas';
+    doc.querySelectorAll('#paneSwitch [data-pane]').forEach(b => {
+      const on = (b.dataset.pane === 'ideas') === ideas;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    $('options').classList.toggle('hidden', ideas);
+    $('ideas').classList.toggle('hidden', !ideas);
+    $('paneHelp').innerHTML = ideas
+      ? 'Hear one first. It goes in only if you use it.'
+      : 'Sorted by fit. Click — or press <span class="kbd">1</span>–<span class="kbd">9</span>.';
+    if (ideas) renderIdeas(); else renderOptions();
+  }
+
   // ── Next-chord options ───────────────────────────────────────────────────
   function renderOptions() {
     const host = $('options');
+    if (host.classList.contains('hidden')) return;
     const s = song();
     host.innerHTML = '';
     const opts = P().getNextChordOptions({
-      key: s.key, scale: s.scale,
+      key: key(), scale: s.scale,
       progression: chords(),
       sevenths: prefs().sevenths,
       filters: prefs().filters,
@@ -278,7 +392,7 @@
       : [];
 
     opts.forEach((ch, idx) => {
-      const t = A().tensionScore(ch, s.key);
+      const t = A().tensionScore(ch, key());
       const card = doc.createElement('div');
       card.className = 'opt ' + ch.category;
       card.tabIndex = 0;
@@ -287,7 +401,7 @@
       const isEmotionTop = emotionTop.includes(ch);
 
       const trial = chords().slice();
-      const probe = { ...ch, roman: C().romanNumeral(ch, s.key, s.scale) };
+      const probe = { ...ch, roman: C().romanNumeral(ch, key(), s.scale) };
       trial.push(probe);
       const songHit = Sg().matchSongs(trial, { max: 1 })[0] || null;
 
@@ -324,7 +438,7 @@
 
   function plainChordOutcome(ch, tension) {
     const s = song();
-    const fn = A().functionalLabel(ch, s.key, s.scale);
+    const fn = A().functionalLabel(ch, key(), s.scale);
     const last = chords()[chords().length - 1] || null;
     const phrase = [];
     if (!last) {
@@ -350,7 +464,7 @@
   }
 
   function onAddChord(ch) {
-    App().mutate(() => section().progSpecs.push(`${ch.root}:${ch.quality}`));
+    editChords(sec => sec.progSpecs.push(`${ch.root}:${ch.quality}`));
     shapePreviewChord = null;
     renderAll();
   }
@@ -360,7 +474,7 @@
     if (!feeling) { UI().toast('Pick a feeling first'); return; }
     const s = song();
     const opts = P().getNextChordOptions({
-      key: s.key, scale: s.scale, progression: chords(),
+      key: key(), scale: s.scale, progression: chords(),
       sevenths: prefs().sevenths, filters: prefs().filters,
     });
     const best = E().bestForEmotion(opts, feeling.emotionId, { progression: chords() });
@@ -368,11 +482,148 @@
     else UI().toast('No strong match — try more chord colors or fewer chords');
   }
 
+  // ── Ideas ────────────────────────────────────────────────────────────────
+  // Progressions, rhythms, grooves, other times and melody shapes, all in the
+  // section's key and time. Hearing one changes nothing; using one puts it in.
+  function renderIdeas() {
+    const host = $('ideas');
+    if (!host || host.classList.contains('hidden')) return;
+    const s = song();
+    const sec = section();
+    const ui = UI();
+    const m = meter();
+    const time = Mt().id(m);
+    const keyName = key() + ' ' + ((S().getScaleMeta(s.scale) || {}).name || s.scale).toLowerCase();
+    shownIdeas = {
+      progressions: I().progressions(s, sec, { seed: ideaSeed }),
+      rhythms: I().rhythms(s, sec),
+      grooves: I().grooves(s, sec),
+      times: I().times(s, sec),
+      melodies: I().melodies(s, sec, { seed: ideaSeed }),
+    };
+    const drumsNow = R().drumsFor(sec.drumPattern, m) ? sec.drumPattern : '';
+    const inUse = {
+      progressions: idea => idea.specs.join(' ') === sec.progSpecs.join(' '),
+      rhythms: idea => idea.id === sec.rhythmPattern,
+      grooves: idea => idea.id === drumsNow,
+      times: () => false,
+      melodies: idea => idea.id === sec.vocalPattern,
+    };
+    const body = {
+      progressions: idea => {
+        const list = Song().chordsOf(s, { progSpecs: idea.specs, keyOverride: sec.keyOverride });
+        const where = idea.kind === 'song'
+          ? `as in “${ui.esc(idea.song.title)}”${idea.song.artist ? ' — ' + ui.esc(idea.song.artist) : ''}`
+          : 'leaning that way';
+        return {
+          name: `${ui.esc(idea.label)} <span class="meta">${where}</span>`,
+          chords: ui.esc(list.map(c => c.shortName).join(' ')),
+          roman: ui.esc(list.map(c => c.roman || '?').join(' ')),
+          tip: ui.esc(idea.tip),
+        };
+      },
+      rhythms: r => ({ name: ui.esc(r.name), chart: ui.esc(T().renderStrumChart(r, m)), tip: ui.esc(r.tip) }),
+      grooves: g => ({ name: ui.esc(g.name), chart: g.id ? ui.esc(T().renderDrumGrid(g, m)) : '', tip: ui.esc(g.tip) }),
+      times: t => ({
+        name: `<strong>${ui.esc(t.id)}</strong> <span class="meta">${ui.esc(t.name)}</span>`,
+        tip: `${ui.esc(t.feel)} <span class="meta">Count it: ${ui.esc(t.count)}.</span>`,
+      }),
+      melodies: v => ({ name: ui.esc(v.name), tip: ui.esc(v.tip) }),
+    };
+    const titles = {
+      progressions: ['Progressions', 'in ' + keyName],
+      rhythms: ['Rhythms', 'strummed and picked, for ' + time],
+      grooves: ['Drums', 'grooves for ' + time],
+      times: ['Other times', 'the same chords, felt another way'],
+      melodies: ['Melody shapes', 'to hum over the chords'],
+    };
+    const group = name => {
+      const rows = shownIdeas[name].map((idea, i) => {
+        const b = body[name](idea);
+        const current = inUse[name](idea);
+        return `
+          <div class="idea${current ? ' current' : ''}" data-group="${name}" data-i="${i}" data-id="${ui.esc(idea.id == null ? '' : idea.id)}">
+            <div class="idea-name">${b.name}</div>
+            <div class="idea-actions">
+              <button type="button" class="ghost small" data-act="hear" title="Hear it, without keeping it">▶ Hear</button>
+              <button type="button" class="ghost small" data-act="use"${current ? ' disabled' : ''}>${current ? 'In use' : 'Use'}</button>
+            </div>
+            ${b.chords ? `<div class="idea-chords">${b.chords}</div><div class="idea-roman">${b.roman}</div>` : ''}
+            ${b.chart ? `<pre class="idea-chart">${b.chart}</pre>` : ''}
+            ${b.tip ? `<div class="idea-tip">${b.tip}</div>` : ''}
+          </div>`;
+      }).join('');
+      return `
+        <section class="idea-group" data-group="${name}">
+          <h4>${titles[name][0]} <span class="meta">${ui.esc(titles[name][1])}</span></h4>
+          <div class="idea-list">${rows}</div>
+        </section>`;
+    };
+    host.innerHTML = `
+      <div class="ideas-head">
+        <p class="meta">Things to try in ${ui.esc(keyName)}, ${ui.esc(time)}. Using a progression replaces this section's chords; Undo puts yours back.</p>
+        <button type="button" class="ghost small" id="ideasMore" title="Another handful of progressions and melody shapes">↻ Other ideas</button>
+      </div>
+      ${['progressions', 'rhythms', 'grooves', 'times', 'melodies'].map(group).join('')}`;
+  }
+
+  // The key's home chord, twice: something to hear a rhythm or a time over
+  // before the section has chords of its own.
+  function homeSpecs() {
+    const list = C().diatonicChords(key(), song().scale, { sevenths: false });
+    const home = list.find(c => c.scaleDegree === 1) || list[0];
+    const spec = home ? home.root + ':' + home.quality : key() + ':maj';
+    return [spec, spec];
+  }
+
+  // The section as it would be with one idea in it. Nothing is kept.
+  function trialSection(group, idea) {
+    const trial = JSON.parse(JSON.stringify(section()));
+    if (group === 'progressions') trial.progSpecs = idea.specs.slice();
+    else if (group === 'rhythms') trial.rhythmPattern = idea.id;
+    else if (group === 'grooves') trial.drumPattern = idea.id;
+    else if (group === 'times') I().useTime(song(), trial, idea.id);
+    else if (group === 'melodies') { trial.vocalPattern = idea.id; trial.melodySeed = idea.seed; }
+    if (!trial.progSpecs.length) trial.progSpecs = homeSpecs();
+    return trial;
+  }
+
+  function hearIdea(group, idea) {
+    const it = Song().playbackItem(song(), trialSection(group, idea));
+    applyBandToneSettings();
+    Au().setInstrument(prefs().instrument);
+    renderBeatLed(it.meter);
+    playing = true;
+    Au().playBacking(it.chords, {
+      tempo: it.tempo, voicing: prefs().voicing, pattern: it.pattern, stepsPerChord: it.stepsPerChord,
+      withBass: prefs().withBass, melody: group === 'melodies' ? it.melody : null,
+      loop: () => prefs().loop, onBeat, onNote: flashPlayingNote, onDone: clearHighlights,
+    }).catch(() => UI().toast('Audio could not start'));
+  }
+
+  function useIdea(group, idea) {
+    Au().stop();
+    clearHighlights();
+    if (group === 'progressions') {
+      editChords(sec => { sec.progSpecs = idea.specs.slice(); });
+      UI().toast(`Using "${idea.label}". Undo puts back what was there.`);
+    } else {
+      App().mutate(s => {
+        const sec = section();
+        if (group === 'rhythms') sec.rhythmPattern = idea.id;
+        else if (group === 'grooves') sec.drumPattern = idea.id;
+        else if (group === 'times') I().useTime(s, sec, idea.id);
+        else if (group === 'melodies') { sec.vocalPattern = idea.id; sec.melodySeed = idea.seed; }
+      });
+    }
+    renderAll();
+  }
+
   // ── Info panels ──────────────────────────────────────────────────────────
   function renderDescription() {
     const s = song();
-    const desc = D().describe(chords(), s.key, s.scale);
-    const modal = A().detectModalColour ? A().detectModalColour(chords(), s.key, s.scale) : null;
+    const desc = D().describe(chords(), key(), s.scale);
+    const modal = A().detectModalColour ? A().detectModalColour(chords(), key(), s.scale) : null;
     const loop = A().detectLoop ? A().detectLoop(chords()) : 0;
     let extras = '';
     if (modal && modal.length) {
@@ -398,39 +649,32 @@
     $('genrePrimary').textContent = m.primary.name;
     $('genreInfluences').textContent = m.influences.length ? '+ ' + m.influences.map(i => i.name).join(', ') : '';
     const sec = section();
-    const selectedRhythm = R().byId(R().RHYTHMS, sec.rhythmPattern);
-    const selectedDrums = R().byId(R().DRUMS, sec.drumPattern);
-    const selectedVocal = R().byId(R().VOCAL_MELODIES, sec.vocalPattern);
-    const r = selectedRhythm || m.primary.rhythm;
-    $('rhythmTime').textContent = r.time + (r.bpm ? ' · ' + r.bpm + ' BPM' : '');
-    $('rhythmTip').textContent = [
-      r.tip,
-      selectedDrums ? selectedDrums.tip : '',
-      selectedVocal ? selectedVocal.tip : '',
-    ].filter(Boolean).join(' ');
+    const time = meter();
+    const rhythm = R().rhythmFor(sec.rhythmPattern, time);
+    const drums = R().drumsFor(sec.drumPattern, time);
+    const vocal = R().vocalFor(sec.vocalPattern);
+    const r = rhythm || m.primary.rhythm;
+    $('rhythmTime').textContent = Mt().id(time) + (r.bpm ? ' · ' + r.bpm + ' BPM' : '');
+    $('rhythmTip').textContent = [r.tip, drums ? drums.tip : '', vocal ? vocal.tip : ''].filter(Boolean).join(' ');
   }
 
   function renderArrangementInfo() {
     const s = song();
     const sec = section();
+    const time = meter();
     const profile = R().profileFor(s.genreId);
-    const rhythm = R().byId(R().RHYTHMS, sec.rhythmPattern);
-    const drums = R().byId(R().DRUMS, sec.drumPattern);
-    const vocal = R().byId(R().VOCAL_MELODIES, sec.vocalPattern);
-    const under = R().byId(R().UNDER_MELODIES, sec.underPattern);
+    const rhythm = R().rhythmFor(sec.rhythmPattern, time);
+    const drums = R().drumsFor(sec.drumPattern, time);
+    const vocal = R().vocalFor(sec.vocalPattern);
+    const under = R().underFor(sec.underPattern);
     if ($('comboMeta') && profile) {
       $('comboMeta').textContent = profile.subgenres ? profile.subgenres.join(', ') : '';
     }
     if ($('sectionAdvice')) {
-      const combo = R().describeCombo(s.genreId, sec.rhythmPattern, sec.drumPattern, sec.vocalPattern, sec.underPattern);
-      const analysis = R().sectionAnalysis(chords(), s.key, s.scale, sec.role);
+      const combo = R().describeCombo(s.genreId, sec.rhythmPattern, sec.drumPattern, sec.vocalPattern, sec.underPattern, time);
+      const analysis = R().sectionAnalysis(chords(), key(), s.scale, sec.role);
       const color = profile ? profile.summary : '';
-      const layerTips = [
-        rhythm ? rhythm.tip : '',
-        drums ? drums.tip : '',
-        vocal ? vocal.tip : '',
-        under && under.id !== 'none' ? under.tip : '',
-      ].filter(Boolean).join(' ');
+      const layerTips = [rhythm && rhythm.tip, drums && drums.tip, vocal && vocal.tip, under && under.tip].filter(Boolean).join(' ');
       $('sectionAdvice').innerHTML = `<strong>${UI().esc(combo)}</strong>. ${UI().addTheoryHints(analysis)} ${UI().esc(color)} ${UI().addTheoryHints(layerTips)}`;
     }
   }
@@ -452,7 +696,7 @@
 
   function renderCadence() {
     const s = song();
-    const cad = A().detectCadence(chords(), s.key, s.scale);
+    const cad = A().detectCadence(chords(), key(), s.scale);
     const banner = $('cadenceBanner');
     if (!cad) { banner.classList.add('hidden'); return; }
     banner.classList.remove('hidden');
@@ -468,9 +712,9 @@
       return;
     }
     const current = R().byId(R().SECTIONS, sec.role);
-    const arc = A().tensionArc(chords(), s.key);
+    const arc = A().tensionArc(chords(), key());
     const end = arc[arc.length - 1] || 0;
-    const cadence = A().detectCadence(chords(), s.key, s.scale);
+    const cadence = A().detectCadence(chords(), key(), s.scale);
     host.innerHTML = '';
     R().SECTIONS.filter(x => x.id !== sec.role).forEach(x => {
       const d = doc.createElement('div');
@@ -513,46 +757,15 @@
   }
 
   // ── Tabs pane ────────────────────────────────────────────────────────────
-  function vocalMelodyEvents() {
-    const sec = section();
-    const pattern = R().byId(R().VOCAL_MELODIES, sec.vocalPattern);
-    return M().generatePatternMelody(chords(), song().scale, song().key, pattern,
-      { beatsPerChord: sec.beatsPerChord || 4, section: sec.role, seed: sec.melodySeed });
-  }
-
-  function underMelodyEvents() {
-    const sec = section();
-    const pattern = R().byId(R().UNDER_MELODIES, sec.underPattern);
-    if (!pattern || pattern.type === 'none') return [];
-    return M().generateUnderMelody(chords(), song().scale, song().key, pattern,
-      { beatsPerChord: sec.beatsPerChord || 4, seed: sec.underSeed });
-  }
-
+  // Written from what the section plays, in its own time (see Tabs.sectionTab).
   function renderTabPane() {
     const pane = $('tabPane');
     if (!pane) return;
-    const sec = section();
-    const list = chords();
     doc.querySelectorAll('#tabTabs button').forEach(b =>
       b.classList.toggle('active', b.dataset.tab === currentTab));
-    if (!list.length) { pane.textContent = '(add chords first)'; return; }
-    const bpc = sec.beatsPerChord || 4;
+    if (!chords().length) { pane.textContent = '(add chords first)'; return; }
     try {
-      if (currentTab === 'chords') {
-        pane.textContent = T().renderChordTab(list, { beatsPerChord: bpc });
-      } else if (currentTab === 'melody') {
-        pane.textContent = T().renderMelodyTab(vocalMelodyEvents(), { chords: list, beatsPerChord: bpc, register: 'lead' });
-      } else if (currentTab === 'bass') {
-        const rhythm = R().byId(R().RHYTHMS, sec.rhythmPattern);
-        pane.textContent = T().renderBassTab(list, rhythm ? rhythm.bass : 'root', { beatsPerChord: bpc });
-      } else if (currentTab === 'under') {
-        const evs = underMelodyEvents();
-        pane.textContent = evs.length
-          ? T().renderMelodyTab(evs, { chords: list, beatsPerChord: bpc, register: 'mid' })
-          : '(no under-melody selected)';
-      } else if (currentTab === 'drums') {
-        pane.textContent = T().renderDrumGrid(R().byId(R().DRUMS, sec.drumPattern));
-      }
+      pane.textContent = T().sectionTab(song(), section(), currentTab);
     } catch (e) {
       pane.textContent = '(tab unavailable: ' + e.message + ')';
     }
@@ -575,11 +788,15 @@
     });
   }
 
-  function selectedArrangementPattern() {
+  // The section's rhythm and drums in its time. A 4/4 style can be played
+  // another way with the Style picker; a chart always plays as written.
+  function playbackPattern() {
     const sec = section();
-    const pattern = R().makePlaybackPattern(sec.rhythmPattern, sec.drumPattern);
-    if (prefs().style === 'arpeggio') pattern.chords = 'arp';
-    if (prefs().style === 'strum') pattern.chords = song().genreId === 'shoegaze' ? 'glide-strum' : 'strum';
+    const pattern = R().makePlaybackPattern(sec.rhythmPattern, sec.drumPattern, meter());
+    if (!pattern.steps) {
+      if (prefs().style === 'arpeggio') pattern.chords = 'arp';
+      if (prefs().style === 'strum') pattern.chords = song().genreId === 'shoegaze' ? 'glide-strum' : 'strum';
+    }
     return pattern;
   }
 
@@ -620,11 +837,13 @@
   }
 
   function clearHighlights() {
+    playing = false;
     [...$('progression').querySelectorAll('.prog-chord')].forEach(c => c.classList.remove('playing'));
     doc.querySelectorAll('.beat-led span').forEach(sp => sp.classList.remove('on'));
     const pk = $('pianoKeys');
     if (pk) [...pk.children].forEach(k => k.classList.remove('preview'));
     clearNoteFlashes();
+    if (song() && section()) renderBeatLed();
   }
 
   function highlightIdx(idx) {
@@ -647,53 +866,122 @@
     }
   }
 
+  // One light for every beat of the bar, a bigger one where each group starts.
+  function renderBeatLed(m) {
+    const host = doc.querySelector('.beat-led');
+    if (!host) return;
+    const time = Mt().id(m || meter());
+    if (host.dataset.meter === time) return;
+    host.dataset.meter = time;
+    host.innerHTML = Mt().pulses(time).map(p => `<span${p.strong ? ' class="strong"' : ''}></span>`).join('');
+  }
+
   function onBeat(b) {
     doc.querySelectorAll('.beat-led span').forEach((sp, i) => sp.classList.toggle('on', i === b));
   }
 
-  function playOrStop() {
-    if (chords().length === 0) { UI().toast('Add some chords first'); return; }
+  // What every player shares: the section's tempo and time, and the lights.
+  function playOptions(extra) {
+    return Object.assign({
+      tempo: tempo(), meter: meter(), voicing: prefs().voicing, withBass: prefs().withBass,
+      loop: () => prefs().loop, metronome: prefs().metronome, countIn: prefs().metronome,
+      onChordStart: highlightIdx, onNote: flashPlayingNote, onDone: clearHighlights, onBeat,
+    }, extra);
+  }
+
+  function startPlaying(run) {
     applyBandToneSettings();
     Au().setInstrument(prefs().instrument);
-    Au().playProgression(chords(), {
-      tempo: song().tempo, style: prefs().style, voicing: prefs().voicing,
-      withBass: prefs().withBass, loop: () => prefs().loop,
-      metronome: prefs().metronome, countIn: prefs().metronome,
-      onChordStart: highlightIdx, onNote: flashPlayingNote, onDone: clearHighlights, onBeat,
-    });
+    renderBeatLed();
+    playing = true;
+    Promise.resolve().then(run).catch(() => UI().toast('Audio could not start'));
   }
 
-  // ── Feeling / regeneration ───────────────────────────────────────────────
+  function needsChords() {
+    if (chords().length) return false;
+    UI().toast('Add some chords first');
+    return true;
+  }
+
+  function playChords() {
+    if (needsChords()) return;
+    startPlaying(() => Au().playProgression(chords(), playOptions({ style: prefs().style, beatsPerChord: chordBeats() })));
+  }
+
+  function playDrumsOnly() {
+    const pattern = playbackPattern();
+    const kit = pattern.drums;
+    if (!kit.kick.length && !kit.snare.length && !kit.hhClosed.length && !kit.hhOpen.length) {
+      UI().toast('No drums chosen: pick a groove under Drums, or in Ideas');
+      return;
+    }
+    const bars = Math.max(4, Math.round(chords().length * chordBeats() / Song().barQuarters(meter())));
+    startPlaying(() => Au().playDrums(playOptions({ pattern, bars, onChordStart: null, onNote: null })));
+  }
+
+  function playBand(withMelodies) {
+    if (needsChords()) return;
+    const it = item();
+    startPlaying(() => Au().playBacking(chords(), playOptions({
+      pattern: playbackPattern(), stepsPerChord: it.stepsPerChord,
+      melody: withMelodies ? it.melody : null, underMelody: withMelodies ? it.under : null,
+    })));
+  }
+
+  function playMelody() {
+    if (needsChords()) return;
+    const it = item();
+    if (!it.melody.length) { UI().toast('No melody chosen: pick one under Vocal melody, or in Ideas'); return; }
+    startPlaying(() => Au().playWithMelody(chords(), it.melody, playOptions({ beatsPerChord: chordBeats() })));
+  }
+
+  function stopAll() {
+    Au().stop();
+    clearHighlights();
+  }
+
+  // ── Feeling ──────────────────────────────────────────────────────────────
+  // None chosen: the section has no feeling, even when the song has one.
   function setSectionFeeling(feelingId) {
     App().mutate(sg => {
-      section().feelingId = feelingId === sg.feelingId ? null : feelingId;
+      const sec = section();
+      if (!feelingId) sec.feelingId = sg.feelingId ? 'none' : null;
+      else sec.feelingId = feelingId === sg.feelingId ? null : feelingId;
     });
     renderAll();
   }
 
-  function regenerate(kind) {
+  // ── Starter sounds ───────────────────────────────────────────────────────
+  // A starter sound plays in the song's key: its home chord lands on the
+  // song's, and a major one in a minor song on the relative major (and the
+  // other way round), so every chord stays in the key the writer chose.
+  function presetSpecs(p) {
     const s = song();
-    const sec = section();
-    const feelingId = sectionFeelingId();
-    const seed = Date.now() & 0xffff;
-    App().mutate(() => {
-      if (kind === 'chords' || kind === 'all') {
-        const prog = F().buildProgression({
-          key: s.key, scale: s.scale, feelingId, role: sec.role, genreId: s.genreId, seed,
-        });
-        Song().setProgression(sec, prog);
-        sec.melodySeed = (seed * 7919 + 17) & 0xffff;
-      }
-      if (kind === 'arr' || kind === 'all') {
-        const arr = F().pickArrangement({
-          genreId: s.genreId, feelingId, role: sec.role, energy: s.energy, tempo: s.tempo, seed: seed + 101,
-        });
-        Object.assign(sec, arr);
-      }
+    const k = key();
+    const minor = scale => global.ChordParse.isMinorMode(scale);
+    const home = S().noteIndex(k);
+    const target = minor(p.scale) === minor(s.scale) ? home : (home + (minor(s.scale) ? 3 : 9)) % 12;
+    const shift = (target - S().noteIndex(p.key) + 12) % 12;
+    return p.specs.map(spec => {
+      const [root, quality] = spec.split(':');
+      return I().spell({ root: S().noteName((S().noteIndex(root) + shift) % 12), quality }, k, s.scale);
     });
-    buildArrangementControls();
-    renderAll();
-    UI().toast('Section regenerated for "' + (F().getFeeling(feelingId) || {}).name + '"');
+  }
+
+  function applyPreset(p) {
+    editChords(sec => { sec.progSpecs = presetSpecs(p); });
+    App().mutate(() => {
+      const sec = section();
+      const m = meter();
+      // Its patterns are written for 4/4; in another time, the nearest of their kind.
+      const fit = Mt().id(m) === '4/4'
+        ? { rhythmPattern: p.rhythmPattern || '', drumPattern: p.drumPattern === 'none' ? '' : (p.drumPattern || '') }
+        : I().patternsFor({ rhythmPattern: p.rhythmPattern, drumPattern: p.drumPattern }, '4/4', m);
+      sec.rhythmPattern = fit.rhythmPattern;
+      sec.drumPattern = fit.drumPattern;
+      if (p.vocalPattern) sec.vocalPattern = p.vocalPattern;
+      if (p.underPattern) sec.underPattern = p.underPattern;
+    });
   }
 
   // ── Sync controls from state ─────────────────────────────────────────────
@@ -740,25 +1028,28 @@
   function renderHeading() {
     const sec = section();
     const f = F().getFeeling(sectionFeelingId());
-    $('sectionHeading').innerHTML = `${UI().esc(sec.name)} <span class="chip chip-feeling">${UI().esc(f ? f.name : '')}</span>`;
+    const own = sec.meterOverride ? ` <span class="chip" title="This section has a time of its own">in ${UI().esc(Mt().id(sec.meterOverride))}</span>` : '';
+    $('sectionHeading').innerHTML = `${UI().esc(sec.name)}${f ? ` <span class="chip chip-feeling">${UI().esc(f.name)}</span>` : ''}${own}`;
   }
 
   // ── Master render ────────────────────────────────────────────────────────
   function renderAll() {
     if (!song() || !section()) return;
     refreshChords();
+    buildArrangementControls();
     renderSectionSwitch();
     renderHeading();
     renderKeyGrid();
     renderScaleMeta();
+    renderBeatLed();
     renderProgression();
-    renderOptions();
+    renderPane();
     renderDescription();
     renderGenreRhythm();
     renderArrangementInfo();
     renderSongs();
     renderCadence();
-    Viz().renderTensionChart(A().tensionArc(chords(), song().key));
+    Viz().renderTensionChart(A().tensionArc(chords(), key()));
     renderModulation();
     renderFeelingMeta();
     renderShapeAndViz();
@@ -782,66 +1073,47 @@
 
     $('emotionSelect').addEventListener('change', () => setSectionFeeling($('emotionSelect').value));
     $('btnPickEmotion').addEventListener('click', pickBestForFeeling);
-    $('btnRegenChords').addEventListener('click', () => regenerate('chords'));
-    $('btnRegenArr').addEventListener('click', () => regenerate('arr'));
-    $('btnRegenAll').addEventListener('click', () => regenerate('all'));
 
-    $('btnPlay').addEventListener('click', playOrStop);
-    $('btnPlayDrums').addEventListener('click', async () => {
-      applyBandToneSettings();
-      const pattern = selectedArrangementPattern();
-      await Au().playDrums({
-        tempo: song().tempo, pattern, bars: Math.max(4, chords().length || 0),
-        loop: () => prefs().loop, swing: pattern && pattern.swing || 0,
-        metronome: prefs().metronome, countIn: prefs().metronome,
-        onDone: clearHighlights, onBeat,
-      });
+    doc.querySelectorAll('#paneSwitch [data-pane]').forEach(b => b.addEventListener('click', () => showPane(b.dataset.pane)));
+    $('ideas').addEventListener('click', e => {
+      if (e.target.closest('#ideasMore')) {
+        ideaSeed = (ideaSeed % 9973) + 1;
+        renderIdeas();
+        return;
+      }
+      const btn = e.target.closest('[data-act]');
+      const row = btn && btn.closest('.idea');
+      if (!row || btn.disabled) return;
+      const idea = (shownIdeas[row.dataset.group] || [])[parseInt(row.dataset.i, 10)];
+      if (!idea) return;
+      if (btn.dataset.act === 'hear') hearIdea(row.dataset.group, idea);
+      else if (btn.dataset.act === 'use') useIdea(row.dataset.group, idea);
     });
-    $('btnPlayBand').addEventListener('click', async () => {
-      if (chords().length === 0) { UI().toast('Add some chords first'); return; }
-      applyBandToneSettings();
-      Au().setInstrument(prefs().instrument);
-      const pattern = selectedArrangementPattern();
-      await Au().playBacking(chords(), {
-        tempo: song().tempo, voicing: prefs().voicing,
-        pattern, loop: () => prefs().loop, withBass: prefs().withBass,
-        swing: pattern && pattern.swing || 0,
-        metronome: prefs().metronome, countIn: prefs().metronome,
-        onChordStart: highlightIdx, onNote: flashPlayingNote, onDone: clearHighlights, onBeat,
-      });
-    });
-    $('btnPlayCombo').addEventListener('click', async () => {
-      if (chords().length === 0) { UI().toast('Add some chords first'); return; }
-      applyBandToneSettings();
-      Au().setInstrument(prefs().instrument);
-      const pattern = selectedArrangementPattern();
-      await Au().playBacking(chords(), {
-        tempo: song().tempo, voicing: prefs().voicing,
-        pattern, melody: vocalMelodyEvents(), underMelody: underMelodyEvents(),
-        loop: () => prefs().loop, withBass: prefs().withBass,
-        swing: pattern && pattern.swing || 0,
-        metronome: prefs().metronome, countIn: prefs().metronome,
-        onChordStart: highlightIdx, onNote: flashPlayingNote, onDone: clearHighlights, onBeat,
-      });
-    });
-    $('btnPlayMelody').addEventListener('click', async () => {
-      if (chords().length === 0) { UI().toast('Add some chords first'); return; }
-      applyBandToneSettings();
-      Au().setInstrument(prefs().instrument);
-      await Au().playWithMelody(chords(), vocalMelodyEvents(), {
-        tempo: song().tempo, voicing: prefs().voicing, withBass: prefs().withBass,
-        loop: () => prefs().loop, beatsPerChord: section().beatsPerChord || 4,
-        metronome: prefs().metronome, countIn: prefs().metronome,
-        onChordStart: highlightIdx, onNote: flashPlayingNote, onDone: clearHighlights, onBeat,
-      });
-    });
-    $('btnStop').addEventListener('click', () => { Au().stop(); clearHighlights(); });
-    $('btnUndo').addEventListener('click', () => {
-      App().mutate(() => section().progSpecs.pop());
+
+    $('sectionMeter').addEventListener('change', () => {
+      Au().stop();
+      App().mutate(s => { I().useTime(s, section(), $('sectionMeter').value); });
       renderAll();
     });
+    $('chordLength').addEventListener('change', () => {
+      const beats = parseFloat($('chordLength').value);
+      if (!Number.isFinite(beats) || beats <= 0) return;
+      App().mutate(s => {
+        const sec = section();
+        sec.beatsPerChord = beats === Song().barQuarters(Song().sectionMeter(s, sec)) ? null : beats;
+      });
+      renderAll();
+    });
+
+    $('btnPlay').addEventListener('click', playChords);
+    $('btnPlayDrums').addEventListener('click', playDrumsOnly);
+    $('btnPlayBand').addEventListener('click', () => playBand(false));
+    $('btnPlayCombo').addEventListener('click', () => playBand(true));
+    $('btnPlayMelody').addEventListener('click', playMelody);
+    $('btnStop').addEventListener('click', stopAll);
+    $('btnUndo').addEventListener('click', undo);
     $('btnReset').addEventListener('click', () => {
-      App().mutate(() => { section().progSpecs = []; });
+      editChords(sec => { sec.progSpecs = []; });
       renderAll();
     });
 
@@ -880,16 +1152,19 @@
     $('loop').addEventListener('change', () => { prefs().loop = $('loop').checked; App().savePrefs(); });
     $('metronome').addEventListener('change', () => { prefs().metronome = $('metronome').checked; App().savePrefs(); });
 
+    // A genre's palette: its patterns and tones for this section (the nearest
+    // of their kind outside 4/4). The tempo stays the writer's.
     $('paletteStyle').addEventListener('change', () => {
       const genreId = $('paletteStyle').value;
       const defs = R().defaultsForStyle(genreId);
       App().mutate(s => {
         s.genreId = genreId;
-        if (defs.tempo) s.tempo = defs.tempo;
         const sec = section();
-        Object.assign(sec, {
-          rhythmPattern: defs.rhythmPattern || sec.rhythmPattern,
-          drumPattern: defs.drumPattern || sec.drumPattern,
+        const m = Song().sectionMeter(s, sec);
+        const fit = Mt().id(m) === '4/4'
+          ? { rhythmPattern: defs.rhythmPattern || sec.rhythmPattern, drumPattern: defs.drumPattern || sec.drumPattern }
+          : I().patternsFor({ rhythmPattern: defs.rhythmPattern || sec.rhythmPattern, drumPattern: defs.drumPattern || sec.drumPattern }, '4/4', m);
+        Object.assign(sec, fit, {
           vocalPattern: defs.vocalPattern || sec.vocalPattern,
           underPattern: defs.underPattern || sec.underPattern,
           textureTone: defs.textureTone || sec.textureTone,
@@ -897,9 +1172,9 @@
           melodyTone: defs.melodyTone || sec.melodyTone,
         });
       });
-      buildArrangementControls();
       syncControls();
       renderAll();
+      if (defs.tempo) UI().toast(`${R().profileFor(genreId).name} usually sits around ${defs.tempo} BPM`);
     });
     $('sectionRole').addEventListener('change', () => {
       App().mutate(s => {
@@ -925,32 +1200,20 @@
         b.addEventListener('click', () => {
           const p = global.Learn.PRESETS[parseInt(b.dataset.preset, 10)];
           if (!p) return;
-          App().mutate(s => {
-            s.key = p.key; s.scale = p.scale;
-            if (p.focusStyle) s.genreId = p.focusStyle;
-            const sec = section();
-            if (p.sectionRole) sec.role = p.sectionRole;
-            if (p.rhythmPattern) sec.rhythmPattern = p.rhythmPattern;
-            if (p.drumPattern) sec.drumPattern = p.drumPattern;
-            if (p.vocalPattern) sec.vocalPattern = p.vocalPattern;
-            if (p.underPattern) sec.underPattern = p.underPattern;
-            sec.progSpecs = p.specs.slice();
-            Song().autoNameSections(s);
-          });
-          buildArrangementControls();
+          applyPreset(p);
           UI().closeModal();
           renderAll();
-          UI().toast(`Loaded "${p.name}"`);
+          UI().toast(`"${p.name}", in ${key()}. Undo takes its chords out again.`);
         });
       });
     });
     $('btnQuizStart').addEventListener('click', startQuiz);
     $('btnExportMidi').addEventListener('click', () => {
-      if (chords().length === 0) { UI().toast('Add some chords first'); return; }
+      if (needsChords()) return;
       const ok = global.Midi.download({
-        tempo: song().tempo, chords: chords(), voicing: prefs().voicing,
-        withBass: prefs().withBass, beatsPerChord: section().beatsPerChord || 4,
-        melody: vocalMelodyEvents(),
+        tempo: tempo(), chords: chords(), voicing: prefs().voicing,
+        withBass: prefs().withBass, beatsPerChord: chordBeats(), meter: meter(),
+        melody: item().melody,
         filename: `chordpath-${section().name.toLowerCase().replace(/\s+/g, '-')}`,
       });
       if (ok) UI().toast('Section MIDI downloaded');
@@ -1049,12 +1312,14 @@
 
   // ── Keyboard (only while this view is active) ────────────────────────────
   function handleKey(e) {
-    if (e.key === ' ') { e.preventDefault(); playOrStop(); return; }
-    if (e.key.toLowerCase() === 'd') { e.preventDefault(); $('btnPlayDrums').click(); return; }
-    if (e.key.toLowerCase() === 'b') { e.preventDefault(); $('btnPlayBand').click(); return; }
-    if (e.key.toLowerCase() === 'x') { e.preventDefault(); $('btnPlayCombo').click(); return; }
-    if (e.key.toLowerCase() === 'm') { $('btnPlayMelody').click(); return; }
-    if (e.key.toLowerCase() === 'l') {
+    const k = e.key.toLowerCase();
+    if (e.key === ' ') { e.preventDefault(); if (playing) stopAll(); else playChords(); return; }
+    if (k === 'd') { e.preventDefault(); playDrumsOnly(); return; }
+    if (k === 'b') { e.preventDefault(); playBand(false); return; }
+    if (k === 'x') { e.preventDefault(); playBand(true); return; }
+    if (k === 'm') { playMelody(); return; }
+    if (k === 'i' && !e.metaKey && !e.ctrlKey) { showPane(prefs().pane === 'ideas' ? 'next' : 'ideas'); return; }
+    if (k === 'l') {
       prefs().loop = !prefs().loop; $('loop').checked = prefs().loop;
       App().savePrefs(); UI().toast('Loop ' + (prefs().loop ? 'on' : 'off')); return;
     }
@@ -1062,19 +1327,25 @@
       prefs().sevenths = !prefs().sevenths; $('withSevenths').checked = prefs().sevenths;
       App().savePrefs(); renderOptions(); UI().toast('7ths ' + (prefs().sevenths ? 'on' : 'off')); return;
     }
-    if (e.key === 'Backspace' || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z')) {
-      e.preventDefault(); App().mutate(() => section().progSpecs.pop()); renderAll(); return;
+    if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); undo(); return; }
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      editChords(sec => sec.progSpecs.pop());
+      renderAll();
+      return;
     }
-    if (e.key.toLowerCase() === 'c' && !e.metaKey && !e.ctrlKey) {
-      App().mutate(() => { section().progSpecs = []; }); renderAll(); return;
+    if (k === 'c' && !e.metaKey && !e.ctrlKey) {
+      editChords(sec => { sec.progSpecs = []; });
+      renderAll();
+      return;
     }
-    if (e.key.toLowerCase() === 'p') {
+    if (k === 'p') {
       const next = prefs().viz === 'piano' ? 'guitar' : 'piano';
       const btn = doc.querySelector(`.viz-tabs [data-viz="${next}"]`);
       if (btn) btn.click();
       return;
     }
-    if (e.key.toLowerCase() === 'e' || e.key.toLowerCase() === 'f') { pickBestForFeeling(); return; }
+    if (k === 'e' || k === 'f') { pickBestForFeeling(); return; }
     if (e.key === '[' || e.key === ']') {
       const s = song();
       const idx = s.sections.findIndex(x => x.id === section().id);
@@ -1082,7 +1353,7 @@
       if (next) global.Nav.go('section', s.id, next.id);
       return;
     }
-    if (/^[1-9]$/.test(e.key)) {
+    if (/^[1-9]$/.test(e.key) && prefs().pane !== 'ideas') {
       const optEls = doc.querySelectorAll('#options .opt');
       const idx = parseInt(e.key, 10) - 1;
       if (optEls[idx]) optEls[idx].click();
@@ -1092,9 +1363,9 @@
   // ── View lifecycle ───────────────────────────────────────────────────────
   function enter() {
     buildStatic();
+    playing = false;
     buildScaleSelect();
     buildFeelingSelect();
-    buildArrangementControls();
     syncControls();
     renderAll();
   }

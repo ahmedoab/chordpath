@@ -108,6 +108,11 @@ section('Using an idea');
   check('a picked pattern stays picked, a sparse groove sparse', /^[1-6.]+$/.test(Meters.rhythm(picked.rhythmPattern).chords) && picked.drumPattern === 'six_eight_brushes');
   Ideas.useTime(song, picked, 'nonsense');
   check('a time that is not one changes nothing', picked.meterOverride.num === 6);
+  const silent = Song.createSection({ role: 'intro', progSpecs: ['C:maj'], rhythmPattern: 'folk_pick', drumPattern: 'none' });
+  song.sections.push(silent);
+  Ideas.useTime(song, silent, '3/4');
+  check('no drums stays no drums, even written the old way, as "none"', silent.drumPattern === '');
+  check('a 4/4 style rhythm becomes one written for the new time', Meters.rhythm(silent.rhythmPattern).meter === '3/4');
 
   // The whole song in another time.
   const whole = Song.createSong({ key: 'E' });

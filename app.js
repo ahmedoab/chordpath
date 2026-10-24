@@ -17,6 +17,7 @@
       style: 'block',
       voicing: 'smart',
       viz: 'piano',
+      pane: 'next',             // the section editor's left pane: 'next' (chords) or 'ideas'
       withBass: true,
       sevenths: false,
       loop: false,

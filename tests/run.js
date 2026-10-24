@@ -398,6 +398,14 @@ check('playback items have chords, patterns, tempo',
   pb.every(it => it.chords.length > 0 && it.pattern && it.pattern.drums && it.tempo > 0));
 check('playback melody events look sane',
   pb.every(it => it.melody.every(ev => ev.midi > 30 && ev.midi < 100 && ev.beats > 0)));
+check('playbackItem builds one section exactly as the whole song does',
+  s1.sections.every((sec, i) => JSON.stringify(Song.playbackItem(s1, sec)) === JSON.stringify(pb[i])));
+{
+  const item = Song.playbackItem(s1, Song.createSection({ role: 'bridge', vocalPattern: 'chorus_lift' }));
+  check('an empty section still has an item: no chords, so nothing to sing', item && item.chords.length === 0 && item.melody.length === 0 && item.under.length === 0);
+  const odd = Song.playbackItem(s1, Song.createSection({ progSpecs: ['C:maj', 'G:maj'], vocalPattern: 'from_a_newer_version' }));
+  check('a melody this version does not know is not sung as some other melody', odd.melody.length === 0);
+}
 
 // Melody seeding
 const chordsX = Song.chordsOf(s1, s1.sections[1]);

@@ -507,47 +507,56 @@
     return 40 + ((chord.rootPc - 4 + 12) % 12);
   }
 
+  // The style's bar is played again in every bar a chord lasts, and nothing
+  // sounds past the chord's end; only its last bar leads into the next chord.
   function bassEvents(chords, bassStyle, beatsPerChord) {
     beatsPerChord = beatsPerChord || 4;
     const out = [];
-    const push = (midi, beatStart, beats) => out.push({ midi, beatStart, beats, layer: 'bass' });
     chords.forEach((ch, ci) => {
-      const base = ci * beatsPerChord;
+      const end = (ci + 1) * beatsPerChord;
+      const push = (midi, beatStart, beats) => {
+        if (beatStart >= end - 1e-9) return;
+        out.push({ midi, beatStart, beats: Math.min(beats, end - beatStart), layer: 'bass' });
+      };
       const root = bassRootMidi(ch);
       const fifth = root + 7;
       const next = chords[(ci + 1) % chords.length];
-      switch (bassStyle) {
-        case 'root-fifth':
-          push(root, base, 2); push(fifth - (fifth > 51 ? 12 : 0), base + 2, 2);
-          break;
-        case 'walking': {
-          const third = root + (ch.intervals.includes(3) ? 3 : 4);
-          const approach = bassRootMidi(next) - 1;
-          push(root, base, 1); push(third, base + 1, 1);
-          push(fifth, base + 2, 1); push(approach, base + 3, 1);
-          break;
+      for (let from = 0; from < beatsPerChord; from += 4) {
+        const base = ci * beatsPerChord + from;
+        const span = Math.min(4, beatsPerChord - from);
+        const last = from + 4 >= beatsPerChord;
+        switch (bassStyle) {
+          case 'root-fifth':
+            push(root, base, 2); push(fifth - (fifth > 51 ? 12 : 0), base + 2, 2);
+            break;
+          case 'walking': {
+            const third = root + (ch.intervals.includes(3) ? 3 : 4);
+            push(root, base, 1); push(third, base + 1, 1);
+            push(fifth, base + 2, 1); push(last ? bassRootMidi(next) - 1 : root + 12, base + 3, 1);
+            break;
+          }
+          case 'pumping':
+            for (let b = 0; b < span; b += 0.5) push(root, base + b, 0.5);
+            break;
+          case 'funk-16th':
+            [0, 0.75, 1.5, 2.5, 3.25].forEach((b, i) =>
+              push(i === 3 ? fifth - 12 + (fifth - 12 < 28 ? 12 : 0) : root, base + b, 0.4));
+            break;
+          case 'tumbao':
+            push(root, base, 1.5); push(fifth - (fifth > 51 ? 12 : 0), base + 1.5, 0.5);
+            push(root, base + 2, 1.5); push(fifth - (fifth > 51 ? 12 : 0), base + 3.5, 0.5);
+            break;
+          case 'reggae':
+            push(root, base + 1, 1); push(root, base + 2.5, 1);
+            break;
+          case 'sustained':
+            push(root, base, span);
+            break;
+          case 'root':
+          default:
+            push(root, base, span - 0.5);
+            break;
         }
-        case 'pumping':
-          for (let b = 0; b < beatsPerChord; b += 0.5) push(root, base + b, 0.5);
-          break;
-        case 'funk-16th':
-          [0, 0.75, 1.5, 2.5, 3.25].forEach((b, i) =>
-            push(i === 3 ? fifth - 12 + (fifth - 12 < 28 ? 12 : 0) : root, base + b, 0.4));
-          break;
-        case 'tumbao':
-          push(root, base, 1.5); push(fifth - (fifth > 51 ? 12 : 0), base + 1.5, 0.5);
-          push(root, base + 2, 1.5); push(fifth - (fifth > 51 ? 12 : 0), base + 3.5, 0.5);
-          break;
-        case 'reggae':
-          push(root, base + 1, 1); push(root, base + 2.5, 1);
-          break;
-        case 'sustained':
-          push(root, base, beatsPerChord);
-          break;
-        case 'root':
-        default:
-          push(root, base, beatsPerChord - 0.5);
-          break;
       }
     });
     return out;
@@ -611,11 +620,37 @@
     return lines.join('\n');
   }
 
+  // ── A section of a song, as tab ──────────────────────────────────────────
+  // part: 'chords' | 'melody' | 'bass' | 'under' | 'drums'. Written in the
+  // section's own time and chord lengths, from what it actually plays: the
+  // strum chart over the chord shapes, the chart's own bass notes, the drums
+  // that sound (a 4/4 kit asked to play in another time gives way to that
+  // time's groove, and so does its tab).
+  function sectionTab(song, section, part) {
+    const item = global.Song.playbackItem(song, section);
+    const chords = item.chords;
+    if (!chords.length) return '(no chords yet)';
+    const grid = { beatsPerChord: item.beatsPerChord, beatsPerBar: global.Song.barQuarters(item.meter) };
+    if (part === 'melody') {
+      return item.melody.length ? renderMelodyTab(item.melody, Object.assign({ chords, register: 'lead' }, grid)) : '(no vocal melody chosen)';
+    }
+    if (part === 'under') {
+      return item.under.length ? renderMelodyTab(item.under, Object.assign({ chords, register: 'mid' }, grid)) : '(no under-melody chosen)';
+    }
+    if (part === 'bass') {
+      const notes = global.Parts.fromItem(item).bass.map(n => ({ midi: n.n, beatStart: n.t, beats: n.d }));
+      return notes.length ? renderMelodyTab(notes, Object.assign({ chords, register: 'bass', names: false }, grid)) : '(no bass)';
+    }
+    if (part === 'drums') return item.pattern.drum ? renderDrumGrid(item.pattern.drum, item.meter) : '(no drums chosen)';
+    const tab = renderChordTab(chords, grid);
+    return item.pattern.steps ? renderStrumChart(item.pattern.rhythm, item.meter) + '\n\n' + tab : tab;
+  }
+
   global.Tabs = {
     TUNING_MIDI, STRING_LABELS, OPEN_PCS, REGISTERS,
     findChordShape,
     mapEventsToFrets, placeNotes, countLabels,
     renderMelodyTab, renderNotesTab, renderChordTab, renderBassTab, renderDrumGrid, renderStrumChart,
-    bassEvents,
+    bassEvents, sectionTab,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

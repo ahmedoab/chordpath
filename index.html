@@ -97,8 +97,14 @@
     <div class="progression-head">
       <h2 id="sectionHeading">Progression</h2>
       <div class="prog-tools">
-        <button id="btnUndo" type="button" class="ghost">Undo</button>
-        <button id="btnReset" type="button" class="danger">Clear</button>
+        <label class="meter-pick" title="The time signature of this section">Time
+          <select id="sectionMeter" aria-label="Time signature of this section"></select>
+        </label>
+        <label class="meter-pick" title="How long each chord lasts">Each chord
+          <select id="chordLength" aria-label="How long each chord lasts"></select>
+        </label>
+        <button id="btnUndo" type="button" class="ghost" title="Undo the last change to the chords">Undo</button>
+        <button id="btnReset" type="button" class="danger" title="Take every chord out (Undo brings them back)">Clear</button>
       </div>
     </div>
     <div id="progression" class="progression empty" aria-live="polite"></div>
@@ -113,10 +119,14 @@
 
     <section class="pane options-pane">
       <div class="pane-head">
-        <h2>Next chord</h2>
-        <span class="pane-help">Sorted by fit. Click — or press <span class="kbd">1</span>–<span class="kbd">9</span>.</span>
+        <div class="pane-switch" id="paneSwitch" role="tablist" aria-label="Suggestions">
+          <button type="button" data-pane="next" class="active" role="tab" aria-selected="true">Next chord</button>
+          <button type="button" data-pane="ideas" role="tab" aria-selected="false">Ideas</button>
+        </div>
+        <span class="pane-help" id="paneHelp">Sorted by fit. Click — or press <span class="kbd">1</span>–<span class="kbd">9</span>.</span>
       </div>
       <div id="options" class="options-grid"></div>
+      <div id="ideas" class="ideas hidden" aria-live="polite"></div>
     </section>
 
     <aside class="pane right-pane">
@@ -199,9 +209,7 @@
       <button id="btnPlayCombo" type="button">Combo</button>
       <button id="btnPlayMelody" type="button">+ Melody</button>
       <button id="btnStop" type="button" class="ghost">Stop</button>
-      <div class="beat-led" aria-hidden="true">
-        <span></span><span></span><span></span><span></span>
-      </div>
+      <div class="beat-led" aria-hidden="true"></div>
       <span class="spacer"></span>
       <label class="tempo-label">Tempo
         <input id="tempo" type="range" min="40" max="200" value="92" />
@@ -309,12 +317,7 @@
     <button id="btnPickEmotion" type="button">Add best next chord</button>
   </div>
   <p id="emotionMeta" class="emotion-meta"></p>
-  <div class="regen-row" id="regenRow">
-    <span class="meta">Regenerate this section for the feeling:</span>
-    <button id="btnRegenChords" type="button" class="ghost small">Chords</button>
-    <button id="btnRegenArr" type="button" class="ghost small">Arrangement</button>
-    <button id="btnRegenAll" type="button" class="ghost small">Both</button>
-  </div>
+  <p class="meta">The next-chord list and the ideas lean towards it. Nothing in the section is changed for you.</p>
 </div>
 
 <div id="popCategories" popover="auto" class="popover">

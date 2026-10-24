@@ -196,15 +196,17 @@
   }
 
   // ── Tension chart ────────────────────────────────────────────────────────
+  // Drawn in the chart's own 200 × 28 box, which is stretched to the row's
+  // width: lines keep their thickness and the dots stay round however wide it is.
   function renderTensionChart(arc) {
     const svg = $('tensionChart');
     if (!svg) return;
     svg.innerHTML = '';
     if (!arc || arc.length === 0) {
-      svg.innerHTML = '<text x="100" y="24" text-anchor="middle" fill="rgba(241,236,220,0.35)" font-size="10" font-family="JetBrains Mono">— no data yet —</text>';
+      svg.innerHTML = '<path d="M 6 22 L 194 22" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.5" stroke-dasharray="4 4" fill="none" vector-effect="non-scaling-stroke" />';
       return;
     }
-    const W = 200, H = 40, pad = 6;
+    const W = 200, H = 28, pad = 4;
     const stepX = arc.length > 1 ? (W - 2 * pad) / (arc.length - 1) : 0;
     const pts = arc.map((v, i) => [pad + i * stepX, H - pad - (v / 10) * (H - 2 * pad)]);
     const areaPath = (pts.length >= 2 ? `M ${pad} ${H - pad} ` + pts.map(p => `L ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ') + ` L ${W - pad} ${H - pad} Z` : '');
@@ -222,8 +224,8 @@
         </linearGradient>
       </defs>`;
     const area = areaPath ? `<path d="${areaPath}" fill="url(#g1)" />` : '';
-    const line = `<path d="${linePath}" stroke="url(#g2)" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round" />`;
-    const dots = pts.map(p => `<circle cx="${p[0]}" cy="${p[1]}" r="2.6" fill="#d4a857"/>`).join('');
+    const line = `<path d="${linePath}" stroke="url(#g2)" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />`;
+    const dots = pts.map(p => `<path class="dot" d="M ${p[0].toFixed(1)} ${p[1].toFixed(1)} l 0 0" stroke="#d4a857" stroke-width="6" stroke-linecap="round" vector-effect="non-scaling-stroke" />`).join('');
     svg.innerHTML = grad + area + line + dots;
   }
 

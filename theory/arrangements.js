@@ -510,19 +510,44 @@
     };
   }
 
-  function describeCombo(styleId, rhythmId, drumId, vocalId, underId) {
-    const style = byId(GENRE_PROFILES, styleId);
-    const rhythm = byId(RHYTHMS, rhythmId);
-    const drums = byId(DRUMS, drumId);
-    const vocal = byId(VOCAL_MELODIES, vocalId);
-    const under = byId(UNDER_MELODIES, underId);
+  // ── What a section has chosen, by name ──────────────────────────────────
+  // Unlike byId these never fall back to the first entry: nothing chosen, or
+  // something that does not fit the section's time, is null.
+  function timeOf(meter) { return global.Meters ? global.Meters.id(meter || '4/4') : '4/4'; }
+  function chartFits(item, meter) { return !!item && item.meter === timeOf(meter); }
+
+  // A style rhythm (4/4 only) or a chart written or made for the section's time.
+  function rhythmFor(id, meter) {
+    if (!id) return null;
+    const style = timeOf(meter) === '4/4' ? RHYTHMS.find(r => r.id === id) : null;
+    if (style) return style;
+    const chart = global.Meters ? global.Meters.findRhythm(id, timeOf(meter)) : null;
+    return chartFits(chart, meter) ? chart : null;
+  }
+  // A style kit (4/4 only) or a groove for the section's time; 'none' is no drums.
+  function drumsFor(id, meter) {
+    if (!id || id === 'none') return null;
+    const kit = timeOf(meter) === '4/4' ? DRUMS.find(d => d.id === id) : null;
+    if (kit) return kit;
+    const groove = global.Meters ? global.Meters.findGroove(id, timeOf(meter)) : null;
+    return chartFits(groove, meter) ? groove : null;
+  }
+  function vocalFor(id) { return (id && VOCAL_MELODIES.find(v => v.id === id)) || null; }
+  function underFor(id) { return (id && id !== 'none' && UNDER_MELODIES.find(u => u.id === id)) || null; }
+
+  function describeCombo(styleId, rhythmId, drumId, vocalId, underId, meter) {
+    const style = profileFor(styleId);
+    const rhythm = rhythmFor(rhythmId, meter);
+    const drums = drumsFor(drumId, meter);
+    const vocal = vocalFor(vocalId);
+    const under = underFor(underId);
     return [
       style && style.name,
-      rhythm && rhythm.name,
-      drums && drums.name,
+      rhythm ? rhythm.name : 'Plain chords',
+      drums ? drums.name : 'No drums',
       vocal && vocal.name,
-      under && under.id !== 'none' ? under.name : null,
-    ].filter(Boolean).join(' / ');
+      under && under.name,
+    ].filter(Boolean).join(' · ');
   }
 
   function sectionAnalysis(progression, key, scaleId, sectionId) {
@@ -586,6 +611,10 @@
     profileFor,
     defaultsForStyle,
     makePlaybackPattern,
+    rhythmFor,
+    drumsFor,
+    vocalFor,
+    underFor,
     describeCombo,
     sectionAnalysis,
   };

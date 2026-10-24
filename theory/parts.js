@@ -303,11 +303,14 @@
       const voiced = V.voice(chord, 'smart', { previous });
       previous = voiced;
       const voicing = performanceVoicing(chord, voiced);
+      // The style's bar again in every bar the chord lasts. A chord that ends
+      // before its bar does is cut off there, as it is when played.
       for (let bar = 0; bar < bpc; bar += 4) {
+        const until = bar + 4 > bpc ? (ci + 1) * bpc : beats;
         chordBar(pattern.chords, voicing, ci, swing, beatMs).forEach(ev => {
           if (ev.t + bar >= bpc) return;
           const t = ci * bpc + bar + ev.t;
-          chords.push({ t: round(t), d: round(Math.min(ev.d, beats - t)), n: ev.n, v: round(ev.v) });
+          chords.push({ t: round(t), d: round(Math.min(ev.d, until - t)), n: ev.n, v: round(ev.v) });
         });
       }
     });

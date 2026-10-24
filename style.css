@@ -208,7 +208,7 @@ button.danger:hover { background: #f7e8e3; border-color: var(--tense); }
 .progression-head {
   display: flex; justify-content: space-between; align-items: center;
 }
-.prog-tools { display: flex; gap: 0.3rem; }
+.prog-tools { display: flex; gap: 0.3rem; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .prog-tools button { padding: 0.25rem 0.6rem; font-size: 0.76rem; }
 
 .progression {
@@ -802,7 +802,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
   .header-actions { justify-self: start; flex-wrap: wrap; }
   .key-grid { grid-template-columns: repeat(12, minmax(0,1fr)); }
   .workspace { grid-template-columns: 1fr; }
-  .options-grid { overflow-y: visible; max-height: none; }
+  .options-grid, .ideas { overflow-y: visible; max-height: none; }
   .right-pane {
     overflow: visible;
     overscroll-behavior: auto;
@@ -988,7 +988,10 @@ button.small { font-size: 0.72rem; padding: 0.2rem 0.5rem; }
 .pane-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; gap: 2px; }
 .pane-switch button { font: inherit; font-size: 0.74rem; font-weight: 600; padding: 0.22rem 0.75rem; border: 0; border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; }
 .pane-switch button.active { background: var(--surface-2); color: var(--ink); }
-.ideas { display: flex; flex-direction: column; gap: 1rem; overflow: auto; min-height: 0; padding-right: 0.2rem; }
+.ideas { display: flex; flex-direction: column; gap: 1rem; overflow: auto; min-height: 0; flex: 1; padding-right: 0.2rem; }
+.ideas-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.6rem; }
+.ideas-head p { margin: 0; font-size: 0.76rem; line-height: 1.4; }
+.ideas-head button { flex-shrink: 0; }
 .idea-group > h4 { display: flex; align-items: baseline; gap: 0.5rem; }
 .idea-group > h4 .meta { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .idea-list { display: flex; flex-direction: column; gap: 0.35rem; }
@@ -1000,11 +1003,14 @@ button.small { font-size: 0.72rem; padding: 0.2rem 0.5rem; }
 .idea-name { font-weight: 600; font-size: 0.84rem; color: var(--ink); }
 .idea-tip { grid-column: 1 / -1; font-size: 0.74rem; color: var(--ink-2); line-height: 1.4; }
 .idea-chart { grid-column: 1 / -1; margin: 0.2rem 0 0; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.35; color: var(--ink-2); white-space: pre; overflow-x: auto; }
-.idea-chords { font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink-2); }
+.idea-chords { grid-column: 1 / -1; font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink); }
+.idea-roman { grid-column: 1 / -1; font-family: var(--font-mono); font-size: 0.68rem; color: var(--accent); margin-top: -0.15rem; }
+.idea-name .meta { font-weight: 400; margin-left: 0.3rem; }
 .idea-actions { display: flex; gap: 0.3rem; }
 .idea-actions button { font-size: 0.74rem; padding: 0.22rem 0.6rem; }
-.meter-pick { display: flex; align-items: center; gap: 0.4rem; }
-.meter-pick select { width: auto; font-family: var(--font-mono); }
+.meter-pick { display: flex; align-items: center; gap: 0.35rem; font-size: 0.74rem; color: var(--muted); }
+.meter-pick select { width: auto; font-family: var(--font-mono); font-size: 0.76rem; padding: 0.2rem 0.35rem; }
+.beat-led span.strong { width: 7px; height: 7px; }
 
 /* ── Overview ── */
 .overview { max-width: 1100px; margin: 0 auto; }
@@ -1084,7 +1090,6 @@ button.small { font-size: 0.72rem; padding: 0.2rem 0.5rem; }
 .role-picker .role-list button { text-align: left; display: flex; justify-content: space-between; gap: 1rem; }
 .feeling-dialog select { width: 100%; font: inherit; padding: 0.4rem; margin: 0.6rem 0 0.4rem; }
 .fd-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.6rem; }
-.regen-row { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.7rem; flex-wrap: wrap; }
 
 /* Section-editor topbar now hosts the switcher instead of the brand */
 .topbar { grid-template-columns: minmax(0, auto) auto 1fr auto; }

@@ -13,10 +13,11 @@
     { key:'M',           desc:'Play with melody'             },
     { key:'L',           desc:'Toggle loop'                  },
     { key:'7',           desc:'Toggle 7th chords'            },
-    { key:'⌫ / Backspace', desc:'Undo last chord'            },
-    { key:'⌘Z / Ctrl+Z',  desc:'Undo last chord'             },
-    { key:'C',           desc:'Clear progression'            },
-    { key:'1 – 9',       desc:'Add option chord #1–9'        },
+    { key:'⌫ / Backspace', desc:'Take out the last chord'    },
+    { key:'⌘Z / Ctrl+Z',  desc:'Undo the last change to the chords' },
+    { key:'C',           desc:'Clear the chords (Undo brings them back)' },
+    { key:'1 – 9',       desc:'Add next-chord option #1–9'   },
+    { key:'I',           desc:'Switch between Next chord and Ideas' },
     { key:'P',           desc:'Toggle Piano / Guitar view'   },
     { key:'E / F',       desc:'Add best chord for the section feeling' },
     { key:'[ / ]',       desc:'Previous / next section'      },
@@ -179,11 +180,11 @@
     const items = PRESETS.map((p, i) =>
       `<button class="ghost pill" type="button" data-preset="${i}" style="margin: .15rem; text-align: left;">
          <strong>${p.name}</strong>
-         <small style="display:block; color: var(--muted)">${p.key} ${p.scale.replace('_',' ')} · ${p.specs.length} chords · ${p.focusStyle ? p.focusStyle.replace('_',' ') : 'custom'}</small>
+         <small style="display:block; color: var(--muted)">${p.specs.length} chords · ${/minor|dorian|phrygian/.test(p.scale) ? 'minor' : 'major'} colour · ${p.focusStyle ? p.focusStyle.replace('_',' ') : 'custom'}</small>
        </button>`
     ).join('');
     return `<h2>Starter sounds</h2>
-            <p class="meta" style="margin-bottom: .8rem">One-click scenes with chords, section role, rhythm, drums, vocal shape, and under-melody.</p>
+            <p class="meta" style="margin-bottom: .8rem">Scenes to start from: chords, a rhythm, drums and melody shapes. Each one plays in your song's key and time, and Undo takes its chords out again.</p>
             <div style="display: flex; flex-wrap: wrap; gap: .25rem;">${items}</div>`;
   }
 

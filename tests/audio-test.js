@@ -132,6 +132,66 @@ async function main() {
   await new Promise(r => setTimeout(r, 1700));
   check(`chords played on their own in 3/4 last a 3/4 bar each (${plainDone} ms)`, plainDone > 1400 && plainDone < 1700);
 
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+
+  // ── The beat lights count the pulses of the time ──
+  const lights = [];
+  Audio.playSong(sixItems, { onBeat: b => lights.push(b) });
+  await wait(800);
+  Audio.stop();
+  check(`a bar of 6/8 lights six beats, one after another (${lights.join(',')})`, lights.slice(0, 6).join(',') === '0,1,2,3,4,5');
+
+  // ── Chords half a bar long, in a 4/4 style ──
+  // At 240 bpm a 4/4 bar is 1000 ms, so each chord should last 500.
+  const half = Song.createSong({ key: 'C', tempo: 240 });
+  half.sections.push(Song.createSection({ progSpecs: ['C:maj', 'G:maj'], rhythmPattern: 'pop_eights', drumPattern: 'pop_backbeat', beatsPerChord: 2 }));
+  heard.length = 0;
+  clockZero = Date.now();
+  const chordStarts = [];
+  let halfDone = 0;
+  Audio.playSong(Song.buildPlayback(half), {
+    onChordStart: () => chordStarts.push(Date.now() - clockZero),
+    onDone: () => { halfDone = Date.now() - clockZero; },
+  });
+  await wait(1700);
+  const halfBass = heard.filter(h => h.kind === 'MonoSynth');
+  check(`two chords half a bar long take one bar (${halfDone} ms, not two)`, halfDone > 900 && halfDone < 1250);
+  check(`the second starts half way through it (${chordStarts.join(', ')})`, chordStarts.length === 2 && near(chordStarts, [0, 500]));
+  check(`each has its own bass note, and none spills past its chord (${halfBass.map(b => b.note + '@' + b.at).join(' ')})`,
+    halfBass.length === 2 && halfBass[0].note === 'C2' && halfBass[1].note === 'G2' && near(halfBass.map(b => b.at), [0, 500]));
+
+  // ── The plain player keeps a strum inside a short chord ──
+  heard.length = 0;
+  clockZero = Date.now();
+  let shortDone = 0;
+  await Audio.playProgression(Song.chordsOf(half, half.sections[0]), { tempo: 240, style: 'strum', beatsPerChord: 2, onDone: () => { shortDone = Date.now() - clockZero; } });
+  await wait(1500);
+  const lateStrums = heard.filter(h => h.kind === 'PolySynth' && h.at > 1000 + 20);
+  check(`two chords of two beats last 1000 ms (${shortDone})`, shortDone > 950 && shortDone < 1200);
+  check(`and nothing is strummed after the last one ends (${lateStrums.map(h => h.at).join(', ') || 'none'})`, lateStrums.length === 0);
+
+  // ── The plain player keeps long chords long in another time ──
+  heard.length = 0;
+  clockZero = Date.now();
+  let longDone = 0;
+  await Audio.playProgression(Song.chordsOf(six, sec).slice(0, 1), { tempo: 240, style: 'block', meter: { num: 3, den: 4 }, beatsPerChord: 6, onDone: () => { longDone = Date.now() - clockZero; } });
+  await wait(1900);
+  check(`one chord two bars of 3/4 long lasts two bars (${longDone} ms)`, longDone > 1400 && longDone < 1700);
+
+  // ── Playing with the melody follows the time ──
+  heard.length = 0;
+  clockZero = Date.now();
+  const melodyBeats = [];
+  let firstChord = -1;
+  await Audio.playWithMelody(Song.chordsOf(six, sec), [], {
+    tempo: 240, beatsPerChord: 3, meter: { num: 3, den: 4 }, metronome: true, countIn: true,
+    onChordStart: i => { if (i === 0 && firstChord < 0) firstChord = Date.now() - clockZero; },
+    onBeat: b => melodyBeats.push(b),
+  });
+  await wait(2500);
+  check(`its count-in is a bar of 3/4, not four beats (${firstChord} ms)`, firstChord > 700 && firstChord < 850);
+  check(`and its beat lights count three to the bar all the way through (${melodyBeats.join(',')})`, melodyBeats.join(',') === '0,1,2,0,1,2,0,1,2');
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

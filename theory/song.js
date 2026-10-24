@@ -157,48 +157,51 @@
   }
 
   // ── Playback assembly ─────────────────────────────────────────────────────
-  // One playback item per section, in the shape audio.playSong consumes.
-  function buildPlayback(song) {
+  // What one section plays, in the shape audio.playSong consumes.
+  function playbackItem(song, sec) {
     const A = global.Arrangements;
     const M = global.Melody;
+    const chords = chordsOf(song, sec);
+    const key = sectionKey(song, sec);
+    const meter = sectionMeter(song, sec);
+    const beatsPerChord = chordBeats(song, sec);
+    const vocalPat = A.vocalFor(sec.vocalPattern);
+    const underPat = A.underFor(sec.underPattern);
+    const melody = vocalPat
+      ? M.generatePatternMelody(chords, song.scale, key, vocalPat,
+          { beatsPerChord, section: sec.role, seed: sec.melodySeed })
+      : [];
+    const under = underPat
+      ? M.generateUnderMelody(chords, song.scale, key, underPat,
+          { beatsPerChord, seed: sec.underSeed })
+      : [];
+    return {
+      sectionId: sec.id,
+      name: sec.name,
+      role: sec.role,
+      chords,
+      melody,
+      under,
+      pattern: A.makePlaybackPattern(sec.rhythmPattern, sec.drumPattern, meter),
+      tempo: sectionTempo(song, sec),
+      meter,
+      beatsPerChord,
+      stepsPerChord: Math.round(beatsPerChord * 4),
+      repeat: sec.repeat || 1,
+      levels: sec.levels || { chords: 100, bass: 100, drums: 100, melody: 100 },
+      tones: {
+        texture: sec.textureTone,
+        drums: sec.drumTone,
+        melody: sec.melodyTone,
+      },
+    };
+  }
+
+  // One playback item per section that has chords.
+  function buildPlayback(song) {
     return song.sections
       .filter(sec => (sec.progSpecs || []).length > 0)
-      .map(sec => {
-        const chords = chordsOf(song, sec);
-        const key = sectionKey(song, sec);
-        const meter = sectionMeter(song, sec);
-        const beatsPerChord = chordBeats(song, sec);
-        const vocalPat = A.byId(A.VOCAL_MELODIES, sec.vocalPattern);
-        const underPat = A.byId(A.UNDER_MELODIES, sec.underPattern);
-        const melody = sec.vocalPattern
-          ? M.generatePatternMelody(chords, song.scale, key, vocalPat,
-              { beatsPerChord, section: sec.role, seed: sec.melodySeed })
-          : [];
-        const under = underPat && underPat.type !== 'none'
-          ? M.generateUnderMelody(chords, song.scale, key, underPat,
-              { beatsPerChord, seed: sec.underSeed })
-          : [];
-        return {
-          sectionId: sec.id,
-          name: sec.name,
-          role: sec.role,
-          chords,
-          melody,
-          under,
-          pattern: A.makePlaybackPattern(sec.rhythmPattern, sec.drumPattern, meter),
-          tempo: sectionTempo(song, sec),
-          meter,
-          beatsPerChord,
-          stepsPerChord: Math.round(beatsPerChord * 4),
-          repeat: sec.repeat || 1,
-          levels: sec.levels || { chords: 100, bass: 100, drums: 100, melody: 100 },
-          tones: {
-            texture: sec.textureTone,
-            drums: sec.drumTone,
-            melody: sec.melodyTone,
-          },
-        };
-      });
+      .map(sec => playbackItem(song, sec));
   }
 
   // ── Sanitising ────────────────────────────────────────────────────────────
@@ -426,7 +429,7 @@
     touch, getSection, sectionKey, sectionTempo, sectionFeeling, sectionMeter, chordBeats, barQuarters,
     chordsOf, setProgression, autoNameSections,
     sectionBeats, sectionBars, songDurationSec,
-    buildPlayback,
+    playbackItem, buildPlayback,
     validate, migrate, serialize, deserialize,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

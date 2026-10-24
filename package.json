@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node tests/run.js && node tests/meter-test.js && node tests/ideas-test.js && node tests/audio-test.js && node tests/muse-test.js && node tests/daw-test.js && node tests/research-test.js && node tests/native-test.js",
-    "test:e2e": "node tests/e2e.js && node tests/e2e-engine.js && node tests/e2e-daw.js",
+    "test:e2e": "node tests/e2e.js && node tests/e2e-writing.js && node tests/e2e-engine.js && node tests/e2e-daw.js",
     "dist": "electron-builder --win --x64",
     "test:packaged": "node tests/e2e-packaged.js",
     "build:native": "node native/fetch-deps.js && node-gyp rebuild --release --directory=native"
