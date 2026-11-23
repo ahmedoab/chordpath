@@ -655,29 +655,37 @@
     };
   }
 
-  // A whole ChordPath song: Muse writes the verse and chorus, the theory
-  // engine fills the connecting sections in the same key and feeling.
-  function draftSong(opts) {
+  // "Another": the next draft for the same request that differs from the one
+  // on screen. Seeds walk on until the chords change; a request that can only
+  // ever give one answer gives it again after a few tries.
+  function another(opts, shown) {
+    opts = opts || {};
+    const was = shown && Array.isArray(shown.specs) ? shown.specs.join() : null;
+    let seed = opts.seed != null ? opts.seed : (shown && shown.seed != null ? shown.seed : (Date.now() & 0xffff));
+    let res = null;
+    for (let tries = 0; tries < 24; tries++) {
+      seed = (seed * 31 + 7) & 0xffff;
+      res = draft(Object.assign({}, opts, { seed }));
+      if (res.specs.join() !== was) break;
+    }
+    return res;
+  }
+
+  // A song to write, started from a draft: one verse holding its chords, in
+  // its key, at a tempo and in a genre taken from the songs it came from.
+  // Muse writes nothing else; the rest of the song is the writer's.
+  function startSong(opts) {
     opts = opts || {};
     const Song = global.Song;
     const seedNum = opts.seed != null ? opts.seed : (Date.now() & 0xffff);
-    // A draft already on screen becomes the verse as-is.
+    // A draft already on screen is used as it is.
     const verse = opts.verse && Array.isArray(opts.verse.chords) && opts.verse.chords.length >= 2
       ? opts.verse
       : draft(Object.assign({}, opts, { seed: seedNum, role: 'verse' }));
-    let chorus = null;
-    for (let tries = 0; tries < 6; tries++) {
-      chorus = draft(Object.assign({}, opts, {
-        seed: seedNum + 17 + tries * 101, role: 'chorus', key: verse.key, mode: verse.mode,
-        avoidRoots: [rootsOf(verse.degrees)],
-      }));
-      if (chorus.specs.join() !== verse.specs.join()) break;
-    }
 
     const q = resolveQuery(opts);
     const order = Object.keys(verse.feelings).sort((a, b) => verse.feelings[b] - verse.feelings[a]);
     const feelingId = order[0] || 'nostalgic';
-    const chorusFeeling = order[1] || F().contrastFor(feelingId, 'chorus');
     const energy = ['low', 'mid', 'high'].includes(opts.energy) ? opts.energy : (verse.energy || 'mid');
     const byId = id => corpus().find(e => e.id === id);
     const sources = verse.influences.map(i => byId(i.id)).filter(Boolean);
@@ -699,28 +707,10 @@
       genreId, feelingId, energy,
       key: verse.key, scale: verse.scale,
       tempo: Math.max(50, Math.min(180, tempo)),
-      notes: 'Drafted by Muse' + (names.length ? ' from what it learned in: ' + names.join('; ') + '.' : '.') +
+      notes: 'Started from a Muse draft' + (names.length ? ', shaped by ' + names.join('; ') + '.' : '.') +
         (opts.text ? ' You asked for: "' + str(opts.text, 200) + '".' : ''),
     });
-
-    const plan = F().SECTION_PLANS[energy] || F().SECTION_PLANS.mid;
-    const cache = {};
-    plan.forEach((role, i) => {
-      if (cache[role]) {
-        const dupe = Song.createSection(JSON.parse(JSON.stringify(cache[role])));
-        dupe.id = Song.newId('sec');
-        song.sections.push(dupe);
-        return;
-      }
-      const secFeeling = role === 'chorus' ? chorusFeeling : F().contrastFor(feelingId, role);
-      const section = F().generateSectionSpec(song, role, role === 'chorus' ? chorusFeeling : (role === 'bridge' ? secFeeling : feelingId), seedNum + i * 37);
-      if (role === 'verse') Song.setProgression(section, verse.chords);
-      else if (role === 'chorus') Song.setProgression(section, chorus.chords);
-      else if (role === 'intro') Song.setProgression(section, verse.chords.slice(0, 2));
-      else if (role === 'outro') Song.setProgression(section, chorus.chords.slice(-2));
-      cache[role] = section;
-      song.sections.push(section);
-    });
+    song.sections.push(Song.createSection({ role: 'verse', progSpecs: verse.specs.slice() }));
     Song.autoNameSections(song);
     return song;
   }
@@ -747,6 +737,6 @@
     preview, chordsText,
     exportJSON, importJSON,
     vocabulary, hear, similar,
-    draft, draftSong, corpusLoops, stats,
+    draft, another, startSong, corpusLoops, stats,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

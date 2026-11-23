@@ -464,30 +464,26 @@ check('a loose draft never copies a taught or library loop',
     return true;
   })());
 
-// Whole-song drafts
-const ds = Muse.draftSong({ text: 'bittersweet and hazy, driving home at night', seed: 9, title: 'Night Drive' });
-check('draftSong returns a valid ChordPath song', Song.validate(ds).ok && ds.title === 'Night Drive');
-check('the song has a verse and a chorus',
-  ds.sections.some(s => s.role === 'verse') && ds.sections.some(s => s.role === 'chorus'));
-check('verse and chorus are different progressions',
-  ds.sections.find(s => s.role === 'verse').progSpecs.join() !== ds.sections.find(s => s.role === 'chorus').progSpecs.join());
-check('every section has chords and a resolvable arrangement',
-  ds.sections.every(sec => sec.progSpecs.length >= 2 &&
-    Arrangements.RHYTHMS.some(r => r.id === sec.rhythmPattern) &&
-    Arrangements.DRUMS.some(d => d.id === sec.drumPattern) &&
-    Song.chordsOf(ds, sec).every(c => c.notes.length >= 2)));
-check('the song plays back', Song.buildPlayback(ds).length === ds.sections.length);
+// Starting a song from a draft: Muse hands over the chords, and that is all.
+const ds = Muse.startSong({ text: 'bittersweet and hazy, driving home at night', seed: 9, title: 'Night Drive' });
+check('startSong returns a valid ChordPath song', Song.validate(ds).ok && ds.title === 'Night Drive');
+check('it is one verse, holding the draft\'s chords', ds.sections.length === 1 && ds.sections[0].role === 'verse' && ds.sections[0].progSpecs.length >= 2);
+check('nothing else is written for the writer: no rhythm, drums or melody',
+  ds.sections[0].rhythmPattern === '' && ds.sections[0].drumPattern === '' && ds.sections[0].vocalPattern === '');
+check('the song plays back', Song.buildPlayback(ds).length === 1);
 check('tempo, scale and feeling are usable',
   ds.tempo >= 40 && ds.tempo <= 200 && !!Scales.SCALES[ds.scale] && !!Feelings.getFeeling(ds.feelingId));
+check('its notes say where the chords came from', /Muse/.test(ds.notes));
+check('Muse no longer drafts whole songs', typeof Muse.draftSong === 'undefined');
 check('the song notes say where it came from', /Muse/.test(ds.notes) && ds.notes.length > 20);
 check('a drafted song survives save and load unchanged',
   JSON.stringify(Song.migrate(JSON.parse(Song.serialize(ds)).song).sections.map(s => s.progSpecs)) ===
   JSON.stringify(ds.sections.map(s => s.progSpecs)));
 {
   const shown = Muse.draft({ text: 'dreamy and floating', seed: 21 });
-  const made = Muse.draftSong({ text: 'dreamy and floating', seed: 21, verse: shown });
-  eq('a song made from a draft on screen uses exactly that draft for its verse',
-    made.sections.find(s => s.role === 'verse').progSpecs, shown.specs);
+  const made = Muse.startSong({ text: 'dreamy and floating', seed: 21, verse: shown });
+  eq('a song started from a draft on screen holds exactly that draft',
+    made.sections[0].progSpecs, shown.specs);
   eq('and stays in that draft key', [made.key, made.scale], [shown.key, shown.scale]);
 }
 {
@@ -500,8 +496,25 @@ check('a drafted song survives save and load unchanged',
     Muse.chordsText(Muse.preview({ chordsText: sheetText })), sheetText);
   eq('a single section formats as one line', Muse.chordsText(pv), 'Dm Bb F C');
 }
-check('a seeded song draft works too', Song.validate(Muse.draftSong({ seedId: seedSong.id, seed: 3 })).ok);
+check('a song started from a seed works too', Song.validate(Muse.startSong({ seedId: seedSong.id, seed: 3 })).ok);
 check('drafting with nothing to go on still works', Muse.draft({ seed: 1 }).chords.length >= 2);
+{
+  // "Another" never hands back the chords already on screen.
+  let repeats = 0, tried = 0;
+  [{ closeness: 'near', seedId: seedSong.id }, { closeness: 'loose', text: 'hazy and bittersweet' }].forEach(base => {
+    for (let s = 0; s < 150; s++) {
+      const req = Object.assign({ seed: s }, base);
+      const shown = Muse.draft(req);
+      const next = Muse.another(req, shown);
+      tried++;
+      if (next.specs.join() === shown.specs.join() || next.seed === shown.seed) repeats++;
+    }
+  });
+  eq(`"Another" always gives different chords (${tried} tries)`, repeats, 0);
+  const req = { closeness: 'near', seedId: seedSong.id, seed: 40 };
+  eq('and it is repeatable: the same request and draft give the same next one',
+    Muse.another(req, Muse.draft(req)).specs, Muse.another(req, Muse.draft(req)).specs);
+}
 
 eq('stats count what was taught', Muse.stats().taught, Muse.all().length);
 check('stats count learned words and moves', Muse.stats().words >= 1 && Muse.stats().moves > 0);

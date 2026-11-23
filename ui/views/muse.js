@@ -221,7 +221,7 @@
         </div>
         <p class="meta">${why}</p>
         <div class="muse-row">
-          <button type="button" class="primary" id="mdSong">Make a full song from this</button>
+          <button type="button" class="primary" id="mdSong">Start a song with this</button>
           <button type="button" class="ghost" id="mdCopy">Copy chords</button>
           <button type="button" class="ghost" id="mdDone">Done</button>
         </div>
@@ -496,13 +496,13 @@
 
   function makeSong() {
     stopAudio();
-    const song = M().draftSong(Object.assign({}, state.draft.req, { verse: state.draft.res }));
+    const song = M().startSong(Object.assign({}, state.draft.req, { verse: state.draft.res }));
     if (!global.Storage.saveProject(song)) { UI().toast('Could not save the song'); return; }
-    UI().toast(`"${song.title}" created`);
+    UI().toast(`"${song.title}" started`);
     state.step = 'idle';
     state.draft = null;
-    say(`I turned that draft into a full song: <strong>${UI().esc(song.title)}</strong>.`);
-    global.Nav.go('overview', song.id);
+    say(`I put those chords in the verse of a new song, <strong>${UI().esc(song.title)}</strong>. The rest is yours to write.`);
+    global.Nav.go('section', song.id, song.sections[0].id);
   }
 
   // ── Wiring ───────────────────────────────────────────────────────────────
@@ -596,7 +596,13 @@
       stopAudio();
       doc.querySelectorAll('#mdChords .cc').forEach(n => n.classList.remove('playing'));
     });
-    on('mdAgain', 'click', () => redraft({ seed: (state.draft.req.seed * 31 + 7) & 0xffff }));
+    on('mdAgain', 'click', () => {
+      stopAudio();
+      const res = M().another(state.draft.req, state.draft.res);
+      state.draft.req.seed = res.seed;
+      state.draft.res = res;
+      render();
+    });
     doc.querySelectorAll('#mdClose [data-c]').forEach(b =>
       b.addEventListener('click', () => redraft({ closeness: b.dataset.c })));
     on('mdSong', 'click', makeSong);

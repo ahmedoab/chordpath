@@ -124,7 +124,6 @@ const ARTICLE = `"Lantern Road" is a song by the English rock band The Hollow Pi
     section('Muse — drafting');
     const firstDraft = await page.textContent('#mdChords');
     await page.click('#mdAgain');
-    await page.click('#mdAgain');
     check('"Another" produces a different draft', (await page.textContent('#mdChords')) !== firstDraft);
     await page.click('#mdClose [data-c="close"]');
     check('closeness can be changed', (await page.textContent('#mdClose button.active')) === 'Close');
@@ -237,7 +236,7 @@ const ARTICLE = `"Lantern Road" is a song by the English rock band The Hollow Pi
       window.Desktop.lookup('search', 'x'.repeat(500)).then(() => false, () => true),
     ]).then(all => all.every(Boolean))));
 
-    // ── Muse: asking for a draft, then a full song ─────────────────────────
+    // ── Muse: asking for a draft, then starting a song with it ─────────────
     section('Muse — from a feeling to a song');
     await page.click('#museMode [data-mode="ask"]');
     await page.fill('#museAsk', 'petrichor and hazy, slow');
@@ -245,13 +244,15 @@ const ARTICLE = `"Lantern Road" is a song by the English rock band The Hollow Pi
     await page.waitForSelector('.draft-card');
     check('a draft for a learned word credits the song it was learned from',
       /Night Shapes/.test(await page.textContent('.draft-card')));
+    const drafted = (await page.locator('#mdChords .cc b').allTextContents()).join(' ');
+    check('Muse offers to start a song with the draft, not to write one', /Start a song with this/.test(await page.textContent('#mdSong')));
     await page.click('#mdSong');
-    await page.waitForSelector('#overviewRoot .ov-card');
-    check('"Make a full song" opens it in the song overview', /#\/song\//.test(page.url()));
-    const sectionCount = await page.locator('#ovTimeline .ov-card[data-sec]').count();
-    check('the song has a full set of sections', sectionCount >= 6);
-    check('the song notes credit Muse', await page.evaluate(() => /Drafted by Muse/.test(window.App.state.song.notes)));
-    await shot(page, '05-song-overview');
+    await page.waitForSelector('#view-section:not([hidden]) #progression .prog-chord');
+    check('"Start a song with this" opens its verse in the section editor', /#\/song\/.+\/section\//.test(page.url()));
+    check(`the song is one verse holding the draft's chords (${drafted})`, await page.evaluate(() => window.App.state.song.sections.length === 1)
+      && (await page.locator('#progression .prog-chord .name').allTextContents()).join(' ') === drafted);
+    check('the song notes credit Muse', await page.evaluate(() => /Muse/.test(window.App.state.song.notes)));
+    await shot(page, '05-song-started');
 
     // ── The rest of the app still works ────────────────────────────────────
     section('Existing views');
@@ -262,7 +263,7 @@ const ARTICLE = `"Lantern Road" is a song by the English rock band The Hollow Pi
     await page.waitForSelector('#studioRoot .studio');
     await page.click('#navTabs [data-nav="handoff"]');
     await page.waitForSelector('#handoffRoot .ho-section');
-    check('studio and handoff render', (await page.locator('#handoffRoot .ho-section').count()) >= 3);
+    check('studio and handoff render', (await page.locator('#handoffRoot .ho-section').count()) >= 2);
     await page.click('#navTabs [data-nav="songs"]');
     await page.waitForSelector('#songsGrid .song-card');
     check('the song is listed on the Songs page', (await page.locator('#songsGrid .song-card').count()) === 1);
