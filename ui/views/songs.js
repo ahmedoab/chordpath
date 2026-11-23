@@ -31,9 +31,9 @@
     if (!projects.length) {
       grid.innerHTML = `
         <div class="songs-empty">
-          <h3>Start with a feeling</h3>
-          <p class="meta">Tell ChordPath what you want the listener to feel and it drafts the whole song —
-          key, chords, structure, arrangement, and tabs — ready to shape and take into your DAW.</p>
+          <h3>Start with a key</h3>
+          <p class="meta">Choose the key and the time, and write. ChordPath offers chords, rhythms,
+          grooves and melody shapes to hear and try, writes the tabs, and helps you take the song into a DAW.</p>
           <button type="button" class="primary" id="btnNewSongEmpty">+ New song</button>
         </div>`;
       const b = doc.getElementById('btnNewSongEmpty');

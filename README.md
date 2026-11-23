@@ -1,14 +1,12 @@
 # ChordPath — feeling-driven song studio
 
-Tell ChordPath what you want the listener to feel, and it drafts the whole
-song: key, scale, tempo, section structure (intro/verse/pre-chorus/chorus/
-bridge/outro), chord progressions, arrangement patterns, and an instrument
-roster — then walks you through producing it in your DAW with guitar tabs
-for every part, free-plugin picks, mixing chains, and recording guides.
-
-> **Experimental branch.** This branch adds Muse (a built-in AI), turns
-> ChordPath into a desktop application, and gives it a DAW of its own.
-> `main` holds the original version.
+ChordPath is a songwriting aid, not a song generator. You choose the key and
+the time; it offers what to try next — chords, progressions, strum rhythms,
+drum grooves, melody shapes, other time signatures — lets you hear each one
+before it goes in, and writes nothing you did not choose. When the song is
+written, it walks you through producing it, in its own DAW or in yours, with
+guitar tabs for every part, free-plugin picks, mixing chains, and recording
+guides.
 
 **Self-contained.** ChordPath needs no accounts, no API keys and no
 services, and everything it does works offline. The audio library and fonts
@@ -72,7 +70,9 @@ model.
   Muse writes a new progression from the songs closest to your request. It
   tells you which songs shaped the draft and which chord moves it borrowed.
   Drafts are never copies of a song it knows; "Loose / Near / Close" sets
-  how much of the source survives. One click turns a draft into a full song.
+  how much of the source survives, and "Another" always gives different
+  chords. "Start a song with this" puts a draft's chords in the verse of a
+  new song, in the draft's key; the rest of the song is yours to write.
 - **Its memory is yours.** Everything is in the panel on the right: edit,
   forget, export to a file, import on another machine.
 
@@ -133,19 +133,28 @@ take or imported file can be up to twenty minutes long.
 ## The workflow
 
 1. **Songs** — your project browser. Autosaved projects, JSON import/export.
-2. **New song wizard** — pick a *feeling* (26 of them, from yearning to
-   menacing), an energy level, and a genre (28, from shoegaze to bossa).
-   ChordPath generates a full draft song; reroll anything before creating.
-3. **Overview** — the section timeline. Each section has its own feeling
-   (verse can yearn while the chorus turns nostalgic); change a section's
-   feeling and regenerate just its chords or arrangement. Take **snapshots**
-   before big changes — autosave can never overwrite them, and restoring
-   always creates a copy. Play the whole song, export multi-track MIDI.
-4. **Section editor** — the writing workspace: ranked next-chord
-   suggestions (scored for your section's feeling), cadence/tension
-   analysis, "sounds like" genre + famous-song matching, playable full-band
-   arrangements, and live guitar tab for chords, vocal melody, bass,
-   under-melody, and drums.
+2. **Start a song** — choose the key first, named the way musicians name
+   it (D♭ major, C♯ minor), then the time signature (hear it before you
+   choose), the tempo, and how many empty sections to begin with. A
+   *feeling* (26 of them, from yearning to menacing) is optional; it only
+   guides what is suggested.
+3. **Overview** — the section timeline. Each card shows its time
+   signature, its bars counted in that time, and the rhythm and drums it
+   really plays. Set the song's time signature here; add empty sections,
+   duplicate and reorder them; give a section a feeling of its own (it
+   guides the suggestions and changes nothing you wrote). Take
+   **snapshots** before big changes — autosave can never overwrite them,
+   and restoring always creates a copy. Play the whole song, export
+   multi-track MIDI.
+4. **Section editor** — the writing workspace. One pane gives ranked
+   next-chord suggestions, scored for the section's feeling; the other
+   gives **ideas**: progressions, strum rhythms, drum grooves and melody
+   shapes for the section's time, and other times to try. Hear any of them
+   first, then use it; Undo takes chord edits back out. Each section can
+   have its own time, and a chord can last half a bar or several bars. Also
+   cadence/tension analysis, "sounds like" genre + famous-song matching,
+   playable full-band arrangements, and live guitar tab for chords, vocal
+   melody, bass, under-melody and drums, written in the section's time.
 5. **Studio** — per-section instrument roster with a frequency **density
    meter** (too sparse? too crowded? which instruments clash?), and a card
    per instrument: free plugins, a concrete mix chain (Hz, ratios, ms), and
@@ -153,7 +162,8 @@ take or imported file can be up to twenty minutes long.
    against your own voice.
 6. **DAW** — the song as editable tracks, with recording, mixing and export.
    See above.
-7. **Handoff** — one printable page with every tab, arrangement note,
+7. **Handoff** — one printable page with every tab (each section in its
+   own time, exactly as the section editor writes it), arrangement note,
    plugin pick, and the production checklist. Print it or save as PDF, and
    drag the exported `.mid` into another DAW: every part lands on its own
    track with sections as markers.
@@ -165,15 +175,19 @@ headless in Node; everything that needs sound or a screen is tested in the
 real desktop app.
 
 ```
-npm test                     # the five headless suites below
+npm test                     # the eight headless suites below
 node tests/run.js            # ~2300 data-integrity + engine checks
+node tests/meter-test.js     # time signatures, their rhythms and grooves
+node tests/ideas-test.js     # the ideas the section editor offers
 node tests/audio-test.js     # playback-scheduling checks (stubbed Tone.js)
 node tests/muse-test.js      # chord parsing, lexicon, Muse memory and drafting
 node tests/daw-test.js       # the DAW project, tempo map, tab, WAV, audio stretching
 node tests/research-test.js  # Muse's lookup: what may be asked, how an article is read
+node tests/native-test.js    # the native audio host (skips if it is not built)
 
-npm run test:e2e             # launches the desktop app three times (several minutes)
+npm run test:e2e             # launches the desktop app four times (several minutes)
 node tests/e2e.js            # Muse and the desktop shell
+node tests/e2e-writing.js    # starting a song, the section editor, overview, handoff
 node tests/e2e-engine.js     # the audio engine, measured from its own output
 node tests/e2e-daw.js        # the DAW screen, driven with mouse and keyboard
 ```
@@ -189,7 +203,9 @@ Vanilla JS, no build step. Each file is an IIFE exporting one global;
 - `theory/` — the engine: scales, chords, voicings, progressions (ranked
   next-chord engine), analysis (cadence/tension), genres (28), arrangements
   (rhythm/drum/melody patterns + per-genre profiles), emotions (scoring),
-  **feelings** (the generator: feeling × genre → whole songs), songs
+  **feelings** (what each feeling sounds like; ranks suggestions),
+  **meters** (time signatures and the rhythms and grooves written for
+  each), **ideas** (what the section editor offers to try), songs
   (famous-progression matcher), melody, **tabs** (guitar tablature
   renderer), **instruments/plugins/mixing/recording** (the studio knowledge
   base), **song** (project model), storage (projects/snapshots/migration),
