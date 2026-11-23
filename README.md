@@ -1,4 +1,4 @@
-# ChordPath — feeling-driven song studio
+# ChordPath — a songwriting aid and DAW
 
 ChordPath is a songwriting aid, not a song generator. You choose the key and
 the time; it offers what to try next — chords, progressions, strum rhythms,
@@ -19,12 +19,17 @@ to that one site, with the song's title and artist and nothing else.
 ## Running it
 
 **As a Windows program.** Build the installer once (needs
-[Node.js](https://nodejs.org) 22.12 or newer):
+[Node.js](https://nodejs.org) 22.12 or newer, and for the audio engine
+Visual Studio 2022 with its C++ tools):
 
 ```
 npm install
+npm run build:native   # the audio engine: sound cards, ASIO and plugins
 npm run dist
 ```
+
+Without `build:native` the program still builds and runs; it plays through
+Windows' own sound and the DAW's Audio settings say the engine is missing.
 
 That leaves two files in `dist/`:
 
@@ -123,12 +128,33 @@ Edits can be undone, a hundred steps back, and the project saves itself next
 to the song on your computer. "Rebuild" refreshes the note tracks after you
 change the song elsewhere in ChordPath; your recordings stay.
 
-What it does not do: host VST or AU plugins. Those are native programs that
-this app, built on web technology, cannot load; export the stems or the MIDI
-and carry on in a DAW that can. Smaller limits: tempo changes happen at bar
-lines, with no gradual speed-ups; a take is fitted to the tempo where it
-starts, so one that runs across a tempo change drifts after it; and a single
-take or imported file can be up to twenty minutes long.
+### Sound cards and plugins
+
+The DAW can hand its sound to ChordPath's own audio engine, a native program
+(`native/`) that runs in a process of its own, so a plugin that crashes takes
+only the engine down and the song carries on through Windows' sound.
+
+- **Audio…** in the toolbar chooses where the sound goes: this computer's
+  sound, or a sound card through the engine, by ASIO or by Windows (WASAPI),
+  with its sample rate and buffer size. The dialog says what is playing and
+  how long a buffer lasts; an ASIO driver's own settings window opens from
+  there. The choice is remembered, and the card is opened again next time.
+- **FX** on each mixer strip, and on the master, opens its plugin chain: VST 3
+  effects (and, on a note track, one instrument that plays its notes),
+  each with its own window, Bypass, and a place in the order. Plugins that
+  take time are lined up with the rest; their settings are saved with the
+  project and come back when it opens. Mixdowns go through the same plugins.
+- Recording through a card records its inputs, and "Hear it" passes them
+  through the track's plugins with only the card's delay.
+
+Plugins are heard only through a card; through this computer's sound the
+chain waits, and the dialog says so. AU plugins (macOS) and VST 2 are not
+supported.
+
+Limits: tempo changes happen at bar lines, with no gradual speed-ups; a take
+is fitted to the tempo where it starts, so one that runs across a tempo
+change drifts after it; and a single take or imported file can be up to
+twenty minutes long.
 
 ## The workflow
 
@@ -185,12 +211,19 @@ node tests/daw-test.js       # the DAW project, tempo map, tab, WAV, audio stret
 node tests/research-test.js  # Muse's lookup: what may be asked, how an article is read
 node tests/native-test.js    # the native audio host (skips if it is not built)
 
-npm run test:e2e             # launches the desktop app four times (several minutes)
+npm run test:e2e             # launches the desktop app five times (several minutes)
 node tests/e2e.js            # Muse and the desktop shell
 node tests/e2e-writing.js    # starting a song, the section editor, overview, handoff
 node tests/e2e-engine.js     # the audio engine, measured from its own output
 node tests/e2e-daw.js        # the DAW screen, driven with mouse and keyboard
+node tests/e2e-host.js       # sound cards and plugins on screen, through the audio engine
+
+npm run test:packaged        # the built program, after npm run dist
 ```
+
+The sound-card tests need no hardware: the engine carries a stand-in ASIO
+driver that only tests can see, and under test nothing is heard and plugin
+windows open hidden. Plugin tests use TDR Nova where it is installed.
 
 No test goes online. Muse's lookup is tested against made-up articles that
 the shell serves from files, in the shape Wikipedia answers in.
@@ -219,8 +252,15 @@ Vanilla JS, no build step. Each file is an IIFE exporting one global;
   export), **store** (projects and recordings in the app's local database),
   **stretch** (making a recording longer or shorter without changing its
   pitch), **engine** (instruments, mixer, effects, transport, recording and
-  offline bouncing, written on the Web Audio API). `theory/parts.js` turns a
-  song into the notes each track starts with.
+  offline bouncing, written on the Web Audio API), **native** (the page's
+  side of the audio engine: sending the tracks to it, keeping its plugins in
+  step with the project). `theory/parts.js` turns a song into the notes each
+  track starts with.
+- `native/` — the audio engine, in C++: VST 3 hosting (Steinberg's VST 3
+  SDK), a mixing desk that matches the page's own, sound cards through
+  WASAPI (RtAudio) or ASIO. `fetch-deps.js` downloads the SDKs it builds
+  against; `desktop/audiohost.js` runs it in a process of its own and
+  `desktop/pluginscan.js` reads plugin files in a throwaway one.
 - `ui/` — components, viz (piano/fretboard/chord diagrams), nav (hash
   router), and one view module per screen. `ui/daw/` holds the DAW's
   timeline, note editor and mixer.

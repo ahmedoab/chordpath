@@ -1,8 +1,8 @@
 {
   "name": "chordpath",
   "productName": "ChordPath",
-  "version": "0.4.0-experimental",
-  "description": "Feeling-driven song studio and DAW with its own built-in AI.",
+  "version": "0.5.0",
+  "description": "A songwriting aid and DAW, with its own built-in AI.",
   "private": true,
   "author": "ahmedoab",
   "main": "desktop/main.js",
@@ -38,7 +38,11 @@
       "daw/**",
       "vendor/**",
       "desktop/**",
+      "native/build/Release/chordpath_native.node",
       "package.json"
+    ],
+    "asarUnpack": [
+      "native/build/Release/chordpath_native.node"
     ],
     "win": {
       "target": [

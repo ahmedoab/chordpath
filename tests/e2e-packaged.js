@@ -2,7 +2,8 @@
  * Run with: npm run dist && npm run test:packaged
  * Launches dist/win-unpacked/ChordPath.exe, the same program the installer
  * installs, and makes sure it is whole: it starts, serves itself, makes a
- * song, opens it in the DAW, plays and bounces it, and keeps to itself.
+ * song, opens it in the DAW, plays and bounces it, opens a sound card and
+ * finds plugins through its own audio engine, and keeps to itself.
  */
 'use strict';
 
@@ -24,7 +25,7 @@ const EXE = path.join(ROOT, 'dist', 'win-unpacked', 'ChordPath.exe');
   try {
     app = await electron.launch({
       executablePath: EXE,
-      env: Object.assign({}, process.env, { CHORDPATH_USER_DATA: userData, CHORDPATH_E2E: '1', CHORDPATH_DOWNLOADS: downloads }),
+      env: Object.assign({}, process.env, { CHORDPATH_USER_DATA: userData, CHORDPATH_E2E: '1', CHORDPATH_DOWNLOADS: downloads, CHORDPATH_TEST_AUDIO: '1' }),
     });
     const page = await app.firstWindow();
     const errors = [], requests = [];
@@ -65,11 +66,11 @@ const EXE = path.join(ROOT, 'dist', 'win-unpacked', 'ChordPath.exe');
     await page.waitForSelector('.draft-card');
     check('it drafts a progression', (await page.locator('#mdChords .cc').count()) >= 2);
     await page.click('#mdSong');
-    await page.waitForSelector('#overviewRoot #ovDaw');
-    check('and turns it into a song', await page.evaluate(() => window.Storage.listProjects().length === 1));
+    await page.waitForSelector('#view-section:not([hidden]) #progression .prog-chord');
+    check('and starts a song with it', await page.evaluate(() => window.Storage.listProjects().length === 1));
 
     section('The DAW');
-    await page.click('#ovDaw');
+    await page.click('#navTabs [data-nav="daw"]');
     await page.waitForSelector('#dawCanvas');
     const tracks = await page.evaluate(() => DawEngine.get().project.tracks.map(t => t.name));
     check('the song opens as tracks', tracks.length >= 4 && tracks[0] === 'Chords');
@@ -90,6 +91,22 @@ const EXE = path.join(ROOT, 'dist', 'win-unpacked', 'ChordPath.exe');
       mixdown = fs.readdirSync(downloads).find(name => /\.wav$/.test(name) && fs.statSync(path.join(downloads, name)).size > 100000) || null;
     }
     check('and bounces the song to a WAV file', !!mixdown);
+
+    section('The audio engine');
+    const unpacked = path.join(path.dirname(EXE), 'resources', 'app.asar.unpacked', 'native', 'build', 'Release', 'chordpath_native.node');
+    check('the audio engine is in the package, unpacked so it can be loaded', fs.existsSync(unpacked));
+    check('and the app finds it', await page.evaluate(() => window.Desktop.audio.info().then(i => i.available === true)));
+    const opened = await page.evaluate(() => DawEngine.get().useNative({ api: 'asio', device: 'ChordPath test driver', bufferFrames: 256 })
+      .then(o => ({ ok: true, rate: o.sampleRate, buffer: o.bufferFrames }), e => ({ ok: false, error: String(e && e.message || e) })));
+    check(`it opens a sound card (${opened.ok ? opened.rate + ' Hz, ' + opened.buffer + ' samples' : opened.error})`, opened.ok && opened.buffer === 256);
+    await page.click('#dawPlay');
+    const streamed = await page.waitForFunction(() => { const s = NativeAudio.status(); return !!s && s.blocks > 20; }, null, { timeout: 15000 }).then(() => true, () => false);
+    check('and the song streams to it', streamed);
+    await page.click('#dawPlay');
+    const found = await page.evaluate(() => NativeAudio.installed().then(r => ({ ok: Array.isArray(r.plugins) && Array.isArray(r.failed), plugins: r.plugins.length, failed: r.failed.length }), () => ({ ok: false })));
+    check(`it looks through the plugins installed here (${found.plugins} found, ${found.failed} unreadable)`, found.ok);
+    await page.evaluate(() => DawEngine.get().useBuiltIn());
+    check('and hands the sound back to the computer', await page.evaluate(() => !DawEngine.get().usingNative()));
 
     section('Keeping to itself');
     const outside = requests.filter(u => !/^(app:\/\/chordpath\/|blob:|data:)/.test(u));
