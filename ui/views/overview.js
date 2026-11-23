@@ -1,7 +1,8 @@
 /* ChordPath — ui/views/overview.js
- * Song overview: title/key/tempo header, progress pipeline, section timeline
- * (per-section feelings, regeneration, reorder, add/remove), snapshots, and
- * exports. Whole-song playback wires in when Audio.playSong is available.
+ * Song overview: title/key/time/tempo header, progress pipeline, section
+ * timeline (per-section time, bars, patterns and feeling; reorder, add an
+ * empty section, remove), snapshots, and exports. Nothing here writes chords
+ * or patterns for the writer.
  */
 (function (global) {
   'use strict';
@@ -11,6 +12,8 @@
   const F = () => global.Feelings;
   const R = () => global.Arrangements;
   const Song = () => global.Song;
+  const Mt = () => global.Meters;
+  const I = () => global.Ideas;
   const St = () => global.Storage;
   const App = () => global.App;
 
@@ -18,6 +21,21 @@
   function song() { return App().state.song; }
 
   let playingSectionId = null;
+
+  function glyph(name) { return String(name).replace('#', '♯').replace(/^([A-G])b/, '$1♭'); }
+  function feelingName(id) { const f = id && id !== 'none' ? F().getFeeling(id) : null; return f ? f.name : 'No feeling'; }
+
+  // What a section really plays, by name: nothing chosen is plain chords and
+  // no drums; a chosen pattern that does not fit the section's time shows as
+  // the one that plays in its place (as the section editor shows it).
+  function patternNames(s, sec) {
+    const m = Song().sectionMeter(s, sec);
+    const sounding = R().makePlaybackPattern(sec.rhythmPattern, sec.drumPattern, m) || {};
+    const rhythm = !sec.rhythmPattern ? null : R().rhythmFor(sec.rhythmPattern, m) || sounding.rhythm || null;
+    const drums = R().drumsFor(sec.drumPattern, m) ||
+      (sec.drumPattern && sec.drumPattern !== 'none' && sounding.drum && sounding.drum.id !== 'none' ? sounding.drum : null);
+    return { rhythm: (rhythm && rhythm.name) || 'Plain chords', drums: (drums && drums.name) || 'No drums' };
+  }
 
   function render() {
     const s = song();
@@ -33,16 +51,18 @@
     const cards = s.sections.map((sec, i) => {
       const chords = Song().chordsOf(s, sec);
       const fid = Song().sectionFeeling(s, sec);
-      const rhythm = R().byId(R().RHYTHMS, sec.rhythmPattern);
-      const drums = R().byId(R().DRUMS, sec.drumPattern);
+      const names = patternNames(s, sec);
+      const time = Mt().id(Song().sectionMeter(s, sec));
+      const bars = Song().sectionBars(sec, s);
+      const facts = [time].concat(chords.length ? [bars + (bars === 1 ? ' bar' : ' bars')] : [], [names.rhythm, names.drums]);
       return `
       <div class="ov-card${sec.id === playingSectionId ? ' playing' : ''}" data-sec="${ui.esc(sec.id)}">
         <div class="ov-card-head">
           <span class="ov-sec-name">${ui.esc(sec.name)}</span>
-          <button type="button" class="chip chip-feeling clickable" data-act="feeling" title="Change this section's feeling">${ui.esc((F().getFeeling(fid) || {}).name || '?')}</button>
+          <button type="button" class="chip chip-feeling clickable" data-act="feeling" title="Change this section's feeling">${ui.esc(feelingName(fid))}</button>
         </div>
         <div class="ov-chords">${chords.length ? chords.map(c => `<span class="ov-chord ${c.category}">${ui.esc(c.shortName)}</span>`).join('') : '<span class="meta">no chords yet</span>'}</div>
-        <div class="ov-meta meta">${Song().sectionBars(sec)} bars · ${ui.esc(rhythm ? rhythm.name : '')} · ${ui.esc(drums ? drums.name : '')}</div>
+        <div class="ov-meta meta">${facts.map(f => ui.esc(f)).join(' · ')}</div>
         <div class="ov-actions">
           <button type="button" class="ghost small" data-act="open">Edit</button>
           <button type="button" class="ghost small" data-act="dup">Duplicate</button>
@@ -65,16 +85,21 @@
       </div>`).join('') : '<p class="meta">No snapshots yet. Take one before big changes — autosave can never overwrite it.</p>';
 
     const canPlaySong = !!(global.Audio && global.Audio.playSong);
+    const songTime = Mt().id(s.meter);
+    const times = Mt().LIST.map(t => t.id);
+    if (!times.includes(songTime)) times.push(songTime);
 
     root().innerHTML = `
       <div class="overview">
         <header class="ov-head">
           <input id="ovTitle" class="ov-title" type="text" value="${ui.esc(s.title)}" maxlength="60" aria-label="Song title" />
           <div class="ov-head-meta">
-            <span class="chip">${ui.esc(s.key)} ${ui.esc((global.Scales.getScaleMeta(s.scale) || {}).name || s.scale)}</span>
+            <span class="chip">${ui.esc(glyph(s.key))} ${ui.esc((global.Scales.getScaleMeta(s.scale) || {}).name || s.scale)}</span>
+            <label class="chip chip-input" title="The song's time signature. Sections with a time of their own keep it.">Time <select id="ovMeter">${times.map(id =>
+              `<option value="${ui.esc(id)}"${id === songTime ? ' selected' : ''}>${ui.esc(id)}</option>`).join('')}</select></label>
             <label class="chip chip-input">♩ <input id="ovTempo" type="number" min="40" max="200" value="${ui.esc(s.tempo)}" /> BPM</label>
             ${ui.genreChipHTML(s.genreId)}
-            <button type="button" class="chip chip-feeling clickable" id="ovFeeling" title="Change the song's overall feeling">${ui.esc((F().getFeeling(s.feelingId) || {}).name || '')}</button>
+            <button type="button" class="chip chip-feeling clickable" id="ovFeeling" title="Change the song's overall feeling">${ui.esc(feelingName(s.feelingId))}</button>
           </div>
           <div class="progress-steps">${progress}</div>
         </header>
@@ -120,6 +145,12 @@
       const v = Math.max(40, Math.min(200, parseInt(doc.getElementById('ovTempo').value, 10) || s.tempo));
       App().mutate(sg => { sg.tempo = v; });
       updateDuration();
+    });
+    doc.getElementById('ovMeter').addEventListener('change', () => {
+      const id = doc.getElementById('ovMeter').value;
+      if (global.Audio) global.Audio.stop();
+      App().mutate(sg => { I().useSongTime(sg, id); });
+      render();
     });
     doc.getElementById('ovFeeling').addEventListener('click', () => {
       openFeelingDialog(null);
@@ -253,90 +284,64 @@
     el.textContent = `~${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
   }
 
-  // ── Dialogs ──────────────────────────────────────────────────────────────
+  // ── Dialogs ──────────────────────────────────────────────────────────────────────
+  // A feeling is a label and a guide for the ideas offered; setting one
+  // changes nothing the writer has written.
   function openFeelingDialog(sectionId) {
     const s = song();
     const ui = UI();
     const sec = sectionId ? Song().getSection(s, sectionId) : null;
-    const current = sec ? Song().sectionFeeling(s, sec) : s.feelingId;
+    const now = sec ? Song().sectionFeeling(s, sec) : s.feelingId;
+    const current = now && now !== 'none' ? now : '';
     const groups = F().groupedFeelings();
-    const options = Object.entries(groups).map(([group, list]) =>
-      `<optgroup label="${ui.esc(group)}">${list.map(f =>
-        `<option value="${f.id}"${f.id === current ? ' selected' : ''}>${ui.esc(f.name)}</option>`).join('')}</optgroup>`).join('');
+    const options = `<option value=""${current ? '' : ' selected'}>No particular feeling</option>` +
+      Object.entries(groups).map(([group, list]) =>
+        `<optgroup label="${ui.esc(group)}">${list.map(f =>
+          `<option value="${f.id}"${f.id === current ? ' selected' : ''}>${ui.esc(f.name)}</option>`).join('')}</optgroup>`).join('');
 
     ui.openModal(`
       <div class="feeling-dialog">
         <h3>${sec ? 'Feeling for ' + ui.esc(sec.name) : 'Overall song feeling'}</h3>
         <select id="fdSelect">${options}</select>
         <p class="meta" id="fdVibe"></p>
-        ${sec ? `
-        <p class="meta">Apply the new feeling by regenerating:</p>
+        <p class="meta">It guides the ideas offered${sec ? ' for this section' : ''}. Nothing you have written changes.</p>
         <div class="fd-actions">
-          <button type="button" class="ghost" data-regen="none">Just set the label</button>
-          <button type="button" class="ghost" data-regen="chords">Regenerate chords</button>
-          <button type="button" class="ghost" data-regen="arr">Regenerate arrangement</button>
-          <button type="button" class="primary" data-regen="all">Regenerate both</button>
-        </div>` : `
-        <div class="fd-actions">
-          <button type="button" class="primary" data-regen="setsong">Set feeling</button>
-        </div>`}
+          <button type="button" class="primary" id="fdSet">Set feeling</button>
+        </div>
       </div>`);
 
     const sel = doc.getElementById('fdSelect');
     const vibe = doc.getElementById('fdVibe');
     const updateVibe = () => {
-      const f = F().getFeeling(sel.value);
+      const f = sel.value ? F().getFeeling(sel.value) : null;
       vibe.textContent = f ? f.vibe + ' ' + f.tip : '';
     };
     sel.addEventListener('change', updateVibe);
     updateVibe();
 
-    doc.querySelectorAll('.fd-actions [data-regen]').forEach(b => {
-      b.addEventListener('click', () => {
-        const mode = b.dataset.regen;
-        const feelingId = sel.value;
-        if (mode === 'setsong') {
-          App().mutate(sg => { sg.feelingId = feelingId; });
-        } else {
-          App().mutate(sg => {
-            sec.feelingId = feelingId === sg.feelingId ? null : feelingId;
-          });
-          if (mode === 'chords' || mode === 'all') {
-            const seed = Date.now() & 0xffff;
-            App().mutate(sg => {
-              const prog = F().buildProgression({
-                key: sg.key, scale: sg.scale, feelingId, role: sec.role, genreId: sg.genreId, seed,
-              });
-              Song().setProgression(sec, prog);
-              sec.melodySeed = (seed * 7919 + 17) & 0xffff;
-            });
-          }
-          if (mode === 'arr' || mode === 'all') {
-            App().mutate(sg => {
-              Object.assign(sec, F().pickArrangement({
-                genreId: sg.genreId, feelingId, role: sec.role,
-                energy: sg.energy, tempo: sg.tempo, seed: (Date.now() + 101) & 0xffff,
-              }));
-            });
-          }
-        }
-        UI().closeModal();
-        render();
+    doc.getElementById('fdSet').addEventListener('click', () => {
+      const feelingId = sel.value;
+      App().mutate(sg => {
+        if (!sec) { sg.feelingId = feelingId || null; return; }
+        const target = Song().getSection(sg, sec.id);
+        if (!feelingId) target.feelingId = sg.feelingId ? 'none' : null;
+        else target.feelingId = feelingId === sg.feelingId ? null : feelingId;
       });
+      UI().closeModal();
+      render();
     });
   }
 
+  // The new section stays here on the overview, where the song is being laid
+  // out; Edit or a double-click opens it.
   function openRolePicker() {
     const ui = UI();
-    const s = song();
     const roles = R().SECTIONS.map(r =>
       `<button type="button" class="ghost" data-role="${r.id}">${ui.esc(r.name)} <span class="meta">${ui.esc(r.target)}</span></button>`).join('');
-    ui.openModal(`<div class="role-picker"><h3>Add a section</h3><div class="role-list">${roles}</div></div>`);
+    ui.openModal(`<div class="role-picker"><h3>Add a section</h3><p class="meta">It starts empty, in the song's key and time.</p><div class="role-list">${roles}</div></div>`);
     doc.querySelectorAll('#modalContent [data-role]').forEach(b => {
       b.addEventListener('click', () => {
-        const role = b.dataset.role;
-        const feeling = F().contrastFor(s.feelingId, role);
-        const sec = F().generateSectionSpec(s, role, feeling, Date.now() & 0xffff);
+        const sec = Song().createSection({ role: b.dataset.role });
         App().mutate(sg => {
           sg.sections.push(sec);
           Song().autoNameSections(sg);

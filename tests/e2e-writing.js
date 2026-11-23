@@ -208,6 +208,56 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
     await page.keyboard.press('i');
     check('I switches between the next chord and ideas', (await page.isVisible('#ideas')) === !ideasBefore && (await page.isVisible('#options')) === ideasBefore);
 
+    // ── The song overview ──────────────────────────────────────────────────
+    section('Song overview');
+    await page.click('#navTabs [data-nav="overview"]');
+    await page.waitForSelector('#overviewRoot .ov-card[data-sec]');
+    const card = i => page.locator('#ovTimeline .ov-card[data-sec] >> nth=' + i);
+    const cardMeta = async i => (await card(i).locator('.ov-meta').textContent()).replace(/\s+/g, ' ').trim();
+    check('the song\'s time can be set here, and shows 3/4', (await page.inputValue('#ovMeter')) === '3/4');
+    const verseFacts = await page.evaluate(() => {
+      const sg = window.App.state.song, v = sg.sections[0], m = window.Song.sectionMeter(sg, v);
+      const r = window.Arrangements.rhythmFor(v.rhythmPattern, m), d = window.Arrangements.drumsFor(v.drumPattern, m);
+      return { bars: window.Song.sectionBars(v, sg), rhythm: r ? r.name : 'Plain chords', drums: d ? d.name : 'No drums' };
+    });
+    let meta = await cardMeta(0);
+    check(`the verse card counts its bars in 3/4 (${meta})`, meta.includes('3/4') && meta.includes(verseFacts.bars + ' bars') && verseFacts.bars > 0);
+    check(`and names the rhythm and drums it really plays (${verseFacts.rhythm}, ${verseFacts.drums})`, meta.includes(verseFacts.rhythm) && meta.includes(verseFacts.drums));
+    const chorusBefore = (await song()).sections[1];
+    await card(1).locator('[data-act="feeling"]').click();
+    await page.waitForSelector('#fdSelect');
+    check('a section\'s feeling dialog only sets the feeling: nothing regenerates',
+      (await page.locator('#modalContent [data-regen]').count()) === 0 && !/regenerat/i.test(await page.textContent('#modalContent')));
+    check('and it can be no particular feeling', /No particular feeling/.test(await page.textContent('#fdSelect option >> nth=0')));
+    const songFeeling = (await song()).feelingId;
+    const otherFeeling = (await optionValues('#fdSelect')).find(v => v && v !== songFeeling);
+    await page.selectOption('#fdSelect', otherFeeling);
+    await page.click('#fdSet');
+    sec = (await song()).sections[1];
+    check(`choosing one sets it (${otherFeeling}) and changes nothing written`, sec.feelingId === otherFeeling &&
+      JSON.stringify([sec.progSpecs, sec.rhythmPattern, sec.drumPattern, sec.vocalPattern]) ===
+      JSON.stringify([chorusBefore.progSpecs, chorusBefore.rhythmPattern, chorusBefore.drumPattern, chorusBefore.vocalPattern]));
+    check('and the card shows it', (await card(1).locator('[data-act="feeling"]').textContent()).trim() ===
+      await page.evaluate(id => window.Feelings.getFeeling(id).name, otherFeeling));
+
+    await page.click('#ovAddSection');
+    await page.click('#modalContent [data-role="bridge"]');
+    await page.waitForFunction(() => window.App.state.song.sections.length === 3);
+    s = await song();
+    check('a section added here starts empty too', s.sections[2].role === 'bridge' && s.sections[2].progSpecs.length === 0 &&
+      s.sections[2].rhythmPattern === '' && s.sections[2].drumPattern === '' && s.sections[2].vocalPattern === '');
+    check('and its card says it has no chords yet', /no chords yet/.test(await card(2).textContent()));
+    meta = await cardMeta(2);
+    check(`it plays plain chords and no drums, not the first on each list (${meta})`, /Plain chords/.test(meta) && /No drums/.test(meta) && !/\d+ bars?/.test(meta));
+
+    const verseChords = s.sections[0].progSpecs.join(' ');
+    await page.selectOption('#ovMeter', '6/8');
+    s = await song();
+    check('setting the song in 6/8 moves every section that follows it', s.meter.num === 6 && s.meter.den === 8 && s.sections.every(x => x.meterOverride === null));
+    check('the chords stay as they were', s.sections[0].progSpecs.join(' ') === verseChords);
+    check(`and the cards say 6/8 (${await cardMeta(0)})`, /6\/8/.test(await cardMeta(0)) && (await page.inputValue('#ovMeter')) === '6/8');
+    await shot(page, '22-overview');
+
     // ── Keys are named the way musicians name them ─────────────────────────
     section('Key names');
     await page.click('#navTabs [data-nav="songs"]');
