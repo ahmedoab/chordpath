@@ -12,7 +12,6 @@
   const R = () => global.Arrangements;
   const F = () => global.Feelings;
   const T = () => global.Tabs;
-  const M = () => global.Melody;
   const I = () => global.Instruments;
   const P = () => global.Plugins;
   const Mx = () => global.Mixing;
@@ -22,24 +21,21 @@
   function root() { return doc.getElementById('handoffRoot'); }
   function song() { return App().state.song; }
 
+  function glyph(name) { return String(name).replace('#', '♯').replace(/^([A-G])b/, '$1♭'); }
+  function feelingOf(id) { return id && id !== 'none' ? F().getFeeling(id) : null; }
+
+  // One section's page: every part as tab, written in the section's own time
+  // and chord lengths, exactly as the section editor shows it.
   function sectionBlock(s, sec) {
     const ui = UI();
-    const chords = Song().chordsOf(s, sec);
-    if (!chords.length) return '';
-    const bpc = sec.beatsPerChord || 4;
-    const fid = Song().sectionFeeling(s, sec);
-    const feeling = F().getFeeling(fid);
-    const rhythm = R().byId(R().RHYTHMS, sec.rhythmPattern);
-    const drum = R().byId(R().DRUMS, sec.drumPattern);
-    const vocalPat = R().byId(R().VOCAL_MELODIES, sec.vocalPattern);
-    const underPat = R().byId(R().UNDER_MELODIES, sec.underPattern);
-
-    const melody = M().generatePatternMelody(chords, s.scale, Song().sectionKey(s, sec), vocalPat,
-      { beatsPerChord: bpc, section: sec.role, seed: sec.melodySeed });
-    const under = underPat && underPat.type !== 'none'
-      ? M().generateUnderMelody(chords, s.scale, Song().sectionKey(s, sec), underPat,
-          { beatsPerChord: bpc, seed: sec.underSeed })
-      : [];
+    if (!Song().chordsOf(s, sec).length) return '';
+    const m = Song().sectionMeter(s, sec);
+    const feeling = feelingOf(Song().sectionFeeling(s, sec));
+    const { rhythm, drum } = R().soundingPatterns(sec.rhythmPattern, sec.drumPattern, m);
+    const vocalPat = R().vocalFor(sec.vocalPattern);
+    const underPat = R().underFor(sec.underPattern);
+    const bars = Song().sectionBars(sec, s);
+    const tab = part => T().sectionTab(s, sec, part);
 
     const tabBlock = (title, text, tip) => `
       <div class="ho-tab">
@@ -47,19 +43,17 @@
         <pre class="tab-pre">${ui.esc(text)}</pre>
       </div>`;
 
-    let parts = tabBlock('Chords (guitar)', T().renderChordTab(chords, { beatsPerChord: bpc }), rhythm ? rhythm.tip : '');
-    parts += tabBlock('Vocal melody', T().renderMelodyTab(melody, { chords, beatsPerChord: bpc, register: 'lead' }), vocalPat ? vocalPat.tip : '');
-    parts += tabBlock('Bass', T().renderBassTab(chords, rhythm ? rhythm.bass : 'root', { beatsPerChord: bpc }), 'Shown on the low guitar strings — same frets work on a bass.');
-    if (under.length) {
-      parts += tabBlock('Under melody', T().renderMelodyTab(under, { chords, beatsPerChord: bpc, register: 'mid' }), underPat ? underPat.tip : '');
-    }
-    parts += tabBlock('Drums (16 steps per bar)', T().renderDrumGrid(drum), drum ? drum.tip : '');
+    let parts = tabBlock('Chords (guitar)', tab('chords'), rhythm ? rhythm.tip : '');
+    parts += tabBlock('Vocal melody', tab('melody'), vocalPat ? vocalPat.tip : '');
+    parts += tabBlock('Bass', tab('bass'), 'Shown on the low guitar strings — same frets work on a bass.');
+    if (underPat) parts += tabBlock('Under melody', tab('under'), underPat.tip);
+    parts += tabBlock('Drums', tab('drums'), drum ? drum.tip : '');
 
     return `
-      <section class="ho-section">
+      <section class="ho-section" data-sec="${ui.esc(sec.id)}">
         <h4>${ui.esc(sec.name)}
-          <span class="chip chip-feeling">${ui.esc(feeling ? feeling.name : '')}</span>
-          <span class="meta">${ui.esc(Song().sectionBars(sec))} bars · ${ui.esc(Song().sectionTempo(s, sec))} BPM · ${ui.esc(rhythm ? rhythm.name : '')} / ${ui.esc(drum ? drum.name : '')}</span>
+          ${feeling ? `<span class="chip chip-feeling">${ui.esc(feeling.name)}</span>` : ''}
+          <span class="meta">${ui.esc(global.Meters.id(m))} · ${bars} ${bars === 1 ? 'bar' : 'bars'} · ${ui.esc(Song().sectionTempo(s, sec))} BPM · ${ui.esc(rhythm ? rhythm.name : 'Plain chords')} / ${ui.esc(drum ? drum.name : 'No drums')}</span>
         </h4>
         ${feeling ? `<p class="meta">${ui.esc(feeling.tip)}</p>` : ''}
         ${parts}
@@ -119,7 +113,7 @@
     const s = song();
     if (!s) { root().innerHTML = '<p class="meta">No song open.</p>'; return; }
     const ui = UI();
-    const feeling = F().getFeeling(s.feelingId);
+    const feeling = feelingOf(s.feelingId);
     const genre = global.Genres.byId(s.genreId);
     const dur = Math.round(Song().songDurationSec(s));
     const progress = Song().PROGRESS_STEPS.map(st =>
@@ -135,9 +129,9 @@
         <header class="ho-head">
           <h2>${ui.esc(s.title)}</h2>
           <p class="meta">
-            ${ui.esc(s.key)} ${ui.esc((global.Scales.getScaleMeta(s.scale) || {}).name || s.scale)} ·
-            ${ui.esc(s.tempo)} BPM · ${ui.esc(genre ? genre.name : '')} ·
-            feeling: ${ui.esc(feeling ? feeling.name : '')} ·
+            ${ui.esc(glyph(s.key))} ${ui.esc((global.Scales.getScaleMeta(s.scale) || {}).name || s.scale)} ·
+            ${ui.esc(global.Meters.id(s.meter))} · ${ui.esc(s.tempo)} BPM · ${ui.esc(genre ? genre.name : '')} ·
+            ${feeling ? 'feeling: ' + ui.esc(feeling.name) + ' ·' : ''}
             ~${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, '0')}
           </p>
           <p>${progress}</p>

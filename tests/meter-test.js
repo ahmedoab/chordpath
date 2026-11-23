@@ -253,6 +253,19 @@ section('Naming what a section plays');
   eq('a section played from charts is described by them', A.describeCombo('folk', 'six_eight_sway', 'six_eight_ballad', 'folk_lilt', 'high_drone', '6/8'),
     'Folk / Acoustic · Swaying strum · 6/8 ballad · Folk lilt · High drone');
   eq('an unknown genre is described as pop, not as the first genre on the list', A.describeCombo('no_such_genre', '', '', '', '', '4/4'), 'Pop · Plain chords · No drums');
+
+  // What a section sounds like: the chosen patterns, or the ones playing in their place.
+  const ids = p => [p.rhythm && p.rhythm.id, p.drum && p.drum.id];
+  eq('nothing chosen sounds like plain chords and no drums', ids(A.soundingPatterns('', '', '3/4')), [null, null]);
+  eq('"none" drums are none', ids(A.soundingPatterns('', 'none', '4/4')), [null, null]);
+  eq('patterns that fit the time are themselves', ids(A.soundingPatterns('waltz_strum', 'waltz_kit', '3/4')), ['waltz_strum', 'waltz_kit']);
+  eq('4/4 styles in 4/4 are themselves', ids(A.soundingPatterns('jangle_arp', 'motorik_backbeat', '4/4')), ['jangle_arp', 'motorik_backbeat']);
+  {
+    const p = A.soundingPatterns('jangle_arp', 'motorik_backbeat', '3/4');
+    const sounding = A.makePlaybackPattern('jangle_arp', 'motorik_backbeat', '3/4');
+    check('4/4 styles chosen in 3/4 name what plays in their place', !!p.rhythm && !!p.drum &&
+      p.rhythm.id === sounding.rhythm.id && p.drum.id === sounding.drum.id && p.rhythm.meter === '3/4' && p.drum.meter === '3/4');
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

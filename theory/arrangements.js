@@ -532,6 +532,16 @@
     const groove = global.Meters ? global.Meters.findGroove(id, timeOf(meter)) : null;
     return chartFits(groove, meter) ? groove : null;
   }
+  // What a section sounds like, as the patterns themselves: nothing chosen is
+  // null (plain chords, no drums); a chosen pattern that does not fit the
+  // section's time is the one that plays in its place.
+  function soundingPatterns(rhythmId, drumId, meter) {
+    const sounding = makePlaybackPattern(rhythmId, drumId, meter) || {};
+    const rhythm = !rhythmId ? null : rhythmFor(rhythmId, meter) || sounding.rhythm || null;
+    const drum = drumsFor(drumId, meter) ||
+      (drumId && drumId !== 'none' && sounding.drum && sounding.drum.id !== 'none' ? sounding.drum : null);
+    return { rhythm, drum };
+  }
   function vocalFor(id) { return (id && VOCAL_MELODIES.find(v => v.id === id)) || null; }
   function underFor(id) { return (id && id !== 'none' && UNDER_MELODIES.find(u => u.id === id)) || null; }
 
@@ -613,6 +623,7 @@
     makePlaybackPattern,
     rhythmFor,
     drumsFor,
+    soundingPatterns,
     vocalFor,
     underFor,
     describeCombo,

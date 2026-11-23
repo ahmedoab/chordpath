@@ -258,6 +258,32 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
     check(`and the cards say 6/8 (${await cardMeta(0)})`, /6\/8/.test(await cardMeta(0)) && (await page.inputValue('#ovMeter')) === '6/8');
     await shot(page, '22-overview');
 
+    // ── The handoff pack follows each section's time ───────────────────────
+    section('Handoff');
+    await page.click('#navTabs [data-nav="handoff"]');
+    await page.waitForSelector('#handoffRoot .ho-section');
+    s = await song();
+    const verseId = s.sections[0].id;
+    check('only sections with chords get a page of tabs', (await page.locator('#handoffRoot .ho-section[data-sec]').count()) === 1 &&
+      (await page.locator(`#handoffRoot .ho-section[data-sec="${verseId}"]`).count()) === 1);
+    const block = page.locator(`#handoffRoot .ho-section[data-sec="${verseId}"]`);
+    const head = (await block.locator('h4').textContent()).replace(/\s+/g, ' ');
+    const verseNow = await page.evaluate(() => {
+      const sg = window.App.state.song, v = sg.sections[0];
+      const p = window.Arrangements.soundingPatterns(v.rhythmPattern, v.drumPattern, window.Song.sectionMeter(sg, v));
+      return { bars: window.Song.sectionBars(v, sg), rhythm: p.rhythm ? p.rhythm.name : 'Plain chords', drums: p.drum ? p.drum.name : 'No drums' };
+    });
+    check(`its heading gives the time, the bars in it and what plays (${head.trim()})`, head.includes('6/8') && head.includes(verseNow.bars + ' bars') &&
+      head.includes(verseNow.rhythm) && head.includes(verseNow.drums));
+    const want = await page.evaluate(id => {
+      const sg = window.App.state.song, v = window.Song.getSection(sg, id);
+      return ['chords', 'melody', 'bass', 'drums'].map(part => window.Tabs.sectionTab(sg, v, part));
+    }, verseId);
+    const shown = await block.locator('pre.tab-pre').allTextContents();
+    check('its tabs are the section editor\'s own, in 6/8 and the chords\' real lengths', ['chords', 'melody', 'bass', 'drums'].every((part, i) => shown.includes(want[i])));
+    check('the drum tab is a 6/8 bar', want[3].split('\n').some(line => /^KK\|[x-]{12}\|$/.test(line)));
+    check('the page header gives the song\'s time', /6\/8/.test(await page.textContent('#handoffRoot .ho-head')));
+
     // ── Keys are named the way musicians name them ─────────────────────────
     section('Key names');
     await page.click('#navTabs [data-nav="songs"]');

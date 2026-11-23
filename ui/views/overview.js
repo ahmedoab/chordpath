@@ -25,16 +25,10 @@
   function glyph(name) { return String(name).replace('#', '♯').replace(/^([A-G])b/, '$1♭'); }
   function feelingName(id) { const f = id && id !== 'none' ? F().getFeeling(id) : null; return f ? f.name : 'No feeling'; }
 
-  // What a section really plays, by name: nothing chosen is plain chords and
-  // no drums; a chosen pattern that does not fit the section's time shows as
-  // the one that plays in its place (as the section editor shows it).
+  // What a section really plays, by name (as the section editor shows it).
   function patternNames(s, sec) {
-    const m = Song().sectionMeter(s, sec);
-    const sounding = R().makePlaybackPattern(sec.rhythmPattern, sec.drumPattern, m) || {};
-    const rhythm = !sec.rhythmPattern ? null : R().rhythmFor(sec.rhythmPattern, m) || sounding.rhythm || null;
-    const drums = R().drumsFor(sec.drumPattern, m) ||
-      (sec.drumPattern && sec.drumPattern !== 'none' && sounding.drum && sounding.drum.id !== 'none' ? sounding.drum : null);
-    return { rhythm: (rhythm && rhythm.name) || 'Plain chords', drums: (drums && drums.name) || 'No drums' };
+    const p = R().soundingPatterns(sec.rhythmPattern, sec.drumPattern, Song().sectionMeter(s, sec));
+    return { rhythm: (p.rhythm && p.rhythm.name) || 'Plain chords', drums: (p.drum && p.drum.name) || 'No drums' };
   }
 
   function render() {
