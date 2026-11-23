@@ -1287,7 +1287,7 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .mono { font-family: var(--font-mono); }
 
 .daw-bar {
-  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap;
   padding: 0.45rem 0.8rem; background: var(--surface); border-bottom: 1px solid var(--line);
 }
 .daw-bar button { padding: 0.3rem 0.65rem; font-size: 0.78rem; }
@@ -1303,7 +1303,7 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 #dawInput { width: 7.4rem; text-overflow: ellipsis; }
 .daw-field input[type="range"] { accent-color: var(--accent); width: 96px; }
 /* The buttons at the far end wrap together when the window is narrow. */
-.daw-actions { display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
+.daw-actions { display: flex; align-items: center; gap: 0.3rem; margin-left: auto; }
 
 .daw-arrange {
   display: grid; grid-template-columns: auto minmax(0, 1fr);
@@ -1385,7 +1385,9 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
   border-radius: var(--radius-s);
 }
 .mx-strip.master { --tc: var(--accent); flex-basis: 96px; margin-left: auto; }
-.mx-name { font-size: 0.74rem; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-name { display: flex; align-items: center; gap: 0.3rem; font-size: 0.74rem; font-weight: 600; line-height: 1.3; min-width: 0; }
+.mx-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-btn.mx-plug { flex: 0 0 auto; padding: 0 0.3rem; font-size: 0.6rem; line-height: 1.5; min-width: 0; }
 .mx-body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.6rem; min-height: 0; }
 .mx-main { display: flex; gap: 0.3rem; min-height: 0; }
 .mx-meter { width: 8px; height: 100%; background: var(--surface-2); border-radius: 3px; display: flex; align-items: flex-end; overflow: hidden; }
@@ -1402,6 +1404,38 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .mx-btn.wide { width: 100%; padding: 0.14rem; }
 .daw-export p { margin: 0 0 0.8rem; }
 .daw-export .daw-field { margin-bottom: 0.4rem; }
+
+/* Audio settings: this computer, or a sound card through the audio engine. */
+.daw-audio-set { min-width: min(34rem, 100%); }
+.aud-mode { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.55rem 0.7rem; margin-bottom: 0.4rem;
+  border: 1px solid var(--line); border-radius: var(--radius-s); cursor: pointer; }
+.aud-mode:has(input:checked) { border-color: var(--accent); background: var(--surface-2); }
+.aud-mode input { margin-top: 0.2rem; }
+.aud-mode > span { display: grid; gap: 0.15rem; font-size: 0.86rem; }
+.aud-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem 0.9rem; margin: 0.8rem 0 0.4rem; }
+.aud-grid > label { display: grid; gap: 0.2rem; font-size: 0.76rem; color: var(--ink-2); min-width: 0; }
+.aud-grid > label[hidden] { display: none; }
+.aud-grid select { width: 100%; min-width: 0; font-size: 0.8rem; padding: 0.25rem 0.35rem; }
+.aud-grid .daw-check { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.4rem; }
+#audState { margin: 0.6rem 0; min-height: 1.3em; }
+
+/* A strip's plugin chain, and the plugins installed here to add to it. */
+.daw-plugins { min-width: min(38rem, 100%); }
+.daw-plugins h3 { font-size: 0.8rem; margin: 0.9rem 0 0.4rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.plug-off { font-size: 0.82rem; color: var(--ink-2); background: var(--surface-2); padding: 0.45rem 0.6rem; border-radius: var(--radius-s); margin: 0 0 0.6rem; }
+.plug-off[hidden] { display: none; }
+.plug-chain { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
+.plug-row { display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: var(--radius-s); }
+.plug-row.bypassed .plug-name strong { color: var(--muted); text-decoration: line-through; }
+.plug-name { flex: 1; min-width: 0; font-size: 0.84rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.45rem; }
+.plug-bad { color: var(--tense); font-size: 0.76rem; }
+.plug-none { padding: 0.3rem 0; }
+#plugSearch { width: 100%; margin-bottom: 0.4rem; }
+.plug-avail-list { max-height: 15rem; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-s); }
+.plug-avail { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.3rem 0.55rem; font-size: 0.84rem; border-bottom: 1px solid var(--line); }
+.plug-avail:last-child { border-bottom: 0; }
+.plug-avail[hidden] { display: none; }
+.plug-avail-list > p { margin: 0; padding: 0.5rem 0.6rem; }
 
 /* The list of tempo and time-signature changes: one row to a stretch of the song. */
 .daw-timing p { margin: 0 0 0.8rem; max-width: 46ch; }

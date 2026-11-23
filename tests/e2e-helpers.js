@@ -25,10 +25,11 @@ function tempDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'chordpath-e2e-'));
 }
 
-async function launch(userData) {
+// extraEnv: more environment for the app, e.g. { CHORDPATH_TEST_AUDIO: '1' }.
+async function launch(userData, extraEnv) {
   const app = await electron.launch({
     args: ['.'], cwd: ROOT,
-    env: Object.assign({}, process.env, { CHORDPATH_USER_DATA: userData, CHORDPATH_E2E: '1' }),
+    env: Object.assign({}, process.env, extraEnv || {}, { CHORDPATH_USER_DATA: userData, CHORDPATH_E2E: '1' }),
   });
   const page = await app.firstWindow();
   const log = { errors: [], requests: [] };

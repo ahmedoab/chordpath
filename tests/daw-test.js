@@ -793,6 +793,12 @@ section('Plugins on tracks');
   check('the same plugin can be used twice, as two of it', P.addPlugin(project, keys.id, NOVA).id !== eqd.id);
   const onMaster = P.addPlugin(project, null, VERB);
   check('the master takes plugins too', !!onMaster && project.masterPlugins.length === 1);
+  // The plugin scan names files with forward slashes; the path is kept as the scan gave it,
+  // since that is how the audio host recognises a plugin installed here.
+  const scanned = P.addPlugin(project, keys.id, Object.assign({}, NOVA, { path: 'C:/Program Files/Common Files/VST3/TDR Nova.vst3' }));
+  check('a plugin path written with forward slashes, as the scan gives it, is taken as it is',
+    !!scanned && scanned.path === 'C:/Program Files/Common Files/VST3/TDR Nova.vst3');
+  if (scanned) P.removePlugin(project, scanned.id);
 
   check('an instrument cannot go on an audio track', P.addPlugin(project, take.id, SURGE) === null && take.plugins.length === 2);
   check('nor on the master', P.addPlugin(project, null, SURGE) === null && project.masterPlugins.length === 1);

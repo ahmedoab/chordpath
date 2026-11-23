@@ -260,7 +260,8 @@ const api = {
   bypass(id, on) { entry(id).plugin.setBypassed(!!on); },
   async editor(id, title) {
     const p = entry(id);
-    const ok = await p.plugin.openEditor({ title: text(title, LIMITS.title) });
+    // Under test a plugin's window opens hidden: nothing appears over the screen being worked on.
+    const ok = await p.plugin.openEditor({ title: text(title, LIMITS.title), visible: process.env.CHORDPATH_E2E !== '1' });
     if (ok) p.editorOpen = true;
     return ok;
   },

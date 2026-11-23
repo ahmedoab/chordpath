@@ -590,6 +590,7 @@
       this.ctx = ctx;
       this.native = tap;
       this.nativeConfig = config;
+      tap.rack.changed = this.pluginsChanged || null;
       this.mixer = mixer;
       this.adopt();
       if (ctx.state !== 'running') await ctx.resume();
@@ -615,6 +616,29 @@
   };
 
   Engine.prototype.usingNative = function () { return !!this.native; };
+  // What the sound card was opened as ({ api, device, sampleRate, bufferFrames,
+  // outputLatency, ... }), or null while mixing here.
+  Engine.prototype.card = function () { return this.native ? this.native.opened : null; };
+
+  // ── Plugins, for the screen ──────────────────────────────────────────────
+  // A plugin of the project, as the audio host has it: { state: 'off' } while
+  // mixing here, else waiting / loading / failed (with error) / ready (with
+  // hasEditor, instrument, editorOpen, latency).
+  Engine.prototype.pluginInfo = function (id) {
+    return this.native ? this.native.rack.about(id) : { state: 'off' };
+  };
+  Engine.prototype.openPlugin = function (id, title) {
+    if (!this.native) return Promise.reject(new Error('Plugins open when a sound card is in use'));
+    return this.native.rack.openWindow(id, title);
+  };
+  Engine.prototype.closePlugin = function (id) {
+    return this.native ? this.native.rack.closeWindow(id) : Promise.resolve();
+  };
+  // fn is called whenever a plugin finishes loading, fails, or opens or closes its window.
+  Engine.prototype.watchPlugins = function (fn) {
+    this.pluginsChanged = fn || null;
+    if (this.native) this.native.rack.changed = this.pluginsChanged;
+  };
 
   // The audio host stopped (a plugin crashed, most likely). The song goes on
   // with the built-in engine; whoever is listening is told.

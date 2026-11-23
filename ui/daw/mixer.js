@@ -1,6 +1,7 @@
 /* ChordPath — ui/daw/mixer.js
  * The mixer: one strip per track with level meter, fader, pan, mute/solo,
  * three-band EQ, compressor switch and reverb/delay sends, plus the master.
+ * Each strip's FX button opens its plugin chain (ui/views/daw.js).
  * Moving a control changes the sound at once; letting go records the change
  * for undo.
  */
@@ -19,12 +20,20 @@
 
   function dbText(db) { return db <= -59.5 ? '-inf' : (db > 0 ? '+' : '') + db.toFixed(1); }
 
+  // The strip's plugins: a button beside its name that opens its chain, with
+  // how many there are and their names in its tooltip.
+  function pluginsButton(list) {
+    const n = (list || []).length;
+    const names = (list || []).map(p => p.name + (p.bypass ? ' (bypassed)' : '')).join(', ');
+    return `<button type="button" class="mx-btn mx-plug${n ? ' on' : ''}" data-act="plugins" title="${esc(n ? 'Plugins: ' + names : 'Plugins: none yet. Click to add one.')}">FX${n ? ' ' + n : ''}</button>`;
+  }
+
   // A strip is two columns: the fader with its meter, as tall as the panel
   // allows, and beside it everything else, so nothing needs scrolling.
   function strip(track) {
     return `
       <div class="mx-strip" data-track="${esc(track.id)}" style="--tc:${esc(track.color)}">
-        <div class="mx-name" title="${esc(track.name)}">${esc(track.name)}</div>
+        <div class="mx-name"><span class="mx-title" title="${esc(track.name)}">${esc(track.name)}</span>${pluginsButton(track.plugins)}</div>
         <div class="mx-body">
           <div class="mx-main">
             <div class="mx-meter"><span data-meter="${esc(track.id)}"></span></div>
@@ -53,7 +62,7 @@
       <div class="mixer">
         ${project.tracks.map(strip).join('')}
         <div class="mx-strip master">
-          <div class="mx-name">Master</div>
+          <div class="mx-name"><span class="mx-title">Master</span>${pluginsButton(project.masterPlugins)}</div>
           <div class="mx-body">
             <div class="mx-main">
               <div class="mx-meter"><span data-meter="master"></span></div>
@@ -102,6 +111,12 @@
         });
       });
     });
+
+    container.querySelectorAll('[data-act="plugins"]').forEach(btn => btn.addEventListener('click', () => {
+      btn.blur();
+      const strip = btn.closest('.mx-strip');
+      if (actions.plugins) actions.plugins(strip.dataset.track || null);
+    }));
 
     const master = container.querySelector('input[data-master]');
     master.addEventListener('input', () => {

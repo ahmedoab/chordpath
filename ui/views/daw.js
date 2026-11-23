@@ -30,6 +30,8 @@
     clipboard: null,                 // copied notes, as DawProject.copyNotes gives them
     shownStretch: '',                // the tempo and time signature the transport bar is showing
     fitting: false,                  // takes are being stretched to the tempo right now
+    reopened: false,                 // the sound card saved from last time has been tried
+    resetting: false,                // an ASIO driver asked to be opened again, and is being
   };
 
   function root() { return doc.getElementById('dawRoot'); }
@@ -179,6 +181,7 @@
     }
     render();
     fitTakes();
+    reopenCard();
     cancelAnimationFrame(S.raf);
     S.raf = requestAnimationFrame(frame);
   }
@@ -256,21 +259,22 @@
         <label class="daw-field">from <select id="dawInput" title="The input that recording listens to">${inputOptions()}</select></label>
         <button type="button" class="ghost daw-toggle" id="dawMonitor" title="Hear your input through the app while you play. Use headphones: through speakers the microphone would pick itself up.">Hear it</button>
         <div class="daw-pos"><span id="dawBars" class="mono">1.1</span><span id="dawClock" class="meta">0:00.0</span></div>
-        <label class="daw-field" title="The tempo where the playhead is. Typing here changes it for that stretch of the song.">Tempo <input id="dawTempo" type="number" min="40" max="240" value="${esc(p.tempo)}" /></label>
+        <label class="daw-field" title="The tempo where the playhead is. Typing here changes it for that stretch of the song.">♩ <input id="dawTempo" aria-label="Tempo" type="number" min="40" max="240" value="${esc(p.tempo)}" /></label>
         <button type="button" class="ghost" id="dawMeter" title="Time signature where the playhead is. Click to change tempo or time signature part-way through the song.">4/4</button>
         <button type="button" class="ghost daw-toggle" id="dawLoop" title="Loop (L). Drag in the bar ruler to set the range, or click a section.">Loop</button>
         <button type="button" class="ghost daw-toggle" id="dawClick" title="Metronome">Click</button>
         <label class="daw-field">Snap <select id="dawSnap">${SNAPS.map(([v, name]) =>
           `<option value="${v}"${v === S.snap ? ' selected' : ''}>${name}</option>`).join('')}</select></label>
         <div class="daw-actions">
-          <button type="button" class="ghost" id="dawUndo" title="Undo (Ctrl+Z)">Undo</button>
-          <button type="button" class="ghost" id="dawRedo" title="Redo (Ctrl+Y)">Redo</button>
+          <button type="button" class="ghost" id="dawUndo" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+          <button type="button" class="ghost" id="dawRedo" title="Redo (Ctrl+Y)" aria-label="Redo">↷</button>
           <button type="button" class="ghost" id="dawZoomOut" title="Zoom out (-)">−</button>
           <button type="button" class="ghost" id="dawZoomIn" title="Zoom in (+)">+</button>
           <button type="button" class="ghost" id="dawRebuild" title="Rebuild the note tracks from the song as it is now. Recordings are kept.">Rebuild</button>
           <button type="button" class="ghost" id="dawImport" title="Bring an audio file in on a track of its own. You can also drop a file anywhere here.">Import…</button>
           <input type="file" id="dawImportFile" accept="audio/*,.wav,.mp3,.ogg,.oga,.flac,.m4a,.aac,.opus" hidden />
           <button type="button" class="ghost" id="dawExport">Export…</button>
+          <button type="button" class="ghost daw-toggle" id="dawAudio">Audio…</button>
           <button type="button" class="ghost" id="dawKeys" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
         </div>
       </div>
@@ -306,6 +310,7 @@
     S.roll = null;
     S.rollClipId = null;
     wireBar();
+    markAudio();
     wireSplit();
     wireHeads();
     S.arrange.resize();
@@ -553,6 +558,7 @@
       global.DawMixer.render(body, S.project, {
         live: () => { S.engine.sync(S.project); S.dirty = true; },
         done: () => { commit({ keepPanel: true }); },
+        plugins: trackId => openPlugins(trackId),
       });
       return;
     }
@@ -960,6 +966,361 @@
     }));
   }
 
+  // ── Audio: where the sound goes ──────────────────────────────────────────
+  // Either the built-in engine, out through whatever Windows plays through,
+  // or a sound card held by the audio host, which also plays the plugins.
+  // The choice is remembered, and a card chosen before is opened again the
+  // next time the DAW is.
+  const BUFFERS = [32, 64, 128, 256, 512, 1024, 2048, 4096];
+  const RATES = [44100, 48000, 88200, 96000];
+  let audioView = null;              // the Audio dialog's state while it is open
+
+  function savedAudio() {
+    const a = global.Storage.getSettings().dawAudio;
+    return a && typeof a === 'object' ? a : { mode: 'builtin' };
+  }
+  function cardText(card) {
+    if (!card) return 'Playing through this computer\'s sound.';
+    const ms = card.bufferFrames / card.sampleRate * 1000;
+    return `Playing through ${card.device || 'the default device'} (${card.api === 'asio' ? 'ASIO' : 'Windows'}) at ` +
+      `${+(card.sampleRate / 1000).toFixed(1)} kHz, ${card.bufferFrames} samples a buffer (${ms.toFixed(1)} ms).`;
+  }
+  function markAudio() {
+    const card = S.engine.card();
+    const btn = $('dawAudio');
+    if (btn) {
+      btn.classList.toggle('on', !!card);
+      btn.title = card ? cardText(card) + ' Click to change.' : 'Where the sound goes: this computer, or a sound card with plugins.';
+    }
+    const pick = $('dawInput');
+    if (pick) {
+      pick.disabled = !!card;
+      if (card) pick.title = 'Recording uses the sound card\'s inputs, chosen in Audio settings';
+      else nameInput();
+    }
+  }
+  // After the engine changes hands: the screen shows what is now true.
+  function audioChanged() {
+    markAudio();
+    refreshInputs();
+    if (S.panel === 'mixer') refreshPanel();
+    if (plugView && $('plugDialog')) drawPlugins();
+    S.dirty = true;
+  }
+
+  // A card chosen in an earlier session is opened again, once, quietly.
+  function reopenCard() {
+    const saved = savedAudio();
+    if (S.reopened || saved.mode !== 'card' || S.engine.usingNative()) return;
+    S.reopened = true;
+    if (!global.NativeAudio || !global.NativeAudio.supported()) return;
+    const config = { api: saved.api, device: saved.device, sampleRate: saved.sampleRate || 0, bufferFrames: saved.bufferFrames || 0,
+      useInput: saved.useInput !== false, input: saved.input || '' };
+    S.engine.useNative(config).then(audioChanged, e => {
+      setStatus(`${saved.device || 'The sound card'} could not be opened (${(e && e.message) || e}); playing through this computer.`);
+      audioChanged();
+    });
+  }
+
+  function audioOptions(id, list, chosen) {
+    const sel = $(id);
+    if (!sel) return;
+    sel.innerHTML = list.map(([value, name]) => `<option value="${esc(value)}">${esc(name)}</option>`).join('');
+    sel.value = list.some(([value]) => String(value) === String(chosen)) ? String(chosen) : String(list.length ? list[0][0] : '');
+  }
+
+  // Fills the card's choices from what the host found, for the driver type chosen.
+  function showDevices() {
+    const v = audioView;
+    if (!v || !v.devices) return;
+    const asio = v.api === 'asio';
+    const windows = v.devices.windows || [];
+    const outs = asio ? (v.devices.asio || []).map(name => [name, name])
+      : [['', 'Windows default']].concat(windows.filter(d => d.outputs > 0).map(d => [d.name, d.name]));
+    if (asio && !outs.length) outs.push(['', 'No ASIO drivers are installed']);
+    audioOptions('audDevice', outs, v.device);
+    v.device = $('audDevice').value;
+    audioOptions('audInput', [['', 'Windows default']].concat(windows.filter(d => d.inputs > 0).map(d => [d.name, d.name])), v.input);
+    $('audInputRow').hidden = asio;
+    describeDevice();
+  }
+
+  // Sample rates and buffer sizes the device offers. An ASIO driver is asked;
+  // a Windows device lists its rates, and any buffer size will do.
+  async function describeDevice() {
+    const v = audioView;
+    if (!v) return;
+    let rates = RATES, buffers = BUFFERS.filter(b => b >= 128), own = 0;
+    if (v.api === 'asio' && v.device) {
+      try {
+        const d = await global.NativeAudio.call('describe', v.device);
+        if (audioView !== v) return;
+        if (d.rates && d.rates.length) rates = d.rates;
+        const min = d.minBuffer || 32, max = d.maxBuffer || 4096;
+        buffers = BUFFERS.filter(b => b >= min && b <= max);
+        if (d.granularity > 0) buffers = buffers.filter(b => (b - min) % d.granularity === 0);
+        if (d.preferredBuffer && !buffers.includes(d.preferredBuffer)) buffers = buffers.concat(d.preferredBuffer).sort((a, b) => a - b);
+        own = d.preferredBuffer || 0;
+      } catch (e) { /* the driver would not say; the usual sizes are offered */ }
+    } else if (v.api === 'wasapi') {
+      const dev = (v.devices.windows || []).find(d => d.name === v.device);
+      if (dev && dev.rates && dev.rates.length) rates = dev.rates;
+    }
+    if (audioView !== v) return;
+    audioOptions('audRate', [[0, 'The device\'s own']].concat(rates.map(r => [r, `${+(r / 1000).toFixed(1)} kHz`])), v.sampleRate);
+    audioOptions('audBuffer', [[0, own ? `The driver's own (${own})` : 'The device\'s own']].concat(buffers.map(b => [b, `${b} samples`])), v.bufferFrames);
+  }
+
+  function readAudioForm() {
+    const v = audioView;
+    v.mode = $('audModeCard').checked ? 'card' : 'builtin';
+    v.api = $('audApi').value === 'wasapi' ? 'wasapi' : 'asio';
+    v.device = $('audDevice').value;
+    v.input = $('audInput').value;
+    v.sampleRate = parseInt($('audRate').value, 10) || 0;
+    v.bufferFrames = parseInt($('audBuffer').value, 10) || 0;
+    v.useInput = $('audUseInput').checked;
+  }
+  function showAudioMode() {
+    const card = $('audModeCard').checked;
+    ['audApi', 'audDevice', 'audRate', 'audBuffer', 'audInput', 'audUseInput'].forEach(id => { $(id).disabled = !card || !audioView.devices; });
+    const open = S.engine.card();
+    $('audPanel').hidden = !(open && open.api === 'asio');
+  }
+
+  async function openAudio() {
+    const N = global.NativeAudio;
+    const available = !!(N && N.supported()) && !!(await N.info().catch(() => ({}))).available;
+    const card = S.engine.card();
+    const base = card ? Object.assign({}, S.engine.nativeConfig || {}) : savedAudio();
+    audioView = {
+      available, devices: null, mode: card ? 'card' : 'builtin',
+      api: base.api === 'wasapi' || base.api === 'asio' ? base.api : '',
+      device: base.device || '', input: base.input || '',
+      sampleRate: base.sampleRate || 0, bufferFrames: base.bufferFrames || 0, useInput: base.useInput !== false,
+    };
+    const v = audioView;
+    UI().openModal(`
+      <div class="daw-audio-set" id="audSettings">
+        <h2>Audio</h2>
+        <label class="aud-mode"><input type="radio" name="audMode" id="audModeBuiltIn"${v.mode === 'builtin' ? ' checked' : ''} />
+          <span><strong>This computer's sound</strong><span class="meta">Plays through whatever Windows plays through. Plugins are not heard.</span></span></label>
+        <label class="aud-mode"><input type="radio" name="audMode" id="audModeCard"${v.mode === 'card' ? ' checked' : ''}${available ? '' : ' disabled'} />
+          <span><strong>A sound card, with plugins</strong><span class="meta">${available
+            ? 'ChordPath\'s audio engine holds the card: a short delay with ASIO, and your VST 3 plugins on the mixer.'
+            : 'This copy of ChordPath was built without its audio engine.'}</span></span></label>
+        <div class="aud-grid">
+          <label>Driver <select id="audApi"><option value="asio">ASIO</option><option value="wasapi">Windows (WASAPI)</option></select></label>
+          <label>Device <select id="audDevice"><option value="">Looking…</option></select></label>
+          <label>Sample rate <select id="audRate"></select></label>
+          <label>Buffer <select id="audBuffer"></select></label>
+          <label id="audInputRow">Input <select id="audInput"></select></label>
+          <label class="daw-check"><input type="checkbox" id="audUseInput"${v.useInput ? ' checked' : ''} /> Record from this card's inputs</label>
+        </div>
+        <p class="meta" id="audState" aria-live="polite">${esc(cardText(card))}</p>
+        <div class="fd-actions">
+          <button type="button" class="ghost" id="audPanel" hidden title="The driver's own settings window">Driver settings…</button>
+          <button type="button" class="primary" id="audApply">Apply</button>
+          <button type="button" class="ghost" id="audClose">Done</button>
+        </div>
+      </div>`);
+    showAudioMode();
+    $('audModeBuiltIn').addEventListener('change', showAudioMode);
+    $('audModeCard').addEventListener('change', showAudioMode);
+    $('audApi').addEventListener('change', () => { readAudioForm(); v.device = ''; v.sampleRate = 0; v.bufferFrames = 0; showDevices(); });
+    $('audDevice').addEventListener('change', () => { readAudioForm(); v.sampleRate = 0; v.bufferFrames = 0; describeDevice(); });
+    $('audApply').addEventListener('click', applyAudio);
+    $('audClose').addEventListener('click', () => { audioView = null; UI().closeModal(); });
+    $('audPanel').addEventListener('click', () => {
+      N.call('panel').catch(e => UI().toast('The driver\'s settings could not be opened: ' + ((e && e.message) || e)));
+    });
+    if (!available) return;
+    try {
+      await N.connect();
+      const devices = await N.call('devices');
+      if (audioView !== v) return;
+      v.devices = devices || { asio: [], windows: [] };
+      if (!v.api) v.api = (v.devices.asio || []).length ? 'asio' : 'wasapi';
+      $('audApi').value = v.api;
+      showDevices();
+      showAudioMode();
+    } catch (e) {
+      if (audioView === v) $('audState').textContent = 'The audio engine could not start: ' + ((e && e.message) || e);
+    }
+  }
+
+  async function applyAudio() {
+    const v = audioView;
+    if (!v) return;
+    readAudioForm();
+    const state = $('audState');
+    $('audApply').disabled = true;
+    const config = { api: v.api, device: v.device, sampleRate: v.sampleRate, bufferFrames: v.bufferFrames, useInput: v.useInput, input: v.input };
+    try {
+      if (S.engine.isRecording()) await finishRecording();
+      if (v.mode === 'builtin') {
+        if (S.engine.usingNative()) await S.engine.useBuiltIn();
+        global.Storage.setSettings({ dawAudio: Object.assign({}, config, { mode: 'builtin' }) });   // the card's details wait for next time
+        state.textContent = cardText(null);
+      } else {
+        state.textContent = `Opening ${v.device || 'the default device'}…`;
+        const opened = await S.engine.useNative(config);
+        global.Storage.setSettings({ dawAudio: Object.assign({}, config, { mode: 'card' }) });
+        if (audioView === v) $('audState').textContent = cardText(opened);
+      }
+    } catch (e) {
+      if (audioView === v) $('audState').textContent = `It could not be opened: ${(e && e.message) || e}. Playing through this computer.`;
+    }
+    if (audioView === v) { $('audApply').disabled = false; showAudioMode(); }
+    audioChanged();
+  }
+
+  // ── Plugins on a strip ───────────────────────────────────────────────────
+  // A dialog for one strip's chain (a track's, or the master's): its plugins
+  // in order, each with its window, bypass, order and removal; below, the
+  // plugins installed on this computer, to add.
+  let plugView = null;               // { trackId (null: the master), installed, failed, query }
+
+  function plugTrack() { return plugView.trackId ? P().findTrack(S.project, plugView.trackId) : null; }
+  function plugList() { const t = plugTrack(); return t ? t.plugins : S.project.masterPlugins; }
+
+  function openPlugins(trackId) {
+    plugView = { trackId: trackId || null, installed: null, failed: [], query: '' };
+    drawPlugins();
+    loadInstalled(false);
+  }
+
+  function loadInstalled(rescan) {
+    const N = global.NativeAudio;
+    const v = plugView;
+    v.installed = null;
+    drawAvailable();
+    const got = N && N.supported() ? N.installed(rescan) : Promise.resolve({ plugins: [], failed: [] });
+    got.then(res => { v.installed = (res && res.plugins) || []; v.failed = (res && res.failed) || []; },
+      () => { v.installed = []; })
+      .then(() => { if (plugView === v) drawAvailable(); });
+  }
+
+  function drawPlugins() {
+    const track = plugTrack();
+    if (plugView.trackId && !track) { plugView = null; UI().closeModal(); return; }
+    UI().openModal(`
+      <div class="daw-plugins" id="plugDialog">
+        <h2>Plugins on ${esc(track ? track.name : 'the Master')}</h2>
+        <p class="plug-off" id="plugOff"${S.engine.usingNative() ? ' hidden' : ''}>Plugins are heard when a sound card plays through ChordPath's audio engine.
+          <button type="button" class="ghost small" id="plugAudio">Audio settings…</button></p>
+        <ol class="plug-chain" id="plugChain"></ol>
+        <h3>Add a plugin</h3>
+        <input type="search" id="plugSearch" placeholder="Search by name, maker or kind" aria-label="Search the plugins" value="${esc(plugView.query)}" />
+        <div class="plug-avail-list" id="plugAvail"></div>
+        <div class="fd-actions">
+          <button type="button" class="ghost" id="plugRescan" title="Look through the plugin folders again, for plugins installed since">Look for plugins again</button>
+          <button type="button" class="primary" id="plugClose">Done</button>
+        </div>
+      </div>`);
+    drawChain();
+    drawAvailable();
+    $('plugClose').addEventListener('click', () => { plugView = null; UI().closeModal(); });
+    $('plugAudio').addEventListener('click', () => { plugView = null; openAudio(); });
+    $('plugRescan').addEventListener('click', () => loadInstalled(true));
+    $('plugSearch').addEventListener('input', () => { plugView.query = $('plugSearch').value; filterAvailable(); });
+    $('plugChain').addEventListener('click', e => {
+      const btn = e.target.closest('button[data-act]');
+      const row = btn && btn.closest('[data-plugin]');
+      if (!row) return;
+      chainAction(btn.dataset.act, row.dataset.plugin);
+    });
+    $('plugAvail').addEventListener('click', e => {
+      const btn = e.target.closest('button[data-act="add"]');
+      const row = btn && btn.closest('.plug-avail');
+      if (row) addPluginFrom(row);
+    });
+  }
+
+  function drawChain() {
+    const host = $('plugChain');
+    if (!host || !plugView) return;
+    const native = S.engine.usingNative();
+    const off = $('plugOff');
+    if (off) off.hidden = native;
+    const list = plugList();
+    host.innerHTML = list.length ? list.map((p, i) => {
+      const info = S.engine.pluginInfo(p.id);
+      const note = !native ? ''
+        : info.state === 'failed' ? `<span class="plug-bad">Could not load: ${esc(info.error)}</span>`
+          : info.state === 'ready' ? (info.latency ? `<span class="meta">${esc(info.latency)} samples of delay, made up for</span>` : '')
+            : '<span class="meta">loading…</span>';
+      const canOpen = native && info.state === 'ready' && info.hasEditor;
+      const fixed = p.instrument;                              // an instrument stays first
+      return `
+        <li class="plug-row${p.bypass ? ' bypassed' : ''}" data-plugin="${esc(p.id)}">
+          <span class="plug-name"><strong>${esc(p.name)}</strong>
+            <span class="meta">${esc([p.vendor, p.instrument ? 'instrument' : ''].filter(Boolean).join(' · '))}</span> ${note}</span>
+          <button type="button" class="ghost small" data-act="window"${canOpen ? '' : ' disabled'}>${info.editorOpen ? 'Close window' : 'Window'}</button>
+          <button type="button" class="mx-btn${p.bypass ? ' on' : ''}" data-act="bypass" title="Bypass: the sound passes it by untouched">Bypass</button>
+          <button type="button" class="ghost small" data-act="up" title="Earlier in the chain" aria-label="Earlier in the chain"${fixed || i === 0 || list[i - 1].instrument ? ' disabled' : ''}>↑</button>
+          <button type="button" class="ghost small" data-act="down" title="Later in the chain" aria-label="Later in the chain"${fixed || i === list.length - 1 ? ' disabled' : ''}>↓</button>
+          <button type="button" class="ghost small danger" data-act="remove" title="Take it off" aria-label="Take it off">×</button>
+        </li>`;
+    }).join('') : '<li class="meta plug-none">No plugins on this strip yet.</li>';
+  }
+
+  function chainAction(act, id) {
+    const found = P().findPlugin(S.project, id);
+    if (!found) return;
+    const p = found.plugin;
+    if (act === 'window') {
+      const info = S.engine.pluginInfo(id);
+      const title = `${p.name} — ${found.track ? found.track.name : 'Master'}`;
+      (info.editorOpen ? S.engine.closePlugin(id) : S.engine.openPlugin(id, title))
+        .then(ok => { if (ok === false) UI().toast(`${p.name} has no window of its own`); },
+          e => UI().toast(`${p.name}'s window could not be opened: ${(e && e.message) || e}`))
+        .then(drawChain);
+      return;
+    }
+    if (act === 'bypass') p.bypass = !p.bypass;
+    else if (act === 'up' || act === 'down') { if (!P().movePlugin(S.project, id, act === 'up' ? -1 : 1)) return; }
+    else if (act === 'remove') P().removePlugin(S.project, id);
+    else return;
+    commit({ keepPanel: S.panel !== 'mixer' });
+    drawChain();
+  }
+
+  function addPluginFrom(row) {
+    const p = (plugView.installed || []).find(x => x.path === row.dataset.path && x.uid === row.dataset.uid);
+    if (!p) return;
+    const added = P().addPlugin(S.project, plugView.trackId, { path: p.path, uid: p.uid, name: p.name, vendor: p.vendor, instrument: !!p.instrument });
+    if (!added) { UI().toast(p.instrument ? 'An instrument plays a note track, not this one' : 'A strip holds up to eight plugins'); return; }
+    commit({ keepPanel: S.panel !== 'mixer' });
+    drawChain();
+  }
+
+  function drawAvailable() {
+    const host = $('plugAvail');
+    if (!host || !plugView) return;
+    if (!plugView.installed) { host.innerHTML = '<p class="meta plug-scanning">Looking for the plugins installed on this computer…</p>'; return; }
+    const track = plugTrack();
+    const notes = !!track && track.kind !== 'audio';           // instruments play note tracks; effects go anywhere
+    const list = plugView.installed.filter(p => !p.instrument || notes);
+    const failed = plugView.failed.length
+      ? `<p class="meta">${plugView.failed.length === 1 ? 'One plugin' : plugView.failed.length + ' plugins'} could not be read: ${esc(plugView.failed.map(f => f.name).join(', '))}.</p>` : '';
+    host.innerHTML = (list.length ? list.map(p => `
+      <div class="plug-avail" data-name="${esc(p.name)}" data-path="${esc(p.path)}" data-uid="${esc(p.uid)}">
+        <span><strong>${esc(p.name)}</strong> <span class="meta">${esc([p.vendor, p.instrument ? 'Instrument' : kindOf(p.category)].filter(Boolean).join(' · '))}</span></span>
+        <button type="button" class="ghost small" data-act="add">Add</button>
+      </div>`).join('') : '<p class="meta">No plugins were found. ChordPath plays VST 3 plugins installed in the usual folder for them.</p>') + failed;
+    filterAvailable();
+  }
+  // A VST 3 category ("Fx|EQ", "Fx|Reverb|Delay") as words: "EQ", "Reverb, Delay".
+  function kindOf(category) {
+    const words = String(category || '').split('|').map(w => w.trim()).filter(w => w && w !== 'Fx');
+    return words.length ? words.join(', ') : 'Effect';
+  }
+  function filterAvailable() {
+    const q = ((plugView && plugView.query) || '').trim().toLowerCase();
+    doc.querySelectorAll('#plugAvail .plug-avail').forEach(row => { row.hidden = !!q && !row.textContent.toLowerCase().includes(q); });
+  }
+
   // ── Tempo and time signature ─────────────────────────────────────────────
   // One row for every stretch of the song. Each edit is applied at once, and
   // the list is drawn again because a change of time moves the bars after it.
@@ -1079,6 +1440,29 @@
     S.input = typeof settings.dawInput === 'string' ? settings.dawInput.slice(0, 200) : '';
     S.engine.setInput(S.input);
     refreshInputs();
+    // Plugins loading, failing, or opening and closing their windows.
+    S.engine.watchPlugins(() => { if (plugView && $('plugDialog')) drawChain(); });
+    // The audio host stopped (a plugin crashed, most likely): the built-in engine carries on.
+    S.engine.onLost = () => {
+      setStatus('The audio engine stopped, perhaps a plugin crashed. Playing through this computer; choose the card again in Audio settings.');
+      UI().toast('The audio engine stopped. Playing through this computer.');
+      audioChanged();
+    };
+    // An ASIO driver whose settings were changed in its own window asks to be
+    // opened again; it is, at the buffer size it now prefers.
+    if (global.NativeAudio && global.NativeAudio.supported()) {
+      global.NativeAudio.on('status', m => {
+        if (!m.status || !m.status.reset || S.resetting || !S.engine.usingNative()) return;
+        S.resetting = true;
+        const config = Object.assign({}, S.engine.nativeConfig, { bufferFrames: 0 });
+        const done = () => { S.resetting = false; audioChanged(); };
+        S.engine.useNative(config).then(() => {
+          global.Storage.setSettings({ dawAudio: Object.assign({}, config, { mode: 'card' }) });
+          if (audioView && $('audState')) $('audState').textContent = cardText(S.engine.card());
+          done();
+        }, e => { setStatus(`The sound card could not be opened again (${(e && e.message) || e}); playing through this computer.`); done(); });
+      });
+    }
     const devices = global.navigator.mediaDevices;
     if (devices && devices.addEventListener) devices.addEventListener('devicechange', refreshInputs);
     global.addEventListener('resize', () => { if (S.active && S.project) showPanelHeight(); });
@@ -1133,6 +1517,7 @@
     press('dawZoomOut', () => zoom(1 / 1.3, S.engine.position()));
     press('dawRebuild', rebuild);
     press('dawExport', openExport);
+    press('dawAudio', openAudio);
     press('dawImport', () => $('dawImportFile').click());
     on('dawImportFile', 'change', () => {
       const input = $('dawImportFile');

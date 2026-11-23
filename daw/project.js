@@ -15,7 +15,7 @@
   // Megabytes that hold about twenty-five minutes of each kind of audio file.
   const AUDIO_MB = { compressed: 25, flac: 130, plain: 260 };
   const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-  const PLUGIN_FILE_RE = /^[A-Za-z]:\\[^<>"|?*\u0000-\u001f]{1,1000}\.vst3$/i;   // a full path to a VST 3 plugin
+  const PLUGIN_FILE_RE = /^[A-Za-z]:[\\/][^<>"|?*\u0000-\u001f]{1,1000}\.vst3$/i;   // a full path to a VST 3 plugin, either slash
   const PLUGIN_UID_RE = /^[0-9A-Fa-f]{32}$/;
   const NOTE_RE = /^[A-G][#b]?$/;
   const COLOR_RE = /^#[0-9a-f]{6}$/i;
