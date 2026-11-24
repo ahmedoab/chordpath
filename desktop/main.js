@@ -238,11 +238,11 @@ function buildMenu() {
       { role: 'togglefullscreen' },
     ] },
     { label: '&Help', submenu: [
-      { label: 'Guides', click: () => send('guides') },
+      { label: 'How ChordPath works', accelerator: 'F1', click: () => send('guides') },
       { label: 'About ChordPath', click: () => dialog.showMessageBox({
         type: 'info', title: 'About ChordPath',
         message: 'ChordPath ' + app.getVersion(),
-        detail: 'Feeling-driven song studio.\nRuns on this computer, with no accounts and no services. ' +
+        detail: 'A songwriting aid and DAW.\nRuns on this computer, with no accounts and no services. ' +
           'The one time it goes online is when you ask Muse to look a song up on Wikipedia.',
       }) },
     ] },

@@ -113,8 +113,8 @@ markers along the top. From there the project is yours to change.
 - **Sound.** Ten built-in instruments and a drum kit, synthesised by the app
   itself. There are no samples to download.
 - **Recording.** Record a microphone or interface onto audio tracks after a
-  one-bar count-in. Choose which input beside the Record button, and switch
-  on "Hear it" to hear yourself through the app while you play (with
+  one-bar count-in. Choose the Input beside the Record button, and switch
+  on Monitor to hear yourself through the app while you play (with
   headphones). Or bring in an audio file (WAV, MP3, OGG, FLAC) with Import
   or by dropping it on the window.
 - **Takes keep time.** Change the tempo and a recording is stretched or
@@ -125,8 +125,8 @@ markers along the top. From there the project is yours to change.
   or the notes as MIDI.
 
 Edits can be undone, a hundred steps back, and the project saves itself next
-to the song on your computer. "Rebuild" refreshes the note tracks after you
-change the song elsewhere in ChordPath; your recordings stay.
+to the song on your computer. "Update from song" refreshes the note tracks
+after you change the song in Write; your recordings stay.
 
 ### Sound cards and plugins
 
@@ -144,7 +144,7 @@ only the engine down and the song carries on through Windows' sound.
   each with its own window, Bypass, and a place in the order. Plugins that
   take time are lined up with the rest; their settings are saved with the
   project and come back when it opens. Mixdowns go through the same plugins.
-- Recording through a card records its inputs, and "Hear it" passes them
+- Recording through a card records its inputs, and Monitor passes them
   through the track's plugins with only the card's delay.
 
 Plugins are heard only through a card; through this computer's sound the
@@ -158,7 +158,13 @@ twenty minutes long.
 
 ## The workflow
 
-1. **Songs** — your project browser. Autosaved projects, JSON import/export.
+The pages along the top follow a song from the first chord to the last mix.
+Songs and Muse are always there; once a song is open, its own pages appear
+beside its name: Overview, Write, Studio guide, DAW and Song sheet. Help
+(F1 in the desktop app) explains each one.
+
+1. **Songs** — your songs. Each saves itself as you work; "Save file" and
+   "Open a song file…" move one between computers.
 2. **Start a song** — choose the key first, named the way musicians name
    it (D♭ major, C♯ minor), then the time signature (hear it before you
    choose), the tempo, and how many empty sections to begin with. A
@@ -167,29 +173,32 @@ twenty minutes long.
 3. **Overview** — the section timeline. Each card shows its time
    signature, its bars counted in that time, and the rhythm and drums it
    really plays. Set the song's time signature here; add empty sections,
-   duplicate and reorder them; give a section a feeling of its own (it
-   guides the suggestions and changes nothing you wrote). Take
-   **snapshots** before big changes — autosave can never overwrite them,
-   and restoring always creates a copy. Play the whole song, export
-   multi-track MIDI.
-4. **Section editor** — the writing workspace. One pane gives ranked
-   next-chord suggestions, scored for the section's feeling; the other
-   gives **ideas**: progressions, strum rhythms, drum grooves and melody
-   shapes for the section's time, and other times to try. Hear any of them
-   first, then use it; Undo takes chord edits back out. Each section can
-   have its own time, and a chord can last half a bar or several bars. Also
-   cadence/tension analysis, "sounds like" genre + famous-song matching,
-   playable full-band arrangements, and live guitar tab for chords, vocal
-   melody, bass, under-melody and drums, written in the section's time.
-5. **Studio** — per-section instrument roster with a frequency **density
+   duplicate and reorder them (click a card to write it); give a section a
+   feeling of its own (it guides the suggestions and changes nothing you
+   wrote). The key can be changed here too. Take **snapshots** before big
+   changes — autosave can never overwrite them, and restoring always
+   creates a copy. Play the whole song, save it as multi-track MIDI.
+4. **Write** — the writing workspace, one section at a time. Its four
+   views: **Next chord** (ranked suggestions, scored for the section's
+   feeling), **Ideas** (progressions, strum rhythms, drum grooves, melody
+   shapes and other times to try, each heard before it is used, plus
+   starter sounds), **Parts** (what each instrument plays) and **About**
+   (what the chords do, a tension line, songs that use them). Undo takes
+   chord edits back out. Each section can have its own time, and a chord
+   can last half a bar or several bars. On the right: how to play the
+   chord, and live guitar tab for chords, vocal melody, bass, under-melody
+   and drums, written in the section's time. Play at the bottom plays what
+   is chosen beside it: the chords, the chords and melody, the band,
+   everything, or the drums; Sound… holds the instruments, tones and levels.
+5. **Studio guide** — per-section instrument roster with a frequency **density
    meter** (too sparse? too crowded? which instruments clash?), and a card
    per instrument: free plugins, a concrete mix chain (Hz, ratios, ms), and
    how to record it. Includes a full vocal-session guide with a range check
    against your own voice.
 6. **DAW** — the song as editable tracks, with recording, mixing and export.
    See above.
-7. **Handoff** — one printable page with every tab (each section in its
-   own time, exactly as the section editor writes it), arrangement note,
+7. **Song sheet** — one printable page with every tab (each section in its
+   own time, exactly as Write shows it), arrangement note,
    plugin pick, and the production checklist. Print it or save as PDF, and
    drag the exported `.mid` into another DAW: every part lands on its own
    track with sections as markers.

@@ -24,6 +24,12 @@
 
   function glyph(name) { return String(name).replace('#', '♯').replace(/^([A-G])b/, '$1♭'); }
   function feelingName(id) { const f = id && id !== 'none' ? F().getFeeling(id) : null; return f ? f.name : 'No feeling'; }
+  // E major, C♯ minor, D Dorian: the key as the section editor names it.
+  function keyLabel(s) {
+    const meta = global.Scales.getScaleMeta(s.scale);
+    const mode = s.scale === 'major' ? 'major' : s.scale === 'natural_minor' ? 'minor' : (meta ? meta.name : s.scale);
+    return glyph(s.key) + ' ' + mode;
+  }
 
   // What a section really plays, by name (as the section editor shows it).
   function patternNames(s, sec) {
@@ -58,11 +64,11 @@
         <div class="ov-chords">${chords.length ? chords.map(c => `<span class="ov-chord ${c.category}">${ui.esc(c.shortName)}</span>`).join('') : '<span class="meta">no chords yet</span>'}</div>
         <div class="ov-meta meta">${facts.map(f => ui.esc(f)).join(' · ')}</div>
         <div class="ov-actions">
-          <button type="button" class="ghost small" data-act="open">Edit</button>
-          <button type="button" class="ghost small" data-act="dup">Duplicate</button>
-          <button type="button" class="ghost small" data-act="left" ${i === 0 ? 'disabled' : ''}>◀</button>
-          <button type="button" class="ghost small" data-act="right" ${i === s.sections.length - 1 ? 'disabled' : ''}>▶</button>
-          <button type="button" class="ghost small danger" data-act="del">×</button>
+          <button type="button" class="ghost small" data-act="open" title="Open this section in Write">Write</button>
+          <button type="button" class="ghost small" data-act="dup" title="Put a copy of this section right after it">Duplicate</button>
+          <button type="button" class="ghost small" data-act="left" title="Move it earlier in the song" aria-label="Move earlier" ${i === 0 ? 'disabled' : ''}>◀</button>
+          <button type="button" class="ghost small" data-act="right" title="Move it later in the song" aria-label="Move later" ${i === s.sections.length - 1 ? 'disabled' : ''}>▶</button>
+          <button type="button" class="ghost small danger" data-act="del" title="Delete this section" aria-label="Delete this section">×</button>
         </div>
       </div>`;
     }).join('');
@@ -88,26 +94,26 @@
         <header class="ov-head">
           <input id="ovTitle" class="ov-title" type="text" value="${ui.esc(s.title)}" maxlength="60" aria-label="Song title" />
           <div class="ov-head-meta">
-            <span class="chip">${ui.esc(glyph(s.key))} ${ui.esc((global.Scales.getScaleMeta(s.scale) || {}).name || s.scale)}</span>
+            <button type="button" class="chip clickable" id="ovKey" title="Change the key of the song">Key: ${ui.esc(keyLabel(s))}</button>
             <label class="chip chip-input" title="The song's time signature. Sections with a time of their own keep it.">Time <select id="ovMeter">${times.map(id =>
               `<option value="${ui.esc(id)}"${id === songTime ? ' selected' : ''}>${ui.esc(id)}</option>`).join('')}</select></label>
-            <label class="chip chip-input">♩ <input id="ovTempo" type="number" min="40" max="200" value="${ui.esc(s.tempo)}" /> BPM</label>
+            <label class="chip chip-input" title="The song's tempo, in beats per minute">Tempo <input id="ovTempo" type="number" min="40" max="200" value="${ui.esc(s.tempo)}" /> BPM</label>
             ${ui.genreChipHTML(s.genreId)}
             <button type="button" class="chip chip-feeling clickable" id="ovFeeling" title="Change the song's overall feeling">${ui.esc(feelingName(s.feelingId))}</button>
           </div>
-          <div class="progress-steps">${progress}</div>
+          <div class="progress-steps"><span class="meta progress-label" title="Tick each stage off as you finish it; the Songs page shows how far each song has got">Progress</span>${progress}</div>
         </header>
 
         <div class="ov-transport">
           <button type="button" id="ovPlaySong" class="play-main" ${canPlaySong ? '' : 'disabled title="Whole-song playback arrives with the next update"'}>▶ Play song</button>
-          <button type="button" id="ovStop" class="ghost">Stop</button>
-          <label class="ck"><input id="ovLoop" type="checkbox" /> Loop song</label>
-          <span class="meta" id="ovDuration"></span>
+          <button type="button" id="ovStop" class="ghost">■ Stop</button>
+          <label class="ck"><input id="ovLoop" type="checkbox" /> Loop</label>
+          <span class="meta" id="ovDuration" title="How long the song lasts"></span>
           <span class="spacer"></span>
-          <button type="button" id="ovExportJson" class="ghost">Export JSON</button>
-          <button type="button" id="ovExportMidi" class="ghost" ${global.Midi && global.Midi.downloadSong ? '' : 'disabled title="Multi-track MIDI arrives with a later update"'}>Export MIDI (all tracks)</button>
-          <button type="button" id="ovDaw" class="ghost">Open in DAW</button>
-          <button type="button" id="ovHandoff" class="ghost">Handoff pack</button>
+          <button type="button" id="ovDaw" class="ghost" title="Record, arrange and mix the song">Open in the DAW</button>
+          <button type="button" id="ovHandoff" class="ghost" title="Every tab and note on one page, to print or save as a PDF">Song sheet</button>
+          <button type="button" id="ovExportMidi" class="ghost" title="Every part on its own track, with the sections as markers, to drag into another DAW" ${global.Midi && global.Midi.downloadSong ? '' : 'disabled'}>Save as MIDI</button>
+          <button type="button" id="ovExportJson" class="ghost" title="Save the song as a file, to keep or to open on another computer">Save song file</button>
         </div>
 
         <div class="ov-timeline" id="ovTimeline">${cards}
@@ -149,6 +155,7 @@
     doc.getElementById('ovFeeling').addEventListener('click', () => {
       openFeelingDialog(null);
     });
+    doc.getElementById('ovKey').addEventListener('click', openKeyDialog);
 
     doc.querySelectorAll('#overviewRoot [data-progress]').forEach(cb => {
       cb.addEventListener('change', () => {
@@ -163,8 +170,11 @@
 
     doc.querySelectorAll('#ovTimeline .ov-card[data-sec]').forEach(card => {
       const secId = card.dataset.sec;
+      // A click on the card itself opens the section; its buttons do their own thing.
       card.addEventListener('click', (e) => {
-        const act = e.target.dataset && e.target.dataset.act;
+        const btn = e.target.closest('[data-act]');
+        const act = btn && !btn.disabled ? btn.dataset.act : null;
+        if (!btn) { global.Nav.go('section', s.id, secId); return; }
         if (!act) return;
         e.stopPropagation();
         const idx = s.sections.findIndex(x => x.id === secId);
@@ -198,7 +208,6 @@
           });
         }
       });
-      card.addEventListener('dblclick', () => global.Nav.go('section', s.id, secId));
     });
 
     doc.getElementById('ovTakeSnap').addEventListener('click', () => {
@@ -237,7 +246,7 @@
     const midiBtn = doc.getElementById('ovExportMidi');
     if (global.Midi && global.Midi.downloadSong) {
       midiBtn.addEventListener('click', () => {
-        if (global.Midi.downloadSong(s)) ui.toast('Multi-track MIDI downloaded — drag it into your DAW');
+        if (global.Midi.downloadSong(s)) ui.toast('MIDI saved, every part on its own track: drag it into another DAW');
       });
     }
     doc.getElementById('ovDaw').addEventListener('click', () => global.Nav.go('daw', s.id));
@@ -326,8 +335,39 @@
     });
   }
 
+  // The song's key: a note and a scale. The chords stay as they are written.
+  function openKeyDialog() {
+    const s = song();
+    const ui = UI();
+    const Sc = global.Scales;
+    const home = Sc.noteIndex(s.key);
+    const notes = Array.from({ length: 12 }, (_, pc) =>
+      `<option value="${pc}"${pc === home ? ' selected' : ''}>${ui.esc(glyph(pc === home ? s.key : Sc.keyName(pc, s.scale)))}</option>`).join('');
+    const scales = Sc.SCALE_GROUPS.map(group => `<optgroup label="${ui.esc(group.label)}">${group.ids.map(id => {
+      const meta = Sc.getScaleMeta(id);
+      return meta ? `<option value="${ui.esc(id)}"${id === s.scale ? ' selected' : ''}>${ui.esc(meta.name)}</option>` : '';
+    }).join('')}</optgroup>`).join('');
+    ui.openModal(`
+      <div class="feeling-dialog key-dialog">
+        <h3>Key of the song</h3>
+        <div class="key-dialog-row">
+          <select id="kdNote" aria-label="Key note">${notes}</select>
+          <select id="kdScale" aria-label="Major, minor or another scale">${scales}</select>
+        </div>
+        <p class="meta">This is the key of every section. The chords you have written stay as they are; the suggestions, ideas and chord numbers follow the new key.</p>
+        <div class="fd-actions"><button type="button" class="primary" id="kdSet">Set the key</button></div>
+      </div>`);
+    doc.getElementById('kdSet').addEventListener('click', () => {
+      const pc = parseInt(doc.getElementById('kdNote').value, 10);
+      const scale = doc.getElementById('kdScale').value;
+      App().mutate(sg => { sg.scale = scale; sg.key = Sc.keyName(pc, scale); });
+      ui.closeModal();
+      render();
+    });
+  }
+
   // The new section stays here on the overview, where the song is being laid
-  // out; Edit or a double-click opens it.
+  // out; clicking its card opens it.
   function openRolePicker() {
     const ui = UI();
     const roles = R().SECTIONS.map(r =>

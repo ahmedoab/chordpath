@@ -36,6 +36,19 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
       window.Tone.getDestination().connect(window.__meter);
     });
 
+    // ── The top bar ────────────────────────────────────────────────────────
+    section('The top bar');
+    check('with no song open, only Songs and Muse are offered', await page.isVisible('#navTabs [data-nav="songs"]') &&
+      await page.isVisible('#navTabs [data-nav="muse"]') && !(await page.isVisible('#navSong')));
+    await page.click('#btnHelp');
+    await page.waitForSelector('#modalContent .help-steps');
+    const helpRows = await page.locator('#modalContent .help-steps dt').allTextContents();
+    check(`Help explains every page by its name (${helpRows.join(', ')})`,
+      ['Songs', 'Overview', 'Write', 'Studio guide', 'DAW', 'Song sheet', 'Muse'].every(n => helpRows.includes(n)));
+    await page.click('#modalContent [data-help="shortcuts"]');
+    check('and leads on to the keyboard shortcuts', /Keyboard shortcuts/.test(await page.textContent('#modalContent h2')));
+    await page.keyboard.press('Escape');
+
     // ── Starting a song ────────────────────────────────────────────────────
     section('Starting a song');
     await page.click('#btnNewSong');
@@ -55,6 +68,12 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
     check('the song is in the key and time chosen', s.key === 'E' && s.scale === 'natural_minor' && s.meter.num === 3 && s.meter.den === 4);
     check('and starts with one empty verse, nothing written for the writer', s.sections.length === 1 && s.sections[0].role === 'verse' && s.sections[0].progSpecs.length === 0);
     check('the editor opens on it', /#\/song\/.+\/section\//.test(page.url()) && (await page.locator('#progression .prog-chord').count()) === 0);
+    const songTabs = await page.locator('#navSong [data-nav]').allTextContents();
+    check(`the song's own pages appear beside its name (${(await page.textContent('#navSongTitle')).trim()}: ${songTabs.join(', ')})`,
+      await page.isVisible('#navSong') && (await page.textContent('#navSongTitle')).trim() === 'Paper Boats' &&
+      songTabs.join('|') === 'Overview|Write|Studio guide|DAW|Song sheet');
+    check('and Write is the page open', (await page.textContent('#navTabs button.active')).trim() === 'Write');
+    check(`the key is named at the top (${(await page.textContent('#btnKey')).trim()})`, /^Key\s+E minor$/.test((await page.textContent('#btnKey')).trim()));
 
     // ── The editor follows the section's time ──────────────────────────────
     section('The section editor in 3/4');
@@ -165,9 +184,30 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
     await page.click('#tabTabs [data-tab="bass"]');
     check('the bass tab has notes on the low strings', /^E \|.*\d/m.test(await page.textContent('#tabPane')));
 
+    // ── Parts and About ────────────────────────────────────────────────────
+    section('Parts and About');
+    await page.click('#paneSwitch [data-pane="parts"]');
+    check('Parts shows what each instrument plays', await page.isVisible('#parts') && await page.isVisible('#rhythmPattern') &&
+      await page.isVisible('#drumPattern') && await page.isVisible('#vocalPattern') && !(await page.isVisible('#options')) && !(await page.isVisible('#ideas')));
+    check('and the rhythm chosen from the ideas is the one shown', (await page.inputValue('#rhythmPattern')) === (await current()).rhythmPattern);
+    await page.click('#paneSwitch [data-pane="about"]');
+    check('About says what the chords do, and how tense each one is', await page.isVisible('#about') &&
+      (await page.textContent('#description')).trim().length > 0 && (await page.locator('#tensionChart .dot').count()) === used.length);
+    await page.click('#paneSwitch [data-pane="next"]');
+    check('Next chord brings the suggestions back, with their tools', await page.isVisible('#options') && await page.isVisible('#nextTools'));
+
     // ── Playing it ─────────────────────────────────────────────────────────
     section('Playing');
-    await page.click('#btnPlayBand');
+    check('Play starts on the chords alone', (await page.getAttribute('#playWhat [data-play].active', 'data-play')) === 'chords');
+    await page.click('#playWhat [data-play="band"]');
+    const beatsLit = () => page.evaluate(() => new Promise(resolve => {
+      let lit = 0;
+      const t = setInterval(() => { lit += document.querySelectorAll('.beat-led span.on').length; }, 20);
+      setTimeout(() => { clearInterval(t); resolve(lit); }, 700);
+    }));
+    check('choosing Band does not start it', (await page.getAttribute('#playWhat [data-play].active', 'data-play')) === 'band' &&
+      (await beatsLit()) === 0);
+    await page.click('#btnPlay');
     const heardBand = await loudest(600);
     check(`Band plays the section (peak ${heardBand.toFixed(1)} dB)`, heardBand > -50);
     const lit = await page.evaluate(() => new Promise(resolve => {
@@ -190,7 +230,7 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
 
     // ── Starter sounds stay in the writer's key ────────────────────────────
     section('Starter sounds');
-    await page.click('[popovertarget="popMore"]');
+    await page.click('#paneSwitch [data-pane="ideas"]');
     await page.click('#btnPresets');
     await page.click('#modalContent [data-preset="0"]');
     s = await song();
@@ -239,6 +279,30 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
       JSON.stringify([chorusBefore.progSpecs, chorusBefore.rhythmPattern, chorusBefore.drumPattern, chorusBefore.vocalPattern]));
     check('and the card shows it', (await card(1).locator('[data-act="feeling"]').textContent()).trim() ===
       await page.evaluate(id => window.Feelings.getFeeling(id).name, otherFeeling));
+
+    check(`the song's key is named here (${(await page.textContent('#ovKey')).trim()})`, (await page.textContent('#ovKey')).trim() === 'Key: E minor');
+    const chordsBefore = JSON.stringify((await song()).sections.map(x => x.progSpecs));
+    await page.click('#ovKey');
+    await page.waitForSelector('#kdNote');
+    await page.selectOption('#kdNote', '7');
+    await page.selectOption('#kdScale', 'dorian');
+    await page.click('#kdSet');
+    s = await song();
+    check(`and can be changed here: G Dorian (${s.key} ${s.scale}, ${(await page.textContent('#ovKey')).trim()})`, s.key === 'G' && s.scale === 'dorian' &&
+      (await page.textContent('#ovKey')).trim() === 'Key: G Dorian');
+    check('changing it leaves every chord as written', JSON.stringify(s.sections.map(x => x.progSpecs)) === chordsBefore);
+    await page.click('#ovKey');
+    await page.waitForSelector('#kdNote');
+    await page.selectOption('#kdNote', '4');
+    await page.selectOption('#kdScale', 'natural_minor');
+    await page.click('#kdSet');
+    check('and set back to E minor', (await song()).key === 'E' && (await song()).scale === 'natural_minor');
+    await card(0).locator('.ov-meta').click();
+    await page.waitForSelector('#view-section:not([hidden]) #progression');
+    check('clicking a section\'s card opens it in Write', (await current()).id === (await song()).sections[0].id &&
+      (await page.textContent('#navTabs button.active')).trim() === 'Write');
+    await page.click('#navTabs [data-nav="overview"]');
+    await page.waitForSelector('#overviewRoot .ov-card[data-sec]');
 
     await page.click('#ovAddSection');
     await page.click('#modalContent [data-role="bridge"]');
@@ -295,12 +359,17 @@ const { check, section, tempDataDir, launch, shot, crashed, finish, cleanup } = 
     s = await song();
     check(`a song started on the key above C, in major, is in D♭ (${s.key})`, s.key === 'Db' && s.scale === 'major');
     const active = async () => page.$eval('#keyGrid button.active', b => ({ pc: b.dataset.pc, text: b.textContent.trim() }));
+    const keyButton = async () => (await page.textContent('#btnKey')).replace(/\s+/g, ' ').trim();
+    check(`the Key button names it D♭ major (${await keyButton()})`, (await keyButton()) === 'Key D♭ major');
+    await page.click('#btnKey');
+    check('and opens the key picker', await page.isVisible('#keyGrid'));
     let on = await active();
     check(`the key grid shows it as D♭ (${on.text})`, on.pc === '1' && on.text === 'D♭');
     await page.click('#keyModeToggle [data-mode="minor"]');
     s = await song();
     on = await active();
     check(`switched to minor, it becomes C♯ minor (${s.key}, ${on.text})`, s.key === 'C#' && s.scale === 'natural_minor' && on.pc === '1' && on.text === 'C♯');
+    check(`and the Key button says so (${await keyButton()})`, (await keyButton()) === 'Key C♯ minor');
     await page.click('#keyModeToggle [data-mode="major"]');
     check('and back to D♭ major', (await song()).key === 'Db');
     await page.click('#keyGrid button[data-pc="10"]');

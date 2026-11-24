@@ -1,5 +1,5 @@
 /* ChordPath — ui/views/songs.js
- * Project browser: song cards with genre/feeling chips, progress pips, and
+ * Project browser: song cards with genre/feeling chips, progress stages, and
  * open/duplicate/export/delete actions. New song → wizard; Import JSON.
  */
 (function (global) {
@@ -11,11 +11,13 @@
 
   let search = '';
 
-  function progressPips(progress) {
+  // The four stages, named, with the ones ticked off on the Overview marked done.
+  function progressLine(progress) {
     const steps = global.Song.PROGRESS_STEPS;
-    return '<span class="pips">' + steps.map(s =>
-      `<span class="pip${progress && progress[s.id] ? ' done' : ''}" title="${UI().esc(s.name)}"></span>`
-    ).join('') + '</span>';
+    return `<div class="song-progress" title="How far the song has got. Tick the stages off on its Overview."><span class="label">Progress</span>` + steps.map(s => {
+      const done = !!(progress && progress[s.id]);
+      return `<span class="${done ? 'done' : ''}" title="${UI().esc(s.tip)}">${done ? '✓ ' : ''}${UI().esc(s.name)}</span>`;
+    }).join('') + '</div>';
   }
 
   function render() {
@@ -45,19 +47,19 @@
       <div class="song-card" data-id="${ui.esc(p.id)}" tabindex="0" role="button" aria-label="Open ${ui.esc(p.title)}">
         <div class="song-card-head">
           <span class="song-card-title">${ui.esc(p.title)}</span>
-          ${progressPips(p.progress)}
         </div>
         <div class="song-card-chips">${ui.genreChipHTML(p.genreId)}${ui.feelingChipHTML(p.feelingId)}</div>
         <div class="song-card-meta meta">
           ${ui.esc(p.key || '')} ${ui.esc((global.Scales.getScaleMeta(p.scale) || {}).name || p.scale || '')}
-          · ${ui.esc(p.tempo || '?')} BPM · ${ui.esc(p.sectionCount || 0)} sections
+          · ${ui.esc(p.tempo || '?')} BPM · ${ui.esc(p.sectionCount || 0)} ${(p.sectionCount || 0) === 1 ? 'section' : 'sections'}
         </div>
+        ${progressLine(p.progress)}
         <div class="song-card-foot">
-          <span class="meta">${ui.esc(ui.timeAgo(p.updatedAt))}</span>
+          <span class="meta">Changed ${ui.esc(ui.timeAgo(p.updatedAt))}</span>
           <span class="song-card-actions">
-            <button type="button" class="ghost small" data-act="dup">Duplicate</button>
-            <button type="button" class="ghost small" data-act="export">Export</button>
-            <button type="button" class="ghost small danger" data-act="del">Delete</button>
+            <button type="button" class="ghost small" data-act="dup" title="Make a copy of this song">Duplicate</button>
+            <button type="button" class="ghost small" data-act="export" title="Save this song as a file, to keep or to open on another computer">Save file</button>
+            <button type="button" class="ghost small danger" data-act="del" title="Delete this song">Delete</button>
           </span>
         </div>
       </div>
@@ -114,7 +116,7 @@
     a.click();
     doc.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    UI().toast('Song JSON downloaded');
+    UI().toast('Song file saved');
   }
 
   function wire() {

@@ -40,6 +40,35 @@
   let shownIdeas = {};            // group → the ideas on screen, for their buttons
   const history = new Map();      // section id → the chords before each change, for Undo
 
+  // The left pane's four views, and what Play plays.
+  const PANES = ['next', 'ideas', 'parts', 'about'];
+  const PLAY_MODES = ['chords', 'melody', 'band', 'combo', 'drums'];
+
+  // A chord's job in the key, in plain words, with the theory name beside it.
+  const PLAIN_FUNCTION = {
+    T: ['home', 'Tonic: the chord that feels like home'],
+    PD: ['moving', 'Predominant: moves away from home, ready to pull back'],
+    D: ['pulls home', 'Dominant: tension that wants to resolve home'],
+    'V/x': ['push-to', 'Secondary dominant: pushes hard at the chord after it'],
+    Borrowed: ['borrowed', 'Borrowed chord: from the parallel major or minor key'],
+    'TT-sub': ['sliding', 'Tritone substitution'],
+    '♭II': ['flat-II', 'Neapolitan chord'],
+    'Passing °7': ['passing', 'Diminished passing chord'],
+    Chromatic: ['sideways', 'Chromatic mediant'],
+  };
+
+  // A cadence by what it sounds like first; its theory name is the tooltip.
+  const PLAIN_CADENCE = {
+    authentic: 'Strong ending',
+    plagal: 'Soft “amen” ending',
+    half: 'Unfinished ending',
+    deceptive: 'Surprise ending',
+    backdoor: 'Backdoor ending',
+    'tt-sub': 'Sliding jazz ending',
+    'phrygian-half': 'Spanish-sounding half ending',
+    picardy: 'Bright ending in a minor key',
+  };
+
   // ── Accessors ────────────────────────────────────────────────────────────
   function song() { return App().state.song; }
   function section() {
@@ -238,10 +267,12 @@
     const s = song();
     const cur = section();
     const ui = UI();
-    host.innerHTML = s.sections.map(sec => `
+    host.innerHTML = s.sections.map(sec => {
+      const feeling = (F().getFeeling(Song().sectionFeeling(s, sec)) || {}).name;
+      return `
       <button type="button" class="sec-chip${sec.id === cur.id ? ' active' : ''}" data-sec="${ui.esc(sec.id)}"
-        title="${ui.esc((F().getFeeling(Song().sectionFeeling(s, sec)) || {}).name || '')}">${ui.esc(sec.name)}</button>
-    `).join('') + '<button type="button" class="sec-chip add" id="btnAddSection" title="Add section">+</button>';
+        title="Write the ${ui.esc(sec.name)}${feeling ? ' (' + ui.esc(feeling) + ')' : ''}. [ and ] step through the sections.">${ui.esc(sec.name)}</button>`;
+    }).join('') + '<button type="button" class="sec-chip add" id="btnAddSection" title="Add an empty section to the song">+ Add section</button>';
 
     host.querySelectorAll('[data-sec]').forEach(b => {
       b.addEventListener('click', () => global.Nav.go('section', s.id, b.dataset.sec));
@@ -288,12 +319,13 @@
       card.className = 'prog-chord ' + ch.category;
       card.dataset.idx = i;
       card.draggable = true;
-      const fn = A().functionalLabel(ch, key(), s.scale);
+      const fn = PLAIN_FUNCTION[A().functionalLabel(ch, key(), s.scale)] || ['', ''];
+      card.title = `${ch.fullName || ch.shortName}${fn[1] ? ' · ' + fn[1] : ''}. Click to hear it, drag to move it.`;
       card.innerHTML = `
         <div class="name">${UI().esc(ch.shortName)}</div>
         <div class="roman">${UI().esc(ch.roman || '')}</div>
-        <div class="func">${UI().esc(fn)}</div>
-        <button class="del" type="button" title="Remove" aria-label="Remove">×</button>
+        <div class="func">${UI().esc(fn[0])}</div>
+        <button class="del" type="button" title="Take this chord out" aria-label="Take this chord out">×</button>
       `;
       card.addEventListener('dragstart', (e) => {
         card.classList.add('dragging');
@@ -350,26 +382,37 @@
     else Viz().renderFretboard(displayChord());
   }
 
-  // ── The left pane: next chord, or ideas ──────────────────────────────────
+  // ── The left pane: next chord, ideas, parts, or about ────────────────────
+  function paneNow() { return PANES.includes(prefs().pane) ? prefs().pane : 'next'; }
+
   function showPane(which) {
-    prefs().pane = which === 'ideas' ? 'ideas' : 'next';
+    prefs().pane = PANES.includes(which) ? which : 'next';
     App().savePrefs();
     renderPane();
   }
 
+  const PANE_HELP = {
+    next: 'Best fit first. Click one to add it, or press <span class="kbd">1</span>–<span class="kbd">9</span>.',
+    ideas: 'Hear one first. It goes in only if you use it.',
+    parts: '',
+    about: '',
+  };
+
   function renderPane() {
-    const ideas = prefs().pane === 'ideas';
+    const now = paneNow();
     doc.querySelectorAll('#paneSwitch [data-pane]').forEach(b => {
-      const on = (b.dataset.pane === 'ideas') === ideas;
+      const on = b.dataset.pane === now;
       b.classList.toggle('active', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    $('options').classList.toggle('hidden', ideas);
-    $('ideas').classList.toggle('hidden', !ideas);
-    $('paneHelp').innerHTML = ideas
-      ? 'Hear one first. It goes in only if you use it.'
-      : 'Sorted by fit. Click — or press <span class="kbd">1</span>–<span class="kbd">9</span>.';
-    if (ideas) renderIdeas(); else renderOptions();
+    $('options').classList.toggle('hidden', now !== 'next');
+    $('nextTools').classList.toggle('hidden', now !== 'next');
+    $('ideas').classList.toggle('hidden', now !== 'ideas');
+    $('parts').classList.toggle('hidden', now !== 'parts');
+    $('about').classList.toggle('hidden', now !== 'about');
+    $('paneHelp').innerHTML = PANE_HELP[now];
+    if (now === 'ideas') renderIdeas();
+    else if (now === 'next') renderOptions();
   }
 
   // ── Next-chord options ───────────────────────────────────────────────────
@@ -386,7 +429,7 @@
     });
 
     if (opts.length === 0) {
-      host.innerHTML = '<p class="meta">No options match your filters. Enable more categories above.</p>';
+      host.innerHTML = '<p class="meta">No chords to suggest with these kinds switched off. Open “Kinds of chord to suggest” above and tick more.</p>';
       return;
     }
 
@@ -416,8 +459,10 @@
       if (isEmotionTop && feeling) badges.push(`<span class="badge feel">${UI().esc(feeling.name)}</span>`);
       if (songHit && songHit.windowLen >= 3) badges.push(`<span class="badge song">Sounds like: ${UI().esc(songHit.title)}</span>`);
 
-      const shortcut = idx < 9 ? `<span class="kbd" style="opacity:.4">${idx + 1}</span>` : '';
+      const shortcut = idx < 9 ? `<span class="kbd" title="Press ${idx + 1} to add it">${idx + 1}</span>` : '';
 
+      // The theory note goes in the tooltip, so the card says what it does first.
+      card.title = `Add ${ch.fullName || ch.shortName}${ch.categoryNote ? '. ' + ch.categoryNote : ''}`;
       card.innerHTML = `
         <div class="opt-head">
           <div class="opt-name">${UI().esc(ch.shortName)}</div>
@@ -425,11 +470,10 @@
         </div>
         <div class="opt-cat"><span class="opt-dot"></span>${UI().theoryTerm(UI().prettyCat(ch.category), UI().THEORY_TERMS[ch.category])} ${shortcut}</div>
         <div class="opt-note">${UI().esc(plainChordOutcome(ch, t))}</div>
-        ${ch.categoryNote ? `<div class="opt-theory">${UI().esc(ch.categoryNote)}</div>` : ''}
         ${badges.length ? `<div class="opt-badges">${badges.join('')}</div>` : ''}
         <div class="opt-meta">
           <span class="fullname">${UI().esc(ch.fullName)}</span>
-          <span class="tension-num">Tension <strong>${t}</strong>/10</span>
+          <span class="tension-num" title="How much it pulls forward: 1 is settled, 10 is very tense">Tension <strong>${t}</strong>/10</span>
         </div>
       `;
       card.addEventListener('mouseenter', () => previewShapeChord(ch));
@@ -568,7 +612,10 @@
     host.innerHTML = `
       <div class="ideas-head">
         <p class="meta">Things to try in ${ui.esc(keyName)}, ${ui.esc(time)}. Using a progression replaces this section's chords; Undo puts yours back.</p>
-        <button type="button" class="ghost small" id="ideasMore" title="Another handful of progressions and melody shapes">↻ Other ideas</button>
+        <span class="ideas-buttons">
+          <button type="button" class="ghost small" id="ideasMore" title="Another handful of progressions and melody shapes">↻ Other ideas</button>
+          <button type="button" class="ghost small" id="btnPresets" title="Ready-made scenes: chords, a rhythm, drums and melody shapes together, in your key">Starter sounds…</button>
+        </span>
       </div>
       ${['progressions', 'rhythms', 'grooves', 'times', 'melodies'].map(group).join('')}`;
   }
@@ -647,9 +694,9 @@
     const profile = R().profileFor(s.genreId);
     if (!m.primary) {
       $('genrePrimary').textContent = profile ? profile.name : '—';
-      $('genreInfluences').textContent = chords().length ? 'listening for fit' : 'pick a chord to begin';
+      $('genreInfluences').textContent = chords().length ? '(the genre you chose; the chords do not point anywhere yet)' : '(the genre you chose; add chords to hear what they sound like)';
       $('rhythmTime').textContent = '—';
-      $('rhythmTip').textContent = 'Add chords to hear how this palette behaves.';
+      $('rhythmTip').textContent = 'Add chords for a groove tip.';
       return;
     }
     $('genrePrimary').textContent = m.primary.name;
@@ -673,8 +720,8 @@
     const drums = R().drumsFor(sec.drumPattern, time);
     const vocal = R().vocalFor(sec.vocalPattern);
     const under = R().underFor(sec.underPattern);
-    if ($('comboMeta') && profile) {
-      $('comboMeta').textContent = profile.subgenres ? profile.subgenres.join(', ') : '';
+    if ($('comboMeta')) {
+      $('comboMeta').textContent = profile && profile.subgenres ? `Your genre, ${profile.name}, takes in ${profile.subgenres.join(', ')}.` : '';
     }
     if ($('sectionAdvice')) {
       const combo = R().describeCombo(s.genreId, sec.rhythmPattern, sec.drumPattern, sec.vocalPattern, sec.underPattern, time);
@@ -700,49 +747,36 @@
     `).join('');
   }
 
+  // What the ending sounds like first; the theory name is in the tooltip.
   function renderCadence() {
     const s = song();
     const cad = A().detectCadence(chords(), key(), s.scale);
     const banner = $('cadenceBanner');
     if (!cad) { banner.classList.add('hidden'); return; }
     banner.classList.remove('hidden');
-    banner.innerHTML = `<strong>${UI().theoryTerm(cad.label, cad.theoryName || UI().THEORY_TERMS[cad.type])}</strong> - ${UI().esc(cad.detail)}`;
+    const plain = PLAIN_CADENCE[cad.type] || cad.label;
+    const theory = plain === cad.label ? (cad.theoryName || UI().THEORY_TERMS[cad.type]) : cad.label;
+    banner.innerHTML = `<strong>${UI().theoryTerm(plain, theory)}</strong>: ${UI().esc(cad.detail)}`;
   }
 
+  // Advice for the section that follows this one, by the kind it would be.
   function renderModulation() {
     const host = $('modulation');
     const s = song();
     const sec = section();
     if (chords().length === 0) {
-      host.innerHTML = '<p class="meta">Add chords, then compare how the same loop behaves in other section roles.</p>';
+      host.innerHTML = '<p class="meta">Add chords, then see what usually changes when the song moves on to a chorus, a bridge or an outro.</p>';
       return;
     }
     const current = R().byId(R().SECTIONS, sec.role);
     const arc = A().tensionArc(chords(), key());
     const end = arc[arc.length - 1] || 0;
     const cadence = A().detectCadence(chords(), key(), s.scale);
-    host.innerHTML = '';
-    R().SECTIONS.filter(x => x.id !== sec.role).forEach(x => {
-      const d = doc.createElement('div');
-      d.className = 'mod-item'; d.tabIndex = 0;
-      const advice = sectionMoveAdvice(current, x, end, cadence);
-      d.innerHTML = `
-        <div class="mod-key">${current ? UI().esc(current.name) + ' -> ' : ''}${UI().esc(x.name)}</div>
-        <div class="mod-label">${UI().esc(x.target)}</div>
-        <div class="mod-inst">${UI().esc(advice)}</div>
-      `;
-      const apply = () => {
-        App().mutate(sg => {
-          sec.role = x.id;
-          Song().autoNameSections(sg);
-        });
-        renderAll();
-        UI().toast(`Section role set to ${x.name}`);
-      };
-      d.addEventListener('click', apply);
-      d.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
-      host.appendChild(d);
-    });
+    host.innerHTML = R().SECTIONS.filter(x => x.id !== sec.role).map(x => `
+      <div class="mod-item">
+        <div class="mod-key">${current ? UI().esc(current.name) + ' → ' : ''}${UI().esc(x.name)} <span class="mod-label">${UI().esc(x.target)}</span></div>
+        <div class="mod-inst">${UI().esc(sectionMoveAdvice(current, x, end, cadence))}</div>
+      </div>`).join('');
   }
 
   function sectionMoveAdvice(from, to, endingTension, cadence) {
@@ -757,9 +791,17 @@
     return 'Change one layer at a time so the section shift is audible without losing the song identity.';
   }
 
+  // The feeling's description, and the button that adds its best chord.
   function renderFeelingMeta() {
     const f = F().getFeeling(sectionFeelingId());
-    $('emotionMeta').textContent = f ? (f.vibe + ' ' + f.tip) : '';
+    $('emotionMeta').textContent = f
+      ? `${f.name}: ${f.vibe} ${f.tip}`
+      : 'No feeling chosen. Choose one at the top and the suggestions lean towards it; nothing you wrote changes.';
+    $('emotionSelect').value = f ? f.id : '';
+    $('feelingPick').title = f ? `${f.name}: ${f.vibe}` : 'What this section should make people feel. It only guides the suggestions; nothing you wrote changes.';
+    const pick = $('btnPickEmotion');
+    pick.classList.toggle('hidden', !f);
+    if (f) pick.textContent = `Add the best fit for “${f.name}”`;
   }
 
   // ── Tabs pane ────────────────────────────────────────────────────────────
@@ -946,6 +988,39 @@
     clearHighlights();
   }
 
+  // One Play button, and a choice of what it plays.
+  function playMode() { return PLAY_MODES.includes(prefs().playWhat) ? prefs().playWhat : 'chords'; }
+
+  function renderPlayWhat() {
+    doc.querySelectorAll('#playWhat [data-play]').forEach(b => {
+      const on = b.dataset.play === playMode();
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+  }
+
+  function playSelected() {
+    const mode = playMode();
+    if (mode === 'drums') playDrumsOnly();
+    else if (mode === 'band') playBand(false);
+    else if (mode === 'combo') playBand(true);
+    else if (mode === 'melody') playMelody();
+    else playChords();
+  }
+
+  // Choosing what plays while something is playing switches to it at once,
+  // so two choices can be compared; start says to play it either way.
+  function choosePlayMode(mode, start) {
+    const switching = playing;
+    prefs().playWhat = PLAY_MODES.includes(mode) ? mode : 'chords';
+    App().savePrefs();
+    renderPlayWhat();
+    if (start || switching) {
+      stopAll();
+      playSelected();
+    }
+  }
+
   // ── Feeling ──────────────────────────────────────────────────────────────
   // None chosen: the section has no feeling, even when the song has one.
   function setSectionFeeling(feelingId) {
@@ -990,6 +1065,21 @@
     });
   }
 
+  // Ready-made scenes, offered from the Ideas pane.
+  function openPresets() {
+    UI().openModal(global.Learn.renderPresets());
+    doc.querySelectorAll('#modalContent [data-preset]').forEach(b => {
+      b.addEventListener('click', () => {
+        const p = global.Learn.PRESETS[parseInt(b.dataset.preset, 10)];
+        if (!p) return;
+        applyPreset(p);
+        UI().closeModal();
+        renderAll();
+        UI().toast(`"${p.name}", in ${key()}. Undo takes its chords out again.`);
+      });
+    });
+  }
+
   // ── Sync controls from state ─────────────────────────────────────────────
   function syncControls() {
     const s = song();
@@ -1019,12 +1109,27 @@
       b.classList.toggle('active', active);
       b.setAttribute('aria-selected', active ? 'true' : 'false');
     });
+    doc.querySelectorAll('.viz-tabs [data-viz]').forEach(b => {
+      b.classList.toggle('active', b.dataset.viz === p.viz);
+      b.setAttribute('aria-selected', b.dataset.viz === p.viz ? 'true' : 'false');
+    });
+    $('vizPiano').classList.toggle('hidden', p.viz !== 'piano');
+    $('vizGuitar').classList.toggle('hidden', p.viz !== 'guitar');
+    renderPlayWhat();
     applyBandToneSettings();
   }
 
   function renderScaleMeta() {
     const meta = S().getScaleMeta(song().scale);
     if (meta) $('scaleMeta').textContent = `${meta.mood} • ${(meta.genres || []).join(', ')}`;
+  }
+
+  // The key, as the top bar names it: E major, C♯ minor, D Dorian.
+  function keyLabel() {
+    const s = song();
+    const meta = S().getScaleMeta(s.scale);
+    const mode = s.scale === 'major' ? 'major' : s.scale === 'natural_minor' ? 'minor' : (meta ? meta.name : s.scale);
+    return glyph(s.key) + ' ' + mode;
   }
 
   function renderKeyGrid() {
@@ -1035,13 +1140,11 @@
       b.classList.toggle('active', pc === home);
       b.textContent = glyph(pc === home ? s.key : S().keyName(pc, s.scale));
     });
+    $('keyName').textContent = keyLabel();
   }
 
   function renderHeading() {
-    const sec = section();
-    const f = F().getFeeling(sectionFeelingId());
-    const own = sec.meterOverride ? ` <span class="chip" title="This section has a time of its own">in ${UI().esc(Mt().id(sec.meterOverride))}</span>` : '';
-    $('sectionHeading').innerHTML = `${UI().esc(sec.name)}${f ? ` <span class="chip chip-feeling">${UI().esc(f.name)}</span>` : ''}${own}`;
+    $('sectionHeading').textContent = section().name;
   }
 
   // ── Master render ────────────────────────────────────────────────────────
@@ -1094,6 +1197,7 @@
         renderIdeas();
         return;
       }
+      if (e.target.closest('#btnPresets')) { openPresets(); return; }
       const btn = e.target.closest('[data-act]');
       const row = btn && btn.closest('.idea');
       if (!row || btn.disabled) return;
@@ -1118,12 +1222,10 @@
       renderAll();
     });
 
-    $('btnPlay').addEventListener('click', playChords);
-    $('btnPlayDrums').addEventListener('click', playDrumsOnly);
-    $('btnPlayBand').addEventListener('click', () => playBand(false));
-    $('btnPlayCombo').addEventListener('click', () => playBand(true));
-    $('btnPlayMelody').addEventListener('click', playMelody);
+    $('btnPlay').addEventListener('click', () => { stopAll(); playSelected(); });
     $('btnStop').addEventListener('click', stopAll);
+    doc.querySelectorAll('#playWhat [data-play]').forEach(b =>
+      b.addEventListener('click', () => choosePlayMode(b.dataset.play, false)));
     $('btnUndo').addEventListener('click', undo);
     $('btnReset').addEventListener('click', () => {
       editChords(sec => { sec.progSpecs = []; });
@@ -1203,24 +1305,6 @@
       });
     });
 
-    // More popover actions
-    $('btnShortcuts').addEventListener('click', () => UI().openModal(global.Learn.renderShortcuts()));
-    $('btnLearn').addEventListener('click', () => UI().openModal(global.Learn.renderPrimer()));
-    $('btnLayerGuide').addEventListener('click', () => UI().openModal(global.Learn.renderLayerGuide()));
-    $('btnPresets').addEventListener('click', () => {
-      UI().openModal(global.Learn.renderPresets());
-      doc.querySelectorAll('[data-preset]').forEach(b => {
-        b.addEventListener('click', () => {
-          const p = global.Learn.PRESETS[parseInt(b.dataset.preset, 10)];
-          if (!p) return;
-          applyPreset(p);
-          UI().closeModal();
-          renderAll();
-          UI().toast(`"${p.name}", in ${key()}. Undo takes its chords out again.`);
-        });
-      });
-    });
-    $('btnQuizStart').addEventListener('click', startQuiz);
     $('btnExportMidi').addEventListener('click', () => {
       if (needsChords()) return;
       const ok = global.Midi.download({
@@ -1327,11 +1411,11 @@
   // ── Keyboard (only while this view is active) ────────────────────────────
   function handleKey(e) {
     const k = e.key.toLowerCase();
-    if (e.key === ' ') { e.preventDefault(); if (playing) stopAll(); else playChords(); return; }
-    if (k === 'd') { e.preventDefault(); playDrumsOnly(); return; }
-    if (k === 'b') { e.preventDefault(); playBand(false); return; }
-    if (k === 'x') { e.preventDefault(); playBand(true); return; }
-    if (k === 'm') { playMelody(); return; }
+    if (e.key === ' ') { e.preventDefault(); if (playing) stopAll(); else playSelected(); return; }
+    if (k === 'd') { e.preventDefault(); choosePlayMode('drums', true); return; }
+    if (k === 'b') { e.preventDefault(); choosePlayMode('band', true); return; }
+    if (k === 'x') { e.preventDefault(); choosePlayMode('combo', true); return; }
+    if (k === 'm') { choosePlayMode('melody', true); return; }
     if (k === 'i' && !e.metaKey && !e.ctrlKey) { showPane(prefs().pane === 'ideas' ? 'next' : 'ideas'); return; }
     if (k === 'l') {
       prefs().loop = !prefs().loop; $('loop').checked = prefs().loop;
@@ -1355,6 +1439,7 @@
     }
     if (k === 'p') {
       const next = prefs().viz === 'piano' ? 'guitar' : 'piano';
+      $('vizBlock').open = true;
       const btn = doc.querySelector(`.viz-tabs [data-viz="${next}"]`);
       if (btn) btn.click();
       return;
@@ -1385,5 +1470,5 @@
   }
 
   global.Views = global.Views || {};
-  global.Views.Section = { enter, renderAll, handleKey, stopAudioHighlights: clearHighlights };
+  global.Views.Section = { enter, renderAll, handleKey, startQuiz, stopAudioHighlights: clearHighlights };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -256,8 +256,8 @@
         <button type="button" class="ghost" id="dawHome" title="Back to the start (Home)">⏮</button>
         <button type="button" class="primary" id="dawPlay" title="Play / stop (Space)">▶ Play</button>
         <button type="button" class="ghost daw-rec" id="dawRec" title="Record onto an audio track (R)">● Record</button>
-        <label class="daw-field">from <select id="dawInput" title="The input that recording listens to">${inputOptions()}</select></label>
-        <button type="button" class="ghost daw-toggle" id="dawMonitor" title="Hear your input through the app while you play. Use headphones: through speakers the microphone would pick itself up.">Hear it</button>
+        <label class="daw-field" title="The input that recording listens to">Input <select id="dawInput" aria-label="Input to record from">${inputOptions()}</select></label>
+        <button type="button" class="ghost daw-toggle" id="dawMonitor" title="Monitor: hear your input through the app while you play. Use headphones: through speakers the microphone would pick itself up.">Monitor</button>
         <div class="daw-pos"><span id="dawBars" class="mono">1.1</span><span id="dawClock" class="meta">0:00.0</span></div>
         <label class="daw-field" title="The tempo where the playhead is. Typing here changes it for that stretch of the song.">♩ <input id="dawTempo" aria-label="Tempo" type="number" min="40" max="240" value="${esc(p.tempo)}" /></label>
         <button type="button" class="ghost" id="dawMeter" title="Time signature where the playhead is. Click to change tempo or time signature part-way through the song.">4/4</button>
@@ -268,9 +268,11 @@
         <div class="daw-actions">
           <button type="button" class="ghost" id="dawUndo" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
           <button type="button" class="ghost" id="dawRedo" title="Redo (Ctrl+Y)" aria-label="Redo">↷</button>
-          <button type="button" class="ghost" id="dawZoomOut" title="Zoom out (-)">−</button>
-          <button type="button" class="ghost" id="dawZoomIn" title="Zoom in (+)">+</button>
-          <button type="button" class="ghost" id="dawRebuild" title="Rebuild the note tracks from the song as it is now. Recordings are kept.">Rebuild</button>
+          <span class="daw-zoom" title="Zoom the timeline (- and +, or Ctrl and the mouse wheel)">Zoom
+            <button type="button" class="ghost" id="dawZoomOut" title="Zoom out (-)" aria-label="Zoom out">−</button>
+            <button type="button" class="ghost" id="dawZoomIn" title="Zoom in (+)" aria-label="Zoom in">+</button>
+          </span>
+          <button type="button" class="ghost" id="dawRebuild" title="Bring in the song's chords and parts as they are now in Write, replacing the note tracks here. Recordings are kept.">Update from song</button>
           <button type="button" class="ghost" id="dawImport" title="Bring an audio file in on a track of its own. You can also drop a file anywhere here.">Import…</button>
           <input type="file" id="dawImportFile" accept="audio/*,.wav,.mp3,.ogg,.oga,.flac,.m4a,.aac,.opus" hidden />
           <button type="button" class="ghost" id="dawExport">Export…</button>
@@ -549,7 +551,7 @@
     const body = $('dawPanelBody');
     if (!body || !S.project) return;
     const { track, clip } = selection();
-    $('dawClipInfo').textContent = clip ? clipInfo(track, clip) : (track ? track.name : '');
+    $('dawClipInfo').textContent = clip ? clipInfo(track, clip) : (track ? track.name + ' track' : '');
     $('dawTools').innerHTML = S.panel === 'mixer' ? '' : toolsHTML(track, clip);
     wireTools();
 
@@ -1381,7 +1383,7 @@
   function rebuild() {
     const sg = song();
     if (!sg) return;
-    UI().confirmBox('Replace the note tracks with a fresh copy of the song as it is now? Note edits made here are lost (Undo brings them back); recordings are kept, and so are tempo and time-signature changes made here.')
+    UI().confirmBox('Bring in the song as it is now in Write? This replaces the note tracks here. Note edits made here are lost (Undo brings them back); recordings are kept, and so are tempo and time-signature changes made here.')
       .then(ok => {
         if (!ok) return;
         const fresh = P().fromSong(sg);
@@ -1398,7 +1400,7 @@
         S.project = P().sanitize(fresh);
         S.sel = { trackId: S.project.tracks[0] ? S.project.tracks[0].id : null, clipId: null, noteIds: [] };
         commit({ structure: true });
-        UI().toast('Rebuilt from the song');
+        UI().toast('Updated from the song. Undo puts your note edits back.');
       });
   }
 

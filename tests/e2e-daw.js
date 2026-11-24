@@ -440,7 +440,7 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     const listening = () => page.evaluate(() => DawEngine.get().isMonitoring());
     await page.click('#dawMonitor');
     await page.waitForFunction(() => DawEngine.get().isMonitoring(), null, { timeout: 10000 }).catch(() => {});
-    check('"Hear it" passes the chosen input through to the output', (await listening()) && await page.locator('#dawMonitor.on').count() === 1 &&
+    check('Monitor passes the chosen input through to the output', (await listening()) && await page.locator('#dawMonitor.on').count() === 1 &&
       await page.evaluate(id => DawEngine.get().input.stream.getAudioTracks()[0].getSettings().deviceId === id, chosenInput));
     await page.click('#dawMonitor');
     await page.waitForFunction(() => !DawEngine.get().isMonitoring(), null, { timeout: 10000 }).catch(() => {});

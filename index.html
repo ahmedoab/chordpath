@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ChordPath — feeling-driven song studio</title>
+  <title>ChordPath</title>
   <meta name="description" content="A songwriting aid: choose the key and time, hear chords, rhythms, grooves and melody shapes before you use them, then get guitar tabs for every part and a DAW guide for recording and mixing." />
   <!-- ChordPath is fully self-contained: everything loads from this folder
        and the page is not allowed to contact any other host. -->
@@ -15,20 +15,23 @@
 <!-- ─── Top navigation ─────────────────────────────────────────────── -->
 <nav class="mainnav">
   <div class="brand"><h1>ChordPath</h1></div>
-  <div class="nav-tabs" id="navTabs" role="tablist">
-    <button type="button" data-nav="songs">Songs</button>
-    <button type="button" data-nav="muse">Muse</button>
-    <button type="button" data-nav="overview" disabled title="Open a song first">Overview</button>
-    <button type="button" data-nav="section" disabled title="Open a song first">Section</button>
-    <button type="button" data-nav="studio" disabled title="Open a song first">Studio</button>
-    <button type="button" data-nav="daw" disabled title="Open a song first">DAW</button>
-    <button type="button" data-nav="handoff" disabled title="Open a song first">Handoff</button>
+  <div class="nav-tabs" id="navTabs">
+    <button type="button" data-nav="songs" title="All your songs, and where a new one starts">Songs</button>
+    <button type="button" data-nav="muse" title="Muse, ChordPath's own AI: teach it songs you love, ask it for chord ideas">Muse</button>
+    <!-- The open song's own pages; hidden until a song is open. -->
+    <div class="nav-song" id="navSong" hidden>
+      <span id="navSongTitle" class="nav-song-title"></span>
+      <button type="button" data-nav="overview" disabled title="The whole song: its sections in order, key, time and tempo, snapshots">Overview</button>
+      <button type="button" data-nav="section" disabled title="Write a section: its chords, rhythm, drums and melody, with the tab">Write</button>
+      <button type="button" data-nav="studio" disabled title="Which instruments to use in each section, and how to record and mix them">Studio guide</button>
+      <button type="button" data-nav="daw" disabled title="Record, arrange and mix the song">DAW</button>
+      <button type="button" data-nav="handoff" disabled title="Every tab and note for the song on one page, to print or save as a PDF">Song sheet</button>
+    </div>
   </div>
   <div class="nav-right">
-    <span id="navSongTitle" class="nav-song-title"></span>
-    <span id="saveStatus" class="save-status" title="Autosave status"></span>
-    <button class="hbtn" id="btnGuides" type="button">Guides</button>
-    <button class="hbtn" id="btnTheme" type="button" aria-label="Toggle theme">Theme</button>
+    <span id="saveStatus" class="save-status" title="Your song saves itself as you work"></span>
+    <button class="hbtn" id="btnHelp" type="button" title="How ChordPath works, shortcuts and guides">Help</button>
+    <button class="hbtn" id="btnTheme" type="button" title="Switch between light and dark (T)">Theme</button>
   </div>
 </nav>
 
@@ -38,11 +41,11 @@
     <header class="songs-head">
       <div>
         <h3>Your songs</h3>
-        <p class="meta">Everything autosaves locally. Snapshots and JSON exports protect finished work.</p>
+        <p class="meta">Songs save themselves on this computer as you work. Click one to open it.</p>
       </div>
       <div class="songs-actions">
         <input id="songSearch" type="search" placeholder="Search songs…" aria-label="Search songs" />
-        <button id="btnImportSong" type="button" class="ghost">Import JSON</button>
+        <button id="btnImportSong" type="button" class="ghost" title="Open a song saved from ChordPath (a .chordpath.json file)">Open a song file…</button>
         <input id="importFile" type="file" accept=".json,application/json" hidden />
         <button id="btnNewSong" type="button" class="primary">+ New song</button>
       </div>
@@ -71,31 +74,18 @@
 <div class="app">
 
   <header class="bar topbar">
-    <div class="section-switch" id="sectionSwitch"></div>
-
-    <div class="key-block">
-      <div id="keyGrid" class="key-grid" role="group" aria-label="Choose key"></div>
-      <div class="key-mode-toggle" id="keyModeToggle" role="tablist" aria-label="Key colour">
-        <button type="button" data-mode="major" class="active" role="tab" aria-selected="true">maj</button>
-        <button type="button" data-mode="minor" role="tab" aria-selected="false">min</button>
-      </div>
-    </div>
-
-    <div class="scale-block">
-      <select id="scaleSelect" aria-label="Choose scale"></select>
-      <p id="scaleMeta" class="scale-meta"></p>
-    </div>
-
-    <div class="header-actions">
-      <button class="hbtn" popovertarget="popFeeling" type="button" id="btnFeelingPop">Feeling</button>
-      <button class="hbtn" popovertarget="popCategories" type="button">Chord colors</button>
-      <button class="hbtn" popovertarget="popMore" type="button">More</button>
+    <div class="section-switch" id="sectionSwitch" aria-label="Sections of the song"></div>
+    <div class="song-bits">
+      <button class="hbtn key-btn" popovertarget="popKey" type="button" id="btnKey" title="The key of the whole song. Click to change it.">Key <strong id="keyName">—</strong></button>
+      <label class="meter-pick feeling-pick" id="feelingPick" title="What this section should make people feel. It only guides the suggestions; nothing you wrote changes.">Feeling
+        <select id="emotionSelect" aria-label="Feeling of this section"></select>
+      </label>
     </div>
   </header>
 
   <section class="bar progression-bar">
     <div class="progression-head">
-      <h2 id="sectionHeading">Progression</h2>
+      <h2 id="sectionHeading" class="section-heading">Chords</h2>
       <div class="prog-tools">
         <label class="meter-pick" title="The time signature of this section">Time
           <select id="sectionMeter" aria-label="Time signature of this section"></select>
@@ -109,74 +99,101 @@
     </div>
     <div id="progression" class="progression empty" aria-live="polite"></div>
     <div id="cadenceBanner" class="cadence-banner hidden"></div>
-    <div class="tension-row">
-      <span class="meta">Tension arc</span>
-      <svg id="tensionChart" class="tension-chart" viewBox="0 0 200 28" preserveAspectRatio="none"></svg>
-    </div>
   </section>
 
   <main class="workspace">
 
     <section class="pane options-pane">
       <div class="pane-head">
-        <div class="pane-switch" id="paneSwitch" role="tablist" aria-label="Suggestions">
-          <button type="button" data-pane="next" class="active" role="tab" aria-selected="true">Next chord</button>
-          <button type="button" data-pane="ideas" role="tab" aria-selected="false">Ideas</button>
+        <div class="pane-switch" id="paneSwitch" role="tablist" aria-label="What this side shows">
+          <button type="button" data-pane="next" class="active" role="tab" aria-selected="true" title="Chords that could come next, best fit first (I switches to Ideas)">Next chord</button>
+          <button type="button" data-pane="ideas" role="tab" aria-selected="false" title="Progressions, rhythms, drum grooves, other times and melody shapes to hear and try">Ideas</button>
+          <button type="button" data-pane="parts" role="tab" aria-selected="false" title="What each instrument plays in this section">Parts</button>
+          <button type="button" data-pane="about" role="tab" aria-selected="false" title="What these chords do, how tense each one is, and songs that use them">About</button>
         </div>
-        <span class="pane-help" id="paneHelp">Sorted by fit. Click — or press <span class="kbd">1</span>–<span class="kbd">9</span>.</span>
+        <span class="pane-help" id="paneHelp"></span>
       </div>
+
+      <div class="next-tools" id="nextTools">
+        <details class="chord-kinds" id="chordKinds">
+          <summary>Kinds of chord to suggest</summary>
+          <div class="filters">
+            <label><input type="checkbox" data-filter="diatonic" checked /> <span class="term-tip" tabindex="0" data-theory="Diatonic chord">In key</span> <span class="meta">the plain chords of the key</span></label>
+            <label><input type="checkbox" data-filter="borrowed" checked /> <span class="term-tip" tabindex="0" data-theory="Borrowed chord / modal interchange">Borrowed color</span> <span class="meta">darker or lighter</span></label>
+            <label><input type="checkbox" data-filter="secondary" checked /> <span class="term-tip" tabindex="0" data-theory="Secondary dominant">Push-to chord</span> <span class="meta">points hard at the next</span></label>
+            <label><input type="checkbox" data-filter="ttSub" /> <span class="term-tip" tabindex="0" data-theory="Tritone substitution">Sliding dominant</span> <span class="meta">jazzy slide home</span></label>
+            <label><input type="checkbox" data-filter="dimPassing" /> <span class="term-tip" tabindex="0" data-theory="Diminished passing chord">Passing shadow</span> <span class="meta">a step between two chords</span></label>
+            <label><input type="checkbox" data-filter="neapolitan" checked /> <span class="term-tip" tabindex="0" data-theory="Neapolitan chord">Flat-II shadow</span> <span class="meta">a dark half-step</span></label>
+            <label><input type="checkbox" data-filter="chromatic" /> <span class="term-tip" tabindex="0" data-theory="Chromatic mediant">Sideways jump</span> <span class="meta">a big cinematic shift</span></label>
+            <label><input type="checkbox" data-filter="aug6" /> <span class="term-tip" tabindex="0" data-theory="Augmented-sixth chord">Big pre-chorus pull</span> <span class="meta">tension before a chorus</span></label>
+          </div>
+        </details>
+        <label class="ck" title="Show the chords with a 7th added: Cmaj7, Am7, G7 (7)"><input id="withSevenths" type="checkbox" /> 7th chords</label>
+        <button id="btnPickEmotion" type="button" class="ghost small hidden" title="Adds the suggestion that best fits this section's feeling (F)">Add the best fit for the feeling</button>
+      </div>
+
       <div id="options" class="options-grid"></div>
       <div id="ideas" class="ideas hidden" aria-live="polite"></div>
-    </section>
 
-    <aside class="pane right-pane">
-      <div class="sounds-like-row">
-        <span class="label">Sounds like</span>
-        <span id="genrePrimary" class="value">—</span>
-        <span id="genreInfluences" class="sub"></span>
-      </div>
-
-      <div class="arrangement-panel">
-        <div class="arrangement-head">
-          <span class="label">Sound palette</span>
-          <span id="comboMeta" class="sub"></span>
-        </div>
-        <div class="arrangement-grid">
+      <div id="parts" class="parts hidden">
+        <p class="meta parts-intro">What each instrument plays in this section. Pick from the lists, or hear them first under Ideas.</p>
+        <div class="parts-grid">
+          <label>This section is a
+            <select id="sectionRole" aria-label="What kind of section this is"></select>
+          </label>
           <label>Genre
-            <select id="paletteStyle" aria-label="Choose genre palette"></select>
+            <select id="paletteStyle" aria-label="Genre of the song"></select>
           </label>
-          <label>Section
-            <select id="sectionRole" aria-label="Choose section role"></select>
-          </label>
-          <label>Rhythm
-            <select id="rhythmPattern" aria-label="Choose rhythm guitar pattern"></select>
+          <label>Rhythm guitar
+            <select id="rhythmPattern" aria-label="What the rhythm guitar plays"></select>
           </label>
           <label>Drums
-            <select id="drumPattern" aria-label="Choose drum pattern"></select>
+            <select id="drumPattern" aria-label="What the drums play"></select>
           </label>
           <label>Vocal melody
-            <select id="vocalPattern" aria-label="Choose vocal melody pattern"></select>
+            <select id="vocalPattern" aria-label="The shape of the vocal melody"></select>
           </label>
           <label>Under melody
-            <select id="underPattern" aria-label="Choose under melody pattern"></select>
+            <select id="underPattern" aria-label="A second melody under the vocal"></select>
           </label>
         </div>
+        <p class="meta parts-note">Choosing a genre sets the parts and sounds to that genre's usual ones. Your chords stay as they are.</p>
         <p id="sectionAdvice" class="section-advice"></p>
       </div>
 
-      <div class="viz-block">
-        <div class="viz-tabs" role="tablist" aria-label="Visualizer">
-          <button type="button" class="active" data-viz="piano" role="tab" aria-selected="true">Piano</button>
-          <button type="button" data-viz="guitar" role="tab" aria-selected="false">Guitar scale</button>
+      <div id="about" class="about hidden">
+        <div class="about-block">
+          <h4>What the chords do</h4>
+          <div class="description-card" id="descriptionCard"><p id="description">Add chords to see what they do.</p></div>
         </div>
-        <div id="vizPiano" class="piano" role="img" aria-label="Piano keyboard showing current chord">
-          <div id="pianoKeys" class="piano-keys"></div>
+        <div class="about-block">
+          <h4>Tension, chord by chord</h4>
+          <svg id="tensionChart" class="tension-chart" viewBox="0 0 200 28" preserveAspectRatio="none" aria-label="How tense each chord feels"></svg>
+          <p class="meta">Low feels settled. High pulls forward, wanting the next chord.</p>
         </div>
-        <div id="vizGuitar" class="fretboard hidden" role="img" aria-label="Guitar fretboard showing chord tones across the neck">
-          <div id="fretGrid" class="fret-grid"></div>
+        <div class="about-block">
+          <h4>Sounds like</h4>
+          <p class="sounds-like"><span id="genrePrimary" class="value">—</span> <span id="genreInfluences" class="sub"></span></p>
+          <p id="comboMeta" class="meta"></p>
+          <div id="songList" class="song-list"><div class="song faint">Add 2 to 4 chords to find songs that use them.</div></div>
+        </div>
+        <div class="about-block">
+          <h4>Groove</h4>
+          <p class="rhythm-card"><span id="rhythmTime" class="value">—</span></p>
+          <p id="rhythmTip" class="sub"></p>
+        </div>
+        <div class="about-block" id="feelingBlock">
+          <h4>The feeling</h4>
+          <p id="emotionMeta" class="emotion-meta"></p>
+        </div>
+        <div class="about-block">
+          <h4>Moving on from here</h4>
+          <div id="modulation" class="modulation-grid"></div>
         </div>
       </div>
+    </section>
 
+    <aside class="pane right-pane">
       <div class="chord-shape-block">
         <div class="shape-head">
           <span class="label">How to play</span>
@@ -187,106 +204,60 @@
       </div>
 
       <div class="tab-block">
-        <div class="viz-tabs" id="tabTabs" role="tablist" aria-label="Tablature">
-          <button type="button" class="active" data-tab="chords" role="tab">Chords</button>
-          <button type="button" data-tab="melody" role="tab">Vocal</button>
-          <button type="button" data-tab="bass" role="tab">Bass</button>
-          <button type="button" data-tab="under" role="tab">Under</button>
-          <button type="button" data-tab="drums" role="tab">Drums</button>
+        <div class="tab-head">
+          <span class="label">Tab</span>
+          <div class="viz-tabs" id="tabTabs" role="tablist" aria-label="Which part to show as tab">
+            <button type="button" class="active" data-tab="chords" role="tab">Chords</button>
+            <button type="button" data-tab="melody" role="tab">Vocal</button>
+            <button type="button" data-tab="bass" role="tab">Bass</button>
+            <button type="button" data-tab="under" role="tab">Under</button>
+            <button type="button" data-tab="drums" role="tab">Drums</button>
+          </div>
         </div>
         <pre id="tabPane" class="tab-pre"></pre>
-        <button id="btnCopyTab" type="button" class="ghost small">Copy tab</button>
+        <div class="tab-actions">
+          <button id="btnExportMidi" type="button" class="ghost small" title="Save this section as a MIDI file, to drag into another DAW">Save section as MIDI</button>
+          <button id="btnCopyTab" type="button" class="ghost small">Copy tab</button>
+        </div>
       </div>
+
+      <details class="viz-block" id="vizBlock">
+        <summary>See the notes on a piano or the guitar neck</summary>
+        <div class="viz-tabs" role="tablist" aria-label="Show the notes on">
+          <button type="button" class="active" data-viz="piano" role="tab" aria-selected="true">Piano</button>
+          <button type="button" data-viz="guitar" role="tab" aria-selected="false">Guitar neck</button>
+        </div>
+        <div id="vizPiano" class="piano" role="img" aria-label="Piano keyboard showing the current chord">
+          <div id="pianoKeys" class="piano-keys"></div>
+        </div>
+        <div id="vizGuitar" class="fretboard hidden" role="img" aria-label="Guitar neck showing the chord's notes">
+          <div id="fretGrid" class="fret-grid"></div>
+        </div>
+      </details>
     </aside>
 
   </main>
 
   <footer class="bar playback-bar">
     <div class="play-row">
-      <button id="btnPlay" type="button" class="play-main">Play</button>
-      <button id="btnPlayDrums" type="button">Drums</button>
-      <button id="btnPlayBand" type="button">Band</button>
-      <button id="btnPlayCombo" type="button">Combo</button>
-      <button id="btnPlayMelody" type="button">+ Melody</button>
-      <button id="btnStop" type="button" class="ghost">Stop</button>
+      <button id="btnPlay" type="button" class="play-main" title="Play what is chosen beside it (Space)">▶ Play</button>
+      <button id="btnStop" type="button" class="ghost" title="Stop (Space or Esc)">■ Stop</button>
+      <div class="play-what" id="playWhat" role="radiogroup" aria-label="What Play plays">
+        <button type="button" data-play="chords" role="radio" title="The chords on their own">Chords</button>
+        <button type="button" data-play="melody" role="radio" title="The chords and the vocal melody (M)">Chords + melody</button>
+        <button type="button" data-play="band" role="radio" title="The chords in their rhythm, with drums and bass (B)">Band</button>
+        <button type="button" data-play="combo" role="radio" title="The band, the vocal melody and the under melody (X)">Everything</button>
+        <button type="button" data-play="drums" role="radio" title="The drums on their own (D)">Drums</button>
+      </div>
       <div class="beat-led" aria-hidden="true"></div>
       <span class="spacer"></span>
-      <label class="tempo-label">Tempo
+      <label class="tempo-label" title="The tempo of the whole song">Tempo
         <input id="tempo" type="range" min="40" max="200" value="92" />
         <span id="tempoVal" class="meta">92</span>
       </label>
-      <label>Inst
-        <select id="instrument">
-          <option value="piano">Piano</option>
-          <option value="epiano">E. Piano</option>
-          <option value="guitar">Guitar</option>
-          <option value="strings">Strings</option>
-          <option value="pad">Pad</option>
-          <option value="organ">Organ</option>
-          <option value="harp">Harp</option>
-        </select>
-      </label>
-      <label>Texture
-        <select id="textureTone">
-          <option value="wash">Wash</option>
-          <option value="clean">Clean</option>
-          <option value="fuzz">Fuzz</option>
-          <option value="dark">Dark</option>
-        </select>
-      </label>
-      <label>Drums
-        <select id="drumTone">
-          <option value="hazy">Hazy</option>
-          <option value="dry">Dry</option>
-          <option value="soft">Soft</option>
-          <option value="distant">Distant</option>
-        </select>
-      </label>
-      <label>Melody
-        <select id="melodyTone">
-          <option value="soft">Soft</option>
-          <option value="bell">Bell</option>
-          <option value="airy">Airy</option>
-          <option value="grit">Grit</option>
-        </select>
-      </label>
-      <label class="level-label">Chords
-        <input id="chordLevel" type="range" min="0" max="100" value="100" />
-        <span id="chordLevelVal" class="meta">100</span>
-      </label>
-      <label class="level-label">Bass Vol
-        <input id="bassLevel" type="range" min="0" max="100" value="100" />
-        <span id="bassLevelVal" class="meta">100</span>
-      </label>
-      <label class="level-label">Drums Vol
-        <input id="drumLevel" type="range" min="0" max="100" value="100" />
-        <span id="drumLevelVal" class="meta">100</span>
-      </label>
-      <label class="level-label">Lead Vol
-        <input id="melodyLevel" type="range" min="0" max="100" value="100" />
-        <span id="melodyLevelVal" class="meta">100</span>
-      </label>
-      <label>Style
-        <select id="style">
-          <option value="block">Block</option>
-          <option value="arpeggio">Arpeggio</option>
-          <option value="strum">Strum</option>
-        </select>
-      </label>
-      <label>Voicing
-        <select id="voicing">
-          <option value="root">Root</option>
-          <option value="smart" selected>Smart VL</option>
-          <option value="shell">Shell</option>
-          <option value="drop2">Drop-2</option>
-          <option value="rootless">Rootless</option>
-          <option value="spread">Spread</option>
-        </select>
-      </label>
-      <label class="ck"><input id="metronome" type="checkbox" /> Click</label>
-      <label class="ck"><input id="withBass" type="checkbox" checked /> Bass</label>
-      <label class="ck"><input id="withSevenths" type="checkbox" /> 7ths</label>
-      <label class="ck"><input id="loop" type="checkbox" /> Loop</label>
+      <label class="ck" title="Play it over and over (L)"><input id="loop" type="checkbox" /> Loop</label>
+      <label class="ck" title="A click on every beat, and a bar of clicks before it starts"><input id="metronome" type="checkbox" /> Click</label>
+      <button class="hbtn" popovertarget="popSound" type="button" id="btnSound" title="Instruments, tones and levels">Sound…</button>
     </div>
   </footer>
 
@@ -310,70 +281,99 @@
 
 <!-- ─── Popovers (section editor) ──────────────────────────────────── -->
 
-<div id="popFeeling" popover="auto" class="popover">
-  <h3>What should this section make people feel?</h3>
-  <div class="emotion-row">
-    <select id="emotionSelect" aria-label="Choose section feeling"></select>
-    <button id="btnPickEmotion" type="button">Add best next chord</button>
+<div id="popKey" popover="auto" class="popover popover-key">
+  <h3>Key of the song</h3>
+  <div id="keyGrid" class="key-grid" role="group" aria-label="Choose the key"></div>
+  <div class="key-row">
+    <div class="key-mode-toggle" id="keyModeToggle" role="tablist" aria-label="Major or minor">
+      <button type="button" data-mode="major" class="active" role="tab" aria-selected="true">Major</button>
+      <button type="button" data-mode="minor" role="tab" aria-selected="false">Minor</button>
+    </div>
+    <label class="meter-pick">or another colour <select id="scaleSelect" aria-label="Scale"></select></label>
   </div>
-  <p id="emotionMeta" class="emotion-meta"></p>
-  <p class="meta">The next-chord list and the ideas lean towards it. Nothing in the section is changed for you.</p>
+  <p id="scaleMeta" class="scale-meta"></p>
+  <p class="meta">This is the key of every section. The chords you have written stay as they are; the suggestions, ideas and chord numbers follow the new key.</p>
 </div>
 
-<div id="popCategories" popover="auto" class="popover">
-  <h3>Chord colors</h3>
-  <div class="filters">
-    <label><input type="checkbox" data-filter="diatonic" checked /> <span class="term-tip" tabindex="0" data-theory="Diatonic chord">In-key</span> <span class="meta">(clean)</span></label>
-    <label><input type="checkbox" data-filter="borrowed" checked /> <span class="term-tip" tabindex="0" data-theory="Borrowed chord / modal interchange">Borrowed color</span> <span class="meta">(darker/lighter)</span></label>
-    <label><input type="checkbox" data-filter="secondary" checked /> <span class="term-tip" tabindex="0" data-theory="Secondary dominant">Push-to chord</span></label>
-    <label><input type="checkbox" data-filter="ttSub" /> <span class="term-tip" tabindex="0" data-theory="Tritone substitution">Sliding dominant</span></label>
-    <label><input type="checkbox" data-filter="dimPassing" /> <span class="term-tip" tabindex="0" data-theory="Diminished passing chord">Passing shadow</span></label>
-    <label><input type="checkbox" data-filter="neapolitan" checked /> <span class="term-tip" tabindex="0" data-theory="Neapolitan chord">Flat-II shadow</span></label>
-    <label><input type="checkbox" data-filter="chromatic" /> <span class="term-tip" tabindex="0" data-theory="Chromatic mediant">Sideways jump</span></label>
-    <label><input type="checkbox" data-filter="aug6" /> <span class="term-tip" tabindex="0" data-theory="Augmented-sixth chord">Big pre-chorus pull</span></label>
+<div id="popSound" popover="auto" class="popover popover-sound">
+  <h3>Sound</h3>
+  <div class="sound-grid">
+    <h4>Chords</h4>
+    <label>Instrument
+      <select id="instrument">
+        <option value="piano">Piano</option>
+        <option value="epiano">Electric piano</option>
+        <option value="guitar">Guitar</option>
+        <option value="strings">Strings</option>
+        <option value="pad">Pad</option>
+        <option value="organ">Organ</option>
+        <option value="harp">Harp</option>
+      </select>
+    </label>
+    <label title="How Play → Chords plays them, and the band when the rhythm is plain chords">Played as
+      <select id="style">
+        <option value="block">Held chords</option>
+        <option value="arpeggio">One note at a time</option>
+        <option value="strum">Strummed</option>
+      </select>
+    </label>
+    <label>Tone
+      <select id="textureTone">
+        <option value="wash">Washy</option>
+        <option value="clean">Clean</option>
+        <option value="fuzz">Fuzzy</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+    <label title="Which notes of each chord play, and where">Voicing
+      <select id="voicing">
+        <option value="smart" selected>Smooth (voice-led)</option>
+        <option value="root">Plain (root position)</option>
+        <option value="shell">Thin (root, 3rd, 7th)</option>
+        <option value="drop2">Open (drop-2)</option>
+        <option value="rootless">No root (jazz)</option>
+        <option value="spread">Wide spread</option>
+      </select>
+    </label>
+
+    <h4>Bass, drums and melody</h4>
+    <label class="ck"><input id="withBass" type="checkbox" checked /> Play a bass line</label>
+    <label>Drum sound
+      <select id="drumTone">
+        <option value="hazy">Hazy</option>
+        <option value="dry">Dry</option>
+        <option value="soft">Soft</option>
+        <option value="distant">Distant</option>
+      </select>
+    </label>
+    <label>Melody sound
+      <select id="melodyTone">
+        <option value="soft">Soft</option>
+        <option value="bell">Bell</option>
+        <option value="airy">Airy</option>
+        <option value="grit">Gritty</option>
+      </select>
+    </label>
+
+    <h4>Levels in this section</h4>
+    <label class="level-label">Chords
+      <input id="chordLevel" type="range" min="0" max="100" value="100" />
+      <span id="chordLevelVal" class="meta">100</span>
+    </label>
+    <label class="level-label">Bass
+      <input id="bassLevel" type="range" min="0" max="100" value="100" />
+      <span id="bassLevelVal" class="meta">100</span>
+    </label>
+    <label class="level-label">Drums
+      <input id="drumLevel" type="range" min="0" max="100" value="100" />
+      <span id="drumLevelVal" class="meta">100</span>
+    </label>
+    <label class="level-label">Melody
+      <input id="melodyLevel" type="range" min="0" max="100" value="100" />
+      <span id="melodyLevelVal" class="meta">100</span>
+    </label>
   </div>
-</div>
-
-<div id="popMore" popover="auto" class="popover popover-wide">
-  <h3>More</h3>
-
-  <div class="more-grid">
-    <div class="more-section">
-      <h4>What's happening</h4>
-      <div class="card description-card" id="descriptionCard">
-        <p id="description">Pick a key and scale to start.</p>
-      </div>
-    </div>
-
-    <div class="more-section">
-      <h4>Sounds like these songs</h4>
-      <div id="songList" class="song-list">
-        <div class="song faint">Add 2-4 chords to find matches.</div>
-      </div>
-    </div>
-
-    <div class="more-section">
-      <h4>Rhythm</h4>
-      <div class="rhythm-card">
-        <span id="rhythmTime" class="value">—</span>
-        <p id="rhythmTip" class="sub">Add chords for a tailored groove tip.</p>
-      </div>
-    </div>
-
-    <div class="more-section">
-      <h4>Next section</h4>
-      <div id="modulation" class="modulation-grid"></div>
-    </div>
-  </div>
-
-  <div class="more-actions">
-    <button id="btnPresets" type="button" class="ghost">Starter sounds</button>
-    <button id="btnLayerGuide" type="button" class="ghost">Layer guide</button>
-    <button id="btnLearn" type="button" class="ghost">Writing guide</button>
-    <button id="btnShortcuts" type="button" class="ghost">Shortcuts</button>
-    <button id="btnQuizStart" type="button" class="ghost">Ear quiz</button>
-    <button id="btnExportMidi" type="button" class="ghost" title="Export this section as MIDI">Section MIDI</button>
-  </div>
+  <p class="meta">Tones and levels are kept with this section. The instrument, how chords are played and the voicing apply everywhere.</p>
 </div>
 
 <!-- Modal (guides, quiz, pickers) -->

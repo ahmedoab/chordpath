@@ -65,14 +65,17 @@
     listeners.forEach(fn => { try { fn(r); } catch (e) { console.error('route handler failed:', e); } });
   }
 
-  // A song is open → enable the song-scoped nav tabs.
+  // A song is open → show its own pages beside its name. With none open
+  // they are hidden rather than greyed out.
   function setSongOpen(songId, title) {
     doc.querySelectorAll('#navTabs [data-nav]').forEach(btn => {
       const nav = btn.dataset.nav;
       if (!FREE_TABS.includes(nav)) btn.disabled = !songId;
     });
+    const group = doc.getElementById('navSong');
+    if (group) group.hidden = !songId;
     const titleEl = doc.getElementById('navSongTitle');
-    if (titleEl) titleEl.textContent = title || '';
+    if (titleEl) { titleEl.textContent = title || ''; titleEl.title = title || ''; }
   }
 
   function init(getSongContext) {

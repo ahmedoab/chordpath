@@ -136,6 +136,21 @@
     St.setSettings({ theme });
   }
 
+  // ── Help ─────────────────────────────────────────────────────────────────
+  // How the pages fit together, and a way into each of the other guides.
+  function openHelp() {
+    UI.openModal(window.Learn.renderHelp());
+    document.querySelectorAll('#modalContent [data-help]').forEach(b => {
+      b.addEventListener('click', () => {
+        const which = b.dataset.help;
+        if (which === 'shortcuts') UI.openModal(window.Learn.renderShortcuts(Nav.route().view));
+        else if (which === 'layers') UI.openModal(window.Learn.renderLayerGuide());
+        else if (which === 'genres') UI.openModal(window.Learn.renderPrimer());
+        else if (which === 'quiz') window.Views.Section.startQuiz();
+      });
+    });
+  }
+
   // ── Global keyboard ──────────────────────────────────────────────────────
   function isTyping() {
     const t = document.activeElement;
@@ -188,9 +203,7 @@
     document.getElementById('btnTheme').addEventListener('click', () => {
       applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
     });
-    document.getElementById('btnGuides').addEventListener('click', () => {
-      UI.openModal(window.Learn.renderPrimer());
-    });
+    document.getElementById('btnHelp').addEventListener('click', openHelp);
     document.getElementById('modalClose').addEventListener('click', UI.closeModal);
     document.getElementById('scrim').addEventListener('click', (e) => {
       if (e.target === document.getElementById('scrim')) UI.closeModal();
@@ -221,7 +234,7 @@
         if (command === 'new-song') Nav.go('wizard');
         else if (command === 'songs') Nav.go('songs');
         else if (command === 'muse') Nav.go('muse');
-        else if (command === 'guides') UI.openModal(window.Learn.renderPrimer());
+        else if (command === 'guides') openHelp();
       });
     }
   }

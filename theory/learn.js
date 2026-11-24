@@ -1,29 +1,41 @@
 /* ChordPath — learn.js
- * Hand-written music-theory primer that the Learn drawer renders, plus the
- * keyboard-shortcut reference.
+ * What the Help window shows: how the pages fit together, genre writing
+ * tips, what each part does, and the keyboard shortcuts; plus the starter
+ * sounds the section editor's Ideas pane offers.
  */
 (function (global) {
   'use strict';
 
   const SHORTCUTS = [
-    { key:'Space',       desc:'Play / Stop'                  },
-    { key:'D',           desc:'Play drums only'              },
-    { key:'B',           desc:'Play with band'               },
-    { key:'X',           desc:'Play selected full combo'      },
-    { key:'M',           desc:'Play with melody'             },
-    { key:'L',           desc:'Toggle loop'                  },
-    { key:'7',           desc:'Toggle 7th chords'            },
+    { key:'Space',       desc:'Play or stop (Play plays what is chosen beside it)' },
+    { key:'D',           desc:'Play the drums on their own'  },
+    { key:'B',           desc:'Play the band: chords in their rhythm, drums and bass' },
+    { key:'X',           desc:'Play everything, melodies too' },
+    { key:'M',           desc:'Play the chords and the vocal melody' },
+    { key:'L',           desc:'Loop on or off'               },
+    { key:'7',           desc:'Suggest 7th chords, or not'   },
     { key:'⌫ / Backspace', desc:'Take out the last chord'    },
     { key:'⌘Z / Ctrl+Z',  desc:'Undo the last change to the chords' },
     { key:'C',           desc:'Clear the chords (Undo brings them back)' },
-    { key:'1 – 9',       desc:'Add next-chord option #1–9'   },
+    { key:'1 – 9',       desc:'Add suggestion 1 to 9 from the Next chord list' },
     { key:'I',           desc:'Switch between Next chord and Ideas' },
-    { key:'P',           desc:'Toggle Piano / Guitar view'   },
-    { key:'E / F',       desc:'Add best chord for the section feeling' },
+    { key:'P',           desc:'Show the notes on the piano or the guitar neck' },
+    { key:'E / F',       desc:'Add the chord that best fits the section\'s feeling' },
     { key:'[ / ]',       desc:'Previous / next section'      },
-    { key:'T',           desc:'Toggle light / dark theme'    },
+    { key:'T',           desc:'Light or dark theme'          },
     { key:'?',           desc:'Show this shortcut list'      },
-    { key:'Esc',         desc:'Close any open dialog / stop audio' },
+    { key:'Esc',         desc:'Close any open dialog, stop the sound' },
+  ];
+
+  // How the app fits together: the pages along the top, in order.
+  const HOW_IT_WORKS = [
+    { where:'Songs', what:'Every song you have started. New song asks for the key first, then the time and tempo, and opens the song in Write. Nothing is written for you.' },
+    { where:'Overview', what:'The whole song: its sections in order (add, duplicate, move and delete them), the key, time and tempo, playing the song from the top, and snapshots to keep a version safe.' },
+    { where:'Write', what:'One section at a time. Next chord suggests what could follow, best fit first. Ideas offers progressions, rhythms, drum grooves, other times and melody shapes, each to hear before you use it. Parts sets what each instrument plays. The tab is on the right, and Play at the bottom plays the chords, the band or everything.' },
+    { where:'Studio guide', what:'Which instruments to use in each section, with free plugin picks and how to record and mix each one.' },
+    { where:'DAW', what:'Record, arrange and mix the song: tracks, a note editor, tab, a mixer, and your own sound card and plugins.' },
+    { where:'Song sheet', what:'Every tab and note for the song on one page, to print or save as a PDF.' },
+    { where:'Muse', what:'ChordPath\'s own AI. Teach it songs you love and how they feel, then ask it for a progression in that spirit.' },
   ];
 
   const DAW_SHORTCUTS = [
@@ -95,7 +107,7 @@
     },
     {
       heading: 'How to audition',
-      body: `Choose one rhythm, one drum pattern, one vocal melody, and one under-melody, then press Combo. Change only one selector at a time so you can actually hear what changed.`,
+      body: `Under Parts, choose one rhythm, one drum pattern, one vocal melody and one under-melody, choose Everything beside Play, and press Play. Change only one at a time so you can hear what changed.`,
     },
   ];
 
@@ -110,14 +122,30 @@
 
   function renderPrimer() {
     const sections = PRIMER.map(p => `<h3>${p.heading}</h3><p>${p.body}</p>`).join('');
-    return `<h2>Writing guide</h2>${sections}
-            <p class="meta" style="margin-top:1rem">Use this as a practical checklist while auditioning combos.</p>`;
+    return `<h2>Genre writing tips</h2>${sections}
+            <p class="meta" style="margin-top:1rem">A checklist to keep beside you while you try parts out.</p>`;
   }
 
   function renderLayerGuide() {
     const sections = LAYER_GUIDE.map(p => `<h3>${p.heading}</h3><p>${p.body}</p>`).join('');
-    return `<h2>Layer guide</h2>${sections}
-            <p class="meta" style="margin-top:1rem">The fastest test is to change one selector, press Combo, and compare.</p>`;
+    return `<h2>What each part does</h2>${sections}
+            <p class="meta" style="margin-top:1rem">The quickest test: change one part, play Everything, and compare.</p>`;
+  }
+
+  // The Help window: how the pages fit together, and the other guides.
+  function renderHelp() {
+    const rows = HOW_IT_WORKS.map(s => `<dt>${s.where}</dt><dd>${s.what}</dd>`).join('');
+    return `<h2>How ChordPath works</h2>
+            <p>Start a song from Songs. Its pages then appear along the top, beside its name. Your work saves itself as you go.</p>
+            <dl class="help-steps">${rows}</dl>
+            <h3>More help</h3>
+            <div class="help-more">
+              <button type="button" class="ghost" data-help="shortcuts">Keyboard shortcuts</button>
+              <button type="button" class="ghost" data-help="layers">What each part does</button>
+              <button type="button" class="ghost" data-help="genres">Genre writing tips</button>
+              <button type="button" class="ghost" data-help="quiz">Chord ear quiz</button>
+            </div>
+            <p class="meta" style="margin-top:.8rem">Not sure what something does? Rest the pointer on it: most buttons say. A word with a dotted line under it gives its music-theory name.</p>`;
   }
 
   // ── Preset progressions library ─────────────────────────────────────────
@@ -188,5 +216,5 @@
             <div style="display: flex; flex-wrap: wrap; gap: .25rem;">${items}</div>`;
   }
 
-  global.Learn = { SHORTCUTS, DAW_SHORTCUTS, PRIMER, LAYER_GUIDE, PRESETS, renderShortcuts, renderPrimer, renderLayerGuide, renderPresets };
+  global.Learn = { SHORTCUTS, DAW_SHORTCUTS, PRIMER, LAYER_GUIDE, PRESETS, HOW_IT_WORKS, renderShortcuts, renderPrimer, renderLayerGuide, renderPresets, renderHelp };
 })(typeof window !== 'undefined' ? window : globalThis);
