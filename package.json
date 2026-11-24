@@ -1,7 +1,7 @@
 {
   "name": "chordpath",
   "productName": "ChordPath",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A songwriting aid and DAW, with its own built-in AI.",
   "private": true,
   "author": "ahmedoab",
