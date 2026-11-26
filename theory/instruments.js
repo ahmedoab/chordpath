@@ -115,6 +115,10 @@
     outro:     [2, 5],
   };
 
+  // "an intro", "a pre-chorus": a section's role in words, with the right article.
+  const ROLE_WORDS = { intro: 'an intro', verse: 'a verse', prechorus: 'a pre-chorus', chorus: 'a chorus', bridge: 'a bridge', outro: 'an outro' };
+  function aRole(role) { return ROLE_WORDS[role] || 'a section'; }
+
   function analyzeRoster(rosterIds, ctx) {
     ctx = ctx || {};
     const roster = (rosterIds || []).map(byId).filter(Boolean);
@@ -164,7 +168,7 @@
     if (roster.length > target[1] || hotSlots.length > 0) {
       verdict = 'crowded';
       if (roster.length > target[1]) {
-        advice.push(`${roster.length} instruments is a lot for a ${ctx.role || 'section'} — aim for ${target[0]}–${target[1]}. Mute the least essential layer and see if anyone misses it.`);
+        advice.push(`${roster.length} instruments is a lot for ${aRole(ctx.role)} — aim for ${target[0]}–${target[1]}. Mute the least essential layer and see if anyone misses it.`);
       }
       hotSlots.forEach(slot => {
         const heavy = roster
@@ -185,10 +189,10 @@
         advice.push('Nothing is driving the pulse. Add drums, percussion, or let a strummed instrument own the rhythm explicitly.');
       }
       if (missingRoles.includes('vocal')) {
-        advice.push('No vocal in a ' + ctx.role + ' — fine for an instrumental, otherwise the section needs its storyteller.');
+        advice.push('No vocal in ' + aRole(ctx.role) + ' — fine for an instrumental, otherwise the section needs its storyteller.');
       }
       if (roster.length < target[0] && !missingRoles.length) {
-        advice.push(`Only ${roster.length} instrument${roster.length === 1 ? '' : 's'} — sparse for a ${ctx.role || 'section'}. That can be powerful; just make sure each remaining part is interesting alone.`);
+        advice.push(`Only ${roster.length} instrument${roster.length === 1 ? '' : 's'} — sparse for ${aRole(ctx.role)}. That can be powerful; just make sure each remaining part is interesting alone.`);
       }
     }
     if (verdict === 'balanced') {

@@ -62,7 +62,7 @@
     clearTimeout(saveTimer);
     if (!dirty || !App.state.song) return;
     const ok = St.saveProject(App.state.song);
-    dirty = false;
+    dirty = !ok;                                       // a failed save is tried again next time
     setSaveStatus(ok ? 'Saved' : 'Save failed!', ok ? 'saved' : 'error');
     if (!ok) UI.toast('Autosave failed — export your song as JSON to be safe');
   }

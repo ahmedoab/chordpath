@@ -106,6 +106,12 @@
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
+    // How far the tracks have been scrolled down, so the ruler can stay in view.
+    function scrolledDown() {
+      const box = canvas.closest('.daw-arrange');
+      return box ? Math.max(0, Math.min(box.scrollTop, height - TOP)) : 0;
+    }
+
     // Where the view is scrolled to and how far it is zoomed: read once a
     // frame while drawing, and afresh for every gesture.
     let view = null;
@@ -149,8 +155,9 @@
 
     function hit(x, y) {
       const st = host.state();
-      if (y < RIBBON_H) return { zone: 'ribbon' };
-      if (y < TOP) return { zone: 'ruler' };
+      const sy = scrolledDown();
+      if (y - sy < RIBBON_H) return { zone: 'ribbon' };
+      if (y - sy < TOP) return { zone: 'ruler' };
       const row = autoAt(st.project, y);
       if (row) return row.lane ? { zone: 'auto', row, point: pointAt(row, x, y) } : { zone: 'empty' };
       const lane = laneAt(st.project, y);
@@ -432,65 +439,70 @@
       const firstBeat = Math.max(0, Math.floor(st.scrollBeat));
       const lastBeat = Math.ceil(xToBeat(width));
 
-      // Section ribbon: the song's form is the ruler.
-      const end = Math.max(P().endBeat(p), lastBeat);
-      p.markers.forEach((m, i) => {
-        const x0 = beatToX(m.beat);
-        const x1 = beatToX(i + 1 < p.markers.length ? p.markers[i + 1].beat : end);
-        if (x1 < 0 || x0 > width) return;
-        const looped = p.loop.on && Math.abs(p.loop.start - m.beat) < 1e-6 &&
-          Math.abs(p.loop.end - (i + 1 < p.markers.length ? p.markers[i + 1].beat : P().endBeat(p))) < 1e-6;
-        g.fillStyle = looped ? c.accent2 : (i % 2 ? c.surface : c.surface2);
-        g.fillRect(x0, 0, x1 - x0, RIBBON_H);
-        g.fillStyle = c.line;
-        g.fillRect(x0, 0, 1, RIBBON_H);
-        label(m.name, Math.max(x0, 0) + 7, 16, x1 - Math.max(x0, 0) - 10, looped ? c.ink : c.ink2, '600 11px Inter, sans-serif');
-      });
-
-      // Bar ruler: the bars are as long as the time signature makes them.
-      g.fillStyle = c.surface;
-      g.fillRect(0, RIBBON_H, width, RULER_H);
       const bars = P().barsBetween(p, P().positionAt(p, firstBeat).start, lastBeat + 1);
-      const shortest = bars.reduce((least, b) => Math.min(least, b.length), 4) * ppb;
-      const barStep = shortest >= 34 ? 1 : shortest >= 17 ? 2 : shortest >= 8 ? 4 : 8;
-      bars.forEach(b => {
-        if ((b.bar - 1) % barStep) return;
-        const x = beatToX(b.beat);
-        g.fillStyle = c.line2;
-        g.fillRect(x, RIBBON_H + 12, 1, RULER_H - 12);
-        label(String(b.bar), x + 4, RIBBON_H + 14, 40, c.muted, '500 10px "JetBrains Mono", monospace');
-      });
-      // Where the tempo or the time signature changes, the ruler says what to.
-      P().stretches(p).forEach((s, i, all) => {
-        const x = beatToX(s.beat);
-        if (!i || x < -120 || x > width) return;
-        const was = all[i - 1];
-        const news = [s.tempo !== was.tempo ? s.tempo + ' bpm' : '', s.num !== was.num || s.den !== was.den ? s.num + '/' + s.den : '']
-          .filter(Boolean).join('  ');
-        g.fillStyle = c.accent;
-        g.fillRect(x, RIBBON_H, 1.5, RULER_H);
-        // The note sits on a plate of its own, over any bar numbers it would otherwise run into.
-        g.font = '600 10px Inter, sans-serif';
-        const wide = Math.ceil(g.measureText(news || 'same').width);
-        g.fillStyle = c.surface;
-        g.fillRect(x + 22, RIBBON_H + 6, wide + 10, RULER_H - 7);
-        label(news || 'same', x + 26, RIBBON_H + 14, wide + 4, c.accent, '600 10px Inter, sans-serif');
-      });
-      if (p.loop.end > p.loop.start) {
-        const lx = beatToX(p.loop.start), lw = (p.loop.end - p.loop.start) * ppb;
-        g.globalAlpha = p.loop.on ? 0.55 : 0.18;
-        g.fillStyle = c.accent;
-        g.fillRect(lx, RIBBON_H, lw, 5);
-        g.globalAlpha = 1;
-      }
-      // The punch range: a red band along the foot of the ruler.
       const punch = p.punch || {};
-      if (punch.end > punch.start) {
-        g.globalAlpha = punch.on ? 0.75 : 0.22;
-        g.fillStyle = c.tense;
-        g.fillRect(beatToX(punch.start), TOP - 4, (punch.end - punch.start) * ppb, 4);
-        g.globalAlpha = 1;
-      }
+      // The section ribbon and the bar ruler stay at the top of the view while
+      // the tracks scroll under them: drawn last, where the view has scrolled to.
+      const ruler = () => {
+        // Section ribbon: the song's form is the ruler.
+        const end = Math.max(P().endBeat(p), lastBeat);
+        p.markers.forEach((m, i) => {
+          const x0 = beatToX(m.beat);
+          const x1 = beatToX(i + 1 < p.markers.length ? p.markers[i + 1].beat : end);
+          if (x1 < 0 || x0 > width) return;
+          const looped = p.loop.on && Math.abs(p.loop.start - m.beat) < 1e-6 &&
+            Math.abs(p.loop.end - (i + 1 < p.markers.length ? p.markers[i + 1].beat : P().endBeat(p))) < 1e-6;
+          g.fillStyle = looped ? c.accent2 : (i % 2 ? c.surface : c.surface2);
+          g.fillRect(x0, 0, x1 - x0, RIBBON_H);
+          g.fillStyle = c.line;
+          g.fillRect(x0, 0, 1, RIBBON_H);
+          label(m.name, Math.max(x0, 0) + 7, 16, x1 - Math.max(x0, 0) - 10, looped ? c.ink : c.ink2, '600 11px Inter, sans-serif');
+        });
+
+        // Bar ruler: the bars are as long as the time signature makes them.
+        g.fillStyle = c.surface;
+        g.fillRect(0, RIBBON_H, width, RULER_H);
+        const shortest = bars.reduce((least, b) => Math.min(least, b.length), 4) * ppb;
+        const barStep = shortest >= 34 ? 1 : shortest >= 17 ? 2 : shortest >= 8 ? 4 : 8;
+        bars.forEach(b => {
+          if ((b.bar - 1) % barStep) return;
+          const x = beatToX(b.beat);
+          g.fillStyle = c.line2;
+          g.fillRect(x, RIBBON_H + 12, 1, RULER_H - 12);
+          label(String(b.bar), x + 4, RIBBON_H + 14, 40, c.muted, '500 10px "JetBrains Mono", monospace');
+        });
+        // Where the tempo or the time signature changes, the ruler says what to.
+        P().stretches(p).forEach((s, i, all) => {
+          const x = beatToX(s.beat);
+          if (!i || x < -120 || x > width) return;
+          const was = all[i - 1];
+          const news = [s.tempo !== was.tempo ? s.tempo + ' bpm' : '', s.num !== was.num || s.den !== was.den ? s.num + '/' + s.den : '']
+            .filter(Boolean).join('  ');
+          g.fillStyle = c.accent;
+          g.fillRect(x, RIBBON_H, 1.5, RULER_H);
+          // The note sits on a plate of its own, over any bar numbers it would otherwise run into.
+          g.font = '600 10px Inter, sans-serif';
+          const wide = Math.ceil(g.measureText(news || 'same').width);
+          g.fillStyle = c.surface;
+          g.fillRect(x + 22, RIBBON_H + 6, wide + 10, RULER_H - 7);
+          label(news || 'same', x + 26, RIBBON_H + 14, wide + 4, c.accent, '600 10px Inter, sans-serif');
+        });
+        if (p.loop.end > p.loop.start) {
+          const lx = beatToX(p.loop.start), lw = (p.loop.end - p.loop.start) * ppb;
+          g.globalAlpha = p.loop.on ? 0.55 : 0.18;
+          g.fillStyle = c.accent;
+          g.fillRect(lx, RIBBON_H, lw, 5);
+          g.globalAlpha = 1;
+        }
+        // The punch range: a red band along the foot of the ruler.
+        if (punch.end > punch.start) {
+          g.globalAlpha = punch.on ? 0.75 : 0.22;
+          g.fillStyle = c.tense;
+          g.fillRect(beatToX(punch.start), TOP - 4, (punch.end - punch.start) * ppb, 4);
+          g.globalAlpha = 1;
+        }
+
+      };
 
       // Lanes and their grid.
       p.tracks.forEach((track, i) => {
@@ -549,15 +561,25 @@
         g.fillRect(0, where.master, width, 1);
       }
 
+      const sy = scrolledDown();
+      g.save();
+      g.translate(0, sy);
+      g.fillStyle = c.bg;
+      g.fillRect(0, 0, width, TOP);
+      ruler();
+      g.fillStyle = c.line2;
+      g.fillRect(0, TOP - 1, width, sy > 0 ? 1 : 0);
+      g.restore();
+
       // Playhead.
       const px = beatToX(st.playhead);
       if (px >= -1 && px <= width) {
         g.fillStyle = c.accent;
-        g.fillRect(px - 0.5, RIBBON_H, 1.5, height - RIBBON_H);
+        g.fillRect(px - 0.5, sy + RIBBON_H, 1.5, height - RIBBON_H - sy);
         g.beginPath();
-        g.moveTo(px - 5, RIBBON_H);
-        g.lineTo(px + 5, RIBBON_H);
-        g.lineTo(px, RIBBON_H + 7);
+        g.moveTo(px - 5, sy + RIBBON_H);
+        g.lineTo(px + 5, sy + RIBBON_H);
+        g.lineTo(px, sy + RIBBON_H + 7);
         g.fill();
       }
     }

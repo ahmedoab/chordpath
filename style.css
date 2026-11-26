@@ -1002,6 +1002,11 @@ button.small { font-size: 0.72rem; padding: 0.2rem 0.5rem; }
 .idea-name .meta { font-weight: 400; margin-left: 0.3rem; }
 .idea-actions { display: flex; gap: 0.3rem; }
 .idea-actions button { font-size: 0.74rem; padding: 0.22rem 0.6rem; }
+/* The idea in use says so plainly: a faded, disabled button all but vanished on the lit row. */
+.idea.current .idea-actions button[data-act="use"]:disabled,
+[data-theme="dark"] .idea.current .idea-actions button[data-act="use"]:disabled {
+  opacity: 1; background: transparent; border-color: var(--accent); color: var(--accent); font-weight: 600; cursor: default;
+}
 .meter-pick { display: flex; align-items: center; gap: 0.35rem; font-size: 0.74rem; color: var(--muted); }
 .meter-pick select { width: auto; font-family: var(--font-mono); font-size: 0.76rem; padding: 0.2rem 0.35rem; }
 .beat-led span.strong { width: 7px; height: 7px; }
@@ -1318,7 +1323,7 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 /* What the DAW is busy with, in the corner above the track names: room that
    is always there, so a message never moves anything else. */
 .daw-status {
-  position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center;
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; background: var(--surface);
   padding: 0 0.6rem; font-size: 0.72rem; line-height: 1.25; color: var(--accent); overflow: hidden;
 }
 .daw-head {

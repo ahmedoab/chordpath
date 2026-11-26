@@ -333,7 +333,7 @@
         </div>
       </div>
       <div class="daw-arrange" id="dawArrange">
-        <div class="daw-heads" id="dawHeads" style="width:${HEAD_W}px;padding-top:${A.TOP}px">
+        <div class="daw-heads" id="dawHeads" style="width:${HEAD_W}px">
           <div class="daw-status" id="dawStatus" style="height:${A.TOP}px" aria-live="polite">${esc(S.status)}</div>
           ${p.tracks.map(headHTML).join('')}
           ${masterHeadHTML()}
@@ -1747,6 +1747,7 @@
     });
     press('dawMonitor', toggleMonitor);
     press('dawMeter', openTiming);
+    on('dawArrange', 'scroll', () => { S.dirty = true; });     // the ruler stays at the top as the tracks scroll
     on('dawHScroll', 'scroll', () => {
       S.scrollBeat = $('dawHScroll').scrollLeft / S.pxPerBeat;
       S.dirty = true;

@@ -777,6 +777,22 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     const shorter = await panelHeight();
     check('dragging the divider resizes the editor panel', Math.abs(tall - shorter - 70) <= 4);
 
+    // With the tracks scrolled down, the ribbon and bar ruler stay at the top and still work.
+    const scrolled = await page.evaluate(() => {
+      const box = document.getElementById('dawArrange');
+      box.scrollTop = box.scrollHeight;
+      return box.scrollTop;
+    });
+    await page.waitForTimeout(200);
+    const arrangeTop = (await page.locator('#dawArrange').boundingBox()).y;
+    v = await view();
+    await page.mouse.click(v.x + 12 * ppb - v.scroll, arrangeTop + RIBBON_H + 10);
+    check(`scrolled down ${scrolled} px, the bar ruler is still at the top and still moves the playhead`,
+      scrolled > 0 && Math.abs((await state()).position - 12) < 0.3);
+    check('and the status corner stays with it', await page.evaluate(() =>
+      Math.abs(document.getElementById('dawStatus').getBoundingClientRect().top - document.getElementById('dawArrange').getBoundingClientRect().top) < 1));
+    await page.evaluate(() => { document.getElementById('dawArrange').scrollTop = 0; });
+
     await page.keyboard.press('?');
     await page.waitForSelector('#scrim.open');
     const help = await page.textContent('#modalContent');

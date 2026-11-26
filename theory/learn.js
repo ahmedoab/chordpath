@@ -33,7 +33,7 @@
     { where:'Overview', what:'The whole song: its sections in order (add, duplicate, move and delete them), the key, time and tempo, playing the song from the top, and snapshots to keep a version safe.' },
     { where:'Write', what:'One section at a time. Next chord suggests what could follow, best fit first. Ideas offers progressions, rhythms, drum grooves, other times and melody shapes, each to hear before you use it. Parts sets what each instrument plays. The tab is on the right, and Play at the bottom plays the chords, the band or everything.' },
     { where:'Studio guide', what:'Which instruments to use in each section, with free plugin picks and how to record and mix each one.' },
-    { where:'DAW', what:'Record, arrange and mix the song: tracks, a note editor, tab, a mixer, and your own sound card and plugins.' },
+    { where:'DAW', what:'Record, arrange and mix the song: tracks, takes to choose the best of, a note editor, tab, a mixer with automation, and your own sound card and plugins.' },
     { where:'Song sheet', what:'Every tab and note for the song on one page, to print or save as a PDF.' },
     { where:'Muse', what:'ChordPath\'s own AI. Teach it songs you love and how they feel, then ask it for a progression in that spirit.' },
   ];
