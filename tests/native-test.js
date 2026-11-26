@@ -572,8 +572,14 @@ async function card({ surgePath }) {
     // Against a perfect tone of the same level: the only difference allowed is the format's own step size.
     let worst = 0;
     const level = 0.5, w = 2 * Math.PI * 441 / SR;
-    // Find the phase from two neighbouring samples, then compare the rest.
-    const phase = Math.atan2(tone[0] * Math.sin(w), tone[1] - tone[0] * Math.cos(w));
+    // Find the phase by fitting a sine to the whole stretch (two samples alone are thrown off by the format's own rounding), then compare.
+    let ss = 0, sc = 0, cc = 0, ts = 0, tc = 0;
+    for (let i = 0; i < tone.length; i++) {
+      const s = Math.sin(w * i), c = Math.cos(w * i);
+      ss += s * s; sc += s * c; cc += c * c; ts += tone[i] * s; tc += tone[i] * c;
+    }
+    const det = ss * cc - sc * sc;
+    const phase = Math.atan2((ss * tc - sc * ts) / det, (cc * ts - sc * tc) / det);
     for (let i = 0; i < tone.length; i++) worst = Math.max(worst, Math.abs(tone[i] - level * Math.sin(phase + w * i)));
     check(`${name}: a tone goes out and comes back whole (${o.asio.sampleType}, off by at most ${worst.toExponential(1)})`,
       o.asio.sampleType === name && take.frames > 20000 && worst < fine * 2 + 2e-4 && Math.abs(rms(tone) - 0.5 / Math.SQRT2) < 1e-3);

@@ -168,6 +168,32 @@ const DRIVER = 'ChordPath test driver';
     }
 
     // ── Back to this computer ──────────────────────────────────────────────
+    // ── Recording through it ───────────────────────────────────────────────
+    // The stand-in driver hands back as its input whatever it was given to play.
+    // In tests the host plays silence; the stand-in reaches no speaker, so here
+    // it is let play the song, to have something to record.
+    section('Recording through the card');
+    await page.evaluate(async () => {
+      const eng = DawEngine.get();
+      await eng.useNative(Object.assign({}, eng.nativeConfig, { muted: false }));
+    });
+    await page.keyboard.press('Home');
+    await page.click('#dawRec');
+    await page.waitForFunction(() => DawEngine.get().isRecording(), null, { timeout: 15000 });
+    await page.waitForFunction(() => DawEngine.get().position() > 4, null, { timeout: 20000 });
+    await page.click('#dawPlay');
+    const audioClip = () => page.evaluate(() => {
+      const eng = DawEngine.get();
+      const track = eng.project.tracks.find(t => t.kind === 'audio');
+      const clip = track && track.clips[0];
+      return clip ? { start: clip.start, length: clip.length, seconds: eng.audioSeconds(clip.audioId), peak: eng.peakBetween(clip.audioId, 0, 60) } : null;
+    });
+    await page.waitForFunction(() => !DawEngine.get().isRecording() && DawEngine.get().project.tracks.some(t => t.kind === 'audio' && t.clips.length), null, { timeout: 15000 }).catch(() => {});
+    const viaCard = await audioClip();
+    check('Stop ends a take recorded through the card, and keeps it', !(await page.evaluate(() => DawEngine.get().isRecording())) &&
+      !!viaCard && viaCard.start === 0 && viaCard.length > 3 && viaCard.seconds > 1);
+    check(`what came in is what the card was playing (${viaCard ? viaCard.peak.toFixed(2) : '-'} at its loudest)`, !!viaCard && viaCard.peak > 0.01);
+
     section('Back to this computer');
     await page.click('#dawAudio');
     await page.waitForSelector('#audSettings');

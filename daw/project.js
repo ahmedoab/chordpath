@@ -10,7 +10,9 @@
   'use strict';
 
   const FORMAT = 'chordpath-daw';
-  const LIMITS = { tracks: 64, clips: 512, notes: 8192, markers: 256, changes: 128, name: 60, title: 120, beats: 100000, audioSeconds: 1200, plugins: 8 };
+  const LIMITS = { tracks: 64, clips: 512, notes: 8192, markers: 256, changes: 128, name: 60, title: 120, beats: 100000, audioSeconds: 1200, plugins: 8, takes: 32, comp: 512 };
+  const XFADE = 0.01;                                    // seconds: the crossfade where takes or clips meet
+  const EPS = 1e-6;
   const DENOMINATORS = [2, 4, 8, 16];                    // the note a time signature counts in
   // Megabytes that hold about twenty-five minutes of each kind of audio file.
   const AUDIO_MB = { compressed: 25, flac: 130, plain: 260 };
@@ -85,16 +87,68 @@
       length: num(opts.length, MIN_LENGTH, LIMITS.beats, 4),
     };
     if (opts.audioId) {
+      // The clip's own recording is its first take. offset: seconds into the
+      // recording at the clip's start; below 0 the recording starts later.
       clip.audioId = opts.audioId;
-      clip.offset = num(opts.offset, 0, 36000, 0);     // seconds into the recording
+      clip.offset = num(opts.offset, -3600, 36000, 0);
       clip.gain = num(opts.gain, 0, 4, 1);
-      const played = Math.round(num(opts.tempo, 0, 400, 0));
-      clip.tempo = played >= 20 ? played : 0;          // the tempo the audio was played at; 0 = not known
+      clip.tempo = playedTempo(opts.tempo);            // the tempo the audio was played at; 0 = not known
       clip.stretch = opts.stretch === true;            // whether it is stretched to follow the song's tempo
+      clip.fadeIn = num(opts.fadeIn, 0, LIMITS.beats, 0);     // beats
+      clip.fadeOut = num(opts.fadeOut, 0, LIMITS.beats, 0);
+      fitFades(clip);
+      // Other takes of the same stretch of the song, and which take plays where.
+      const alts = (Array.isArray(opts.alts) ? opts.alts : []).map(createTake).filter(Boolean).slice(0, LIMITS.takes - 1);
+      if (alts.length) {
+        clip.alts = alts;
+        clip.comp = cleanComp(opts.comp, alts.length + 1);
+      }
     } else {
       clip.notes = (opts.notes || []).map(createNote);
     }
     return clip;
+  }
+
+  function playedTempo(v) {
+    const played = Math.round(num(v, 0, 400, 0));
+    return played >= 20 ? played : 0;
+  }
+
+  // Another take of a clip: { audioId, offset, tempo }, read like the clip's own. Null if it names no recording.
+  function createTake(t) {
+    if (!t || typeof t !== 'object' || typeof t.audioId !== 'string' || !ID_RE.test(t.audioId)) return null;
+    return { audioId: t.audioId, offset: num(t.offset, -3600, 36000, 0), tempo: playedTempo(t.tempo) };
+  }
+
+  // Which take plays where: [{ at, take }], `at` in beats from the clip's
+  // start. Always begins at 0, in order, no two neighbours the same.
+  function cleanComp(raw, count) {
+    const list = (Array.isArray(raw) ? raw : [])
+      .filter(r => r && typeof r === 'object' && typeof r.at === 'number' && Number.isFinite(r.at) && r.at >= 0 &&
+        r.at <= LIMITS.beats && Number.isInteger(r.take) && r.take >= 0 && r.take < count)
+      .map(r => ({ at: r.at, take: r.take }))
+      .sort((a, b) => a.at - b.at)
+      .slice(0, LIMITS.comp);
+    return mergeComp(list.length ? list : [{ at: 0, take: count - 1 }]);
+  }
+  function mergeComp(list) {
+    const out = [];
+    list.forEach(r => {
+      const last = out[out.length - 1];
+      if (last && Math.abs(last.at - r.at) < EPS) { last.take = r.take; return; }      // the later word on one spot wins
+      if (last && last.take === r.take) return;
+      out.push({ at: r.at, take: r.take });
+    });
+    if (out.length) out[0].at = 0;
+    // Merging the first two may have left neighbours the same again.
+    return out.filter((r, i) => i === 0 || r.take !== out[i - 1].take);
+  }
+
+  // Fades never overlap: together they are at most the clip's length.
+  function fitFades(clip) {
+    if (!clip.audioId) return;
+    clip.fadeIn = Math.max(0, Math.min(clip.fadeIn || 0, clip.length));
+    clip.fadeOut = Math.max(0, Math.min(clip.fadeOut || 0, clip.length - clip.fadeIn));
   }
 
   function createTrack(kind, opts) {
@@ -112,6 +166,7 @@
       mute: opts.mute === true,
       solo: opts.solo === true,
       armed: opts.armed === true,
+      showTakes: kind === 'audio' && opts.showTakes === true,   // its clips' takes are shown in rows beneath it
       fx: {
         low: num(fx.low, -18, 18, 0), mid: num(fx.mid, -18, 18, 0), high: num(fx.high, -18, 18, 0),
         comp: fx.comp === true,
@@ -161,6 +216,7 @@
       master: num(opts.master, -60, 6, 0),               // master fader, dB
       masterPlugins: [],                                 // plugins the whole mix passes through
       loop: { on: false, start: 0, end: 16 },
+      punch: { on: false, start: 0, end: 0 },            // recording keeps only this stretch while on
       markers: [],
       tracks: [],
     };
@@ -298,6 +354,11 @@
     project.changes.sort((a, b) => a.beat - b.beat);
     return at;
   }
+  // The punch range while it is in use: [from, to], or null.
+  function punchRange(project) {
+    const p = project.punch;
+    return p && p.on && p.end - p.start >= MIN_LENGTH - EPS ? [p.start, p.end] : null;
+  }
   function removeChange(project, beat) {
     const before = (project.changes || []).length;
     project.changes = (project.changes || []).filter(c => Math.abs(c.beat - beat) > 1e-9);
@@ -383,9 +444,11 @@
   // stretched to fit. The rate is how much longer (above 1) or shorter the
   // audio has to become: the tempo it was played at over the tempo where the
   // clip now starts.
-  function clipRate(project, clip) {
-    if (!clip.audioId || !clip.stretch || !(clip.tempo > 0)) return 1;
-    return Math.round(clip.tempo / tempoAt(project, clip.start) * 10000) / 10000;
+  function clipRate(project, clip) { return takeRate(project, clip, clip); }
+  // The same for any take of the clip: each keeps the tempo it was played at.
+  function takeRate(project, clip, take) {
+    if (!clip.audioId || !clip.stretch || !(take.tempo > 0)) return 1;
+    return Math.round(take.tempo / tempoAt(project, clip.start) * 10000) / 10000;
   }
   // Seconds of the recording that the clip covers.
   function clipSpan(project, clip) {
@@ -406,12 +469,301 @@
       clip.length = Math.max(MIN_LENGTH, secondsToBeat(project, beatToSeconds(project, clip.start) + span) - clip.start);
     }
   }
-  // Notes the tempo the audio was really played at.
+  // Notes the tempo the audio was really played at: every take's.
   function setClipTempo(project, clip, bpm) {
     if (!clip.audioId) return;
     const span = clipSpan(project, clip);
-    clip.tempo = Math.round(num(bpm, 20, 400, clip.tempo || tempoAt(project, clip.start)));
+    const tempo = Math.round(num(bpm, 20, 400, clip.tempo || tempoAt(project, clip.start)));
+    takesOf(clip).forEach(t => { t.tempo = tempo; });
     if (clip.stretch) clip.length = Math.max(MIN_LENGTH, span * clip.tempo / 60);
+    fitFades(clip);
+  }
+
+  // ── Takes ────────────────────────────────────────────────────────────────
+  // An audio clip can hold several takes of the same stretch of the song —
+  // the passes of a loop recorded over and over, or a part played again over
+  // an earlier one. Its own recording is the first; the others are in
+  // clip.alts. clip.comp says which take plays where, so the best of each can
+  // be put together without anything being cut away.
+  function takesOf(clip) {
+    return clip && clip.audioId ? [clip].concat(clip.alts || []) : [];
+  }
+  // Seconds of a take's recording that pass between two beats of its clip.
+  function takeSpan(project, clip, take, from, to) {
+    if (clip.stretch && take.tempo > 0) return (to - from) * 60 / take.tempo;
+    return beatToSeconds(project, to) - beatToSeconds(project, from);
+  }
+  // Where in its recording a take is at a beat of the song (seconds; below 0 it has not started).
+  function takeAt(project, clip, take, beat) {
+    return take.offset + takeSpan(project, clip, take, clip.start, beat);
+  }
+
+  // [{ from, to, take }] in beats from the clip's start, end to end across it.
+  function compRegions(clip) {
+    const count = takesOf(clip).length;
+    const comp = count > 1 && Array.isArray(clip.comp) && clip.comp.length ? clip.comp : [{ at: 0, take: 0 }];
+    const out = [];
+    comp.forEach((r, i) => {
+      const from = i === 0 ? 0 : Math.max(0, r.at);
+      const to = Math.min(clip.length, i + 1 < comp.length ? comp[i + 1].at : clip.length);
+      if (to - from > EPS) out.push({ from, to, take: Math.min(Math.max(0, r.take), count - 1) });
+    });
+    if (!out.length) out.push({ from: 0, to: clip.length, take: Math.min(Math.max(0, comp[0].take), Math.max(0, count - 1)) });
+    return out;
+  }
+  // The take playing at a beat of the clip (from its start).
+  function takeIndexAt(clip, at) {
+    const regions = compRegions(clip);
+    const found = regions.find(r => at >= r.from - EPS && at < r.to - EPS);
+    return found ? found.take : regions[regions.length - 1].take;
+  }
+
+  // Makes take number `take` play from `from` to `to` (beats from the clip's start).
+  function setComp(clip, from, to, take) {
+    const count = takesOf(clip).length;
+    if (count < 2 || !Number.isInteger(take) || take < 0 || take >= count) return false;
+    const a = Math.max(0, Math.min(from, to)), b = Math.min(clip.length, Math.max(from, to));
+    if (b - a < EPS) return false;
+    const next = [];
+    compRegions(clip).forEach(r => {
+      if (r.to <= a + EPS || r.from >= b - EPS) { next.push(r); return; }
+      if (r.from < a - EPS) next.push({ from: r.from, to: a, take: r.take });
+      if (r.to > b + EPS) next.push({ from: b, to: r.to, take: r.take });
+    });
+    next.push({ from: a, to: b, take });
+    next.sort((x, y) => x.from - y.from);
+    clip.comp = mergeComp(next.map(r => ({ at: r.from, take: r.take }))).slice(0, LIMITS.comp);
+    return true;
+  }
+  // The one take plays all the way through.
+  function useTake(clip, take) {
+    return setComp(clip, 0, clip.length, take);
+  }
+
+  // Deletes a take. Where it was playing, the take before it plays instead.
+  function removeTake(clip, index) {
+    const takes = takesOf(clip);
+    if (takes.length < 2 || !Number.isInteger(index) || index < 0 || index >= takes.length) return false;
+    const regions = compRegions(clip);
+    if (index === 0) {
+      const next = clip.alts.shift();
+      clip.audioId = next.audioId;
+      clip.offset = next.offset;
+      clip.tempo = next.tempo;
+    } else {
+      clip.alts.splice(index - 1, 1);
+    }
+    const moved = t => (t === index ? Math.max(0, index - 1) : t > index ? t - 1 : t);
+    if (clip.alts.length) {
+      clip.comp = mergeComp(regions.map(r => ({ at: r.from, take: moved(r.take) })));
+    } else {
+      delete clip.alts;
+      delete clip.comp;
+    }
+    return true;
+  }
+  // Deletes the takes that play nowhere. Returns how many went.
+  function removeUnusedTakes(clip) {
+    const used = new Set(compRegions(clip).map(r => r.take));
+    let gone = 0;
+    for (let i = takesOf(clip).length - 1; i >= 0 && takesOf(clip).length > 1; i--) {
+      if (!used.has(i) && removeTake(clip, i)) gone++;
+    }
+    return gone;
+  }
+
+  // ── Fades ────────────────────────────────────────────────────────────────
+  // which: 'in' or 'out'; beats from the clip's edge.
+  function setFade(clip, which, beats) {
+    if (!clip || !clip.audioId) return false;
+    const room = clip.length - (which === 'in' ? clip.fadeOut : clip.fadeIn);
+    const value = Math.max(0, Math.min(room, Number.isFinite(beats) ? beats : 0));
+    if (which === 'in') clip.fadeIn = value; else clip.fadeOut = value;
+    return true;
+  }
+
+  // ── What a recording becomes ─────────────────────────────────────────────
+  // rec: { audioId, startBeat, latency, seconds, loop: { start, end } | null,
+  // punch: { start, end } | null }. The recording's sample at `latency`
+  // seconds was heard with beat startBeat; `seconds` is how long it is. A
+  // loop that was going round while it was made turns it into one take for
+  // every pass; a punch range keeps only what was played inside it.
+  //
+  // Returns { audioId, start, length, offsets, active, keep, tempo, stretch }:
+  // every take lies over start..start+length, takes[i] beginning `offsets[i]`
+  // seconds into the recording; `active` is the take to use, and keep the
+  // stretch [from, to] of the song to use it over. Null if nothing is left.
+  function takesFromRecording(project, rec) {
+    if (!rec || typeof rec.audioId !== 'string') return null;
+    const latency = Math.max(0, rec.latency || 0);
+    const usable = (rec.seconds || 0) - latency;
+    if (!(usable > 0.05)) return null;
+    const from = Math.max(0, rec.startBeat || 0);
+    const startSec = beatToSeconds(project, from);
+    const loop = rec.loop && rec.loop.end - rec.loop.start >= MIN_LENGTH - EPS &&
+      from >= rec.loop.start - EPS && from < rec.loop.end - EPS ? rec.loop : null;
+    const first = loop ? beatToSeconds(project, loop.end) - startSec : Infinity;   // seconds before the loop first turns back
+    let start = from, length, offsets, active = 0;
+    if (!loop || usable <= first + 0.05) {
+      length = secondsToBeat(project, startSec + usable) - start;
+      offsets = [latency];
+    } else {
+      const lap = beatToSeconds(project, loop.end) - beatToSeconds(project, loop.start);
+      const lead = startSec - beatToSeconds(project, loop.start);                 // how far into the loop recording began
+      const passes = [{ offset: latency - lead, heard: first, whole: lead < 0.001 }];
+      for (let at = first; at < usable - 0.001 && passes.length < 4 * LIMITS.takes; at += lap) {
+        const heard = Math.min(lap, usable - at);
+        passes.push({ offset: latency + at, heard, whole: heard >= lap - 0.001 });
+      }
+      // A pass cut short near its start is not worth keeping; a whole one always is.
+      let kept = passes.filter(p => p.whole || p.heard >= lap / 4);
+      if (!kept.length) kept = [passes.reduce((a, b) => (b.heard > a.heard ? b : a))];
+      kept = kept.slice(-LIMITS.takes);
+      start = loop.start;
+      length = loop.end - loop.start;
+      offsets = kept.map(p => p.offset);
+      const whole = kept.map((p, i) => (p.whole ? i : -1)).filter(i => i >= 0);
+      active = whole.length ? whole[whole.length - 1] : kept.indexOf(kept.reduce((a, b) => (b.heard >= a.heard ? b : a)));
+    }
+    if (!(length >= 1 / 64)) return null;
+    const end = start + length;
+    let keep = [start, end];
+    if (rec.punch && rec.punch.end > rec.punch.start) keep = [Math.max(start, rec.punch.start), Math.min(end, rec.punch.end)];
+    if (keep[1] - keep[0] < 1 / 64) return null;
+    // A take follows later tempo changes only if the tempo held while it was played.
+    const steady = !(project.changes || []).some(c => c.beat > start + EPS && c.beat < end - EPS);
+    return { audioId: rec.audioId, start, length, offsets, active, keep, tempo: tempoAt(project, start), stretch: steady };
+  }
+
+  // Puts what takesFromRecording made on an audio track. Played over a clip
+  // already there, the new takes join it — the clip grows to cover them if
+  // need be — and play over the stretch that was kept; the old takes stay,
+  // to go back to. Otherwise they make a clip of their own.
+  // Returns { clip, joined, take } or null.
+  function placeTakes(project, track, made, name) {
+    if (!track || track.kind !== 'audio' || !made || !made.offsets || !made.offsets.length) return null;
+    const a = made.keep[0], b = made.keep[1];
+    const span = (to, stretch) => (stretch ? (to - made.start) * 60 / made.tempo
+      : beatToSeconds(project, to) - beatToSeconds(project, made.start));
+    const takesAt = (beat, stretch) => made.offsets.map(o => ({ audioId: made.audioId, offset: o + span(beat, stretch), tempo: made.tempo }));
+    const host = track.clips.slice().reverse().find(c => c.audioId && c.start < b - EPS && c.start + c.length > a + EPS);
+    if (host && takesOf(host).length + made.offsets.length <= LIMITS.takes) {
+      if (a < host.start - EPS) trimStart(project, host.id, a);
+      if (b > host.start + host.length + EPS) host.length = b - host.start;
+      const first = takesOf(host).length;
+      host.alts = (host.alts || []).concat(takesAt(host.start, host.stretch));
+      if (!host.comp) host.comp = [{ at: 0, take: 0 }];
+      setComp(host, a - host.start, b - host.start, first + made.active);
+      track.clips.splice(track.clips.indexOf(host), 1);
+      track.clips.push(host);                          // on top, where it is heard
+      return { clip: host, joined: true, take: first + made.active };
+    }
+    if (track.clips.length >= LIMITS.clips) return null;
+    const takes = takesAt(a, made.stretch);
+    const clip = createClip({
+      name: name || 'Take', start: a, length: b - a, audioId: made.audioId, offset: takes[0].offset,
+      tempo: made.tempo, stretch: made.stretch, alts: takes.slice(1), comp: [{ at: 0, take: made.active }],
+    });
+    track.clips.push(clip);
+    return { clip, joined: false, take: made.active };
+  }
+
+  // ── What an audio track plays ────────────────────────────────────────────
+  // Where clips overlap, the one on top (later in the list) is heard. Each
+  // stretch that is heard becomes a piece: one take, from one beat to
+  // another, with its fades. Where one piece gives way to another they
+  // crossfade: the one going on a little under the one coming in.
+  //
+  // [{ clip, take, audioId, rate, at, beat, end, fadeIn, fadeOut, shapeIn,
+  // shapeOut, gain }] in order of beat. at: seconds into the take's
+  // recording at `beat`; fades in beats; shapes 'equal' (two different
+  // sounds) or 'linear' (the same sound going on, as at a split).
+  function audioPieces(project, track) {
+    if (!track || track.kind !== 'audio') return [];
+    const clips = track.clips.filter(c => c.audioId && c.length > EPS);
+    const xf = beat => XFADE * tempoAt(project, beat) / 60;
+    const out = [];
+    const endOf = c => c.start + c.length;
+    // Does clip `next` carry on exactly where `prev` leaves off, same recording and same place in it?
+    const continues = (prev, prevBeat, next, nextBeat) => {
+      const pt = takesOf(prev)[takeIndexAt(prev, prevBeat - prev.start - EPS)];
+      const nt = takesOf(next)[takeIndexAt(next, nextBeat - next.start)];
+      return pt.audioId === nt.audioId && Math.abs(prev.gain - next.gain) < 1e-3 &&
+        Math.abs(takeAt(project, prev, pt, prevBeat) - takeAt(project, next, nt, nextBeat)) < 0.001;
+    };
+    clips.forEach((clip, i) => {
+      const end = endOf(clip);
+      const above = clips.slice(i + 1);
+      const topmost = test => { for (let j = above.length - 1; j >= 0; j--) if (test(above[j])) return above[j]; return null; };
+      let open = [[clip.start, end]];
+      above.forEach(c => {
+        const a = c.start, b = endOf(c);
+        open = open.flatMap(([s, e]) => (b <= s + EPS || a >= e - EPS ? [[s, e]]
+          : [[s, Math.min(e, a)], [Math.max(s, b), e]].filter(([x, y]) => y - x > EPS)));
+      });
+      // Is there a clip beneath this one, going on past `beat`?
+      const below = clips.slice(0, i);
+      const over = beat => below.some(c => c.start < beat - EPS && endOf(c) > beat + EPS);
+      open.forEach(([s, e]) => {
+        let from = s, to = e, fadeIn = 0, fadeOut = 0, shapeIn = 'equal', shapeOut = 'equal';
+        if (s > clip.start + EPS) {
+          // Uncovered where a clip on top ends: come in under that one's fade-out.
+          const top = topmost(c => Math.abs(endOf(c) - s) < EPS);
+          const x = Math.max(top ? top.fadeOut : 0, xf(s));
+          from = Math.max(clip.start, s - x);
+          fadeIn = s - from;
+        } else if (clip.fadeIn > EPS) {
+          fadeIn = clip.fadeIn;
+        } else {
+          // Coming in over a clip beneath, or straight after one that runs on under this one's start: a short fade.
+          const before = topmost(c => Math.abs(endOf(c) - s) < EPS) || below.slice().reverse().find(c => Math.abs(endOf(c) - s) < EPS);
+          if (over(s) || (before && !(before.fadeOut > EPS))) fadeIn = Math.min(xf(s), e - s);
+          if (before && !over(s) && continues(before, s, clip, s)) shapeIn = 'linear';
+        }
+        if (e < end - EPS) {
+          // A clip on top begins here: carry on under its fade-in.
+          const top = topmost(c => Math.abs(c.start - e) < EPS);
+          const x = Math.max(top ? top.fadeIn : 0, xf(e));
+          to = Math.min(end, e + x);
+          fadeOut = to - e;
+        } else if (clip.fadeOut > EPS) {
+          fadeOut = clip.fadeOut;
+        } else {
+          const after = topmost(c => Math.abs(c.start - e) < EPS) || below.find(c => Math.abs(c.start - e) < EPS);
+          if (after) {
+            // Straight into another clip: run on a moment past the end, under its fade-in.
+            to = e + Math.max(after.fadeIn > EPS ? after.fadeIn : 0, xf(e));
+            fadeOut = to - e;
+            if (continues(clip, e, after, e)) shapeOut = 'linear';
+          } else if (over(e)) {
+            fadeOut = Math.min(xf(e), e - s);                      // the clip beneath comes in under this ending
+          }
+        }
+        // The stretch is split where the comp changes take, with a crossfade at each change.
+        const regions = compRegions(clip).map(r => ({ from: clip.start + r.from, to: clip.start + r.to, take: r.take }));
+        regions[0].from = Math.min(regions[0].from, from);
+        regions[regions.length - 1].to = Math.max(regions[regions.length - 1].to, to);
+        regions.forEach((r, k) => {
+          let a = Math.max(r.from, from), b = Math.min(r.to, to);
+          if (b - a <= EPS) return;
+          const piece = { fadeIn: 0, fadeOut: 0, shapeIn: 'equal', shapeOut: 'equal' };
+          if (a <= from + EPS) { piece.fadeIn = fadeIn; piece.shapeIn = shapeIn; }
+          else piece.fadeIn = Math.min(xf(a), b - a);              // the comp changes take here
+          if (b >= to - EPS) { piece.fadeOut = fadeOut; piece.shapeOut = shapeOut; }
+          else if (k + 1 < regions.length) {
+            const past = Math.min(to, b + xf(b));                // go on under the next take's fade-in
+            piece.fadeOut = past - b;
+            b = past;
+          }
+          const take = takesOf(clip)[r.take];
+          out.push(Object.assign(piece, {
+            clip, take, takeIndex: r.take, audioId: take.audioId, rate: takeRate(project, clip, take),
+            at: takeAt(project, clip, take, a), beat: a, end: b, gain: clip.gain,
+          }));
+        });
+      });
+    });
+    return out.sort((x, y) => x.beat - y.beat);
   }
 
   // ── What may be imported ─────────────────────────────────────────────────
@@ -551,11 +903,50 @@
     }
     return true;
   }
+  // Puts an audio clip on top of any it overlaps, so that it is the one heard.
+  function raiseClip(project, clipId) {
+    const found = findClip(project, clipId);
+    if (!found) return false;
+    const list = found.track.clips;
+    if (list[list.length - 1] === found.clip) return false;
+    list.splice(list.indexOf(found.clip), 1);
+    list.push(found.clip);
+    return true;
+  }
 
   function resizeClip(project, clipId, length) {
     const found = findClip(project, clipId);
     if (!found) return false;
     found.clip.length = Math.max(MIN_LENGTH, Math.min(LIMITS.beats, length));
+    fitFades(found.clip);
+    return true;
+  }
+
+  // Moves a clip's start (its left edge) and keeps its end where it is. A
+  // recording slides under it, so what was heard at each beat still is; a
+  // clip of notes keeps its notes where they were in the song, losing any
+  // that now start before it.
+  function trimStart(project, clipId, beat) {
+    const found = findClip(project, clipId);
+    if (!found) return false;
+    const clip = found.clip;
+    const end = clip.start + clip.length;
+    const to = Math.max(0, Math.min(beat, end - MIN_LENGTH));
+    const delta = to - clip.start;
+    if (Math.abs(delta) < EPS) return false;
+    if (clip.audioId) {
+      const regions = compRegions(clip);
+      takesOf(clip).forEach(t => { t.offset += takeSpan(project, clip, t, clip.start, to); });
+      if (clip.comp) {
+        clip.comp = mergeComp(regions.filter(r => r.to - delta > EPS).map(r => ({ at: Math.max(0, r.from - delta), take: r.take })));
+      }
+    } else {
+      clip.notes = clip.notes.filter(n => n.t - delta >= -EPS);
+      clip.notes.forEach(n => { n.t = Math.max(0, n.t - delta); });
+    }
+    clip.start = to;
+    clip.length = end - to;
+    fitFades(clip);
     return true;
   }
 
@@ -565,16 +956,21 @@
     const { track, clip } = found;
     const cut = beat - clip.start;
     if (cut <= 0 || cut >= clip.length || track.clips.length >= LIMITS.clips) return null;
-    const right = { id: uid('c'), name: clip.name, start: beat, length: clip.length - cut };
+    let right = { id: uid('c'), name: clip.name, start: beat, length: clip.length - cut };
     if (clip.audioId) {
-      // The second part starts as far into the recording as the first part runs.
-      const passed = clip.stretch && clip.tempo > 0 ? cut * 60 / clip.tempo
-        : beatToSeconds(project, beat) - beatToSeconds(project, clip.start);
-      right.audioId = clip.audioId;
-      right.offset = clip.offset + passed;
-      right.gain = clip.gain;
-      right.tempo = clip.tempo;
-      right.stretch = clip.stretch;
+      // The second part starts as far into each recording as the first part runs.
+      const passed = take => takeSpan(project, clip, take, clip.start, beat);
+      const regions = compRegions(clip);
+      right = createClip(Object.assign(right, {
+        audioId: clip.audioId, offset: clip.offset + passed(clip), gain: clip.gain, tempo: clip.tempo, stretch: clip.stretch,
+        fadeIn: 0, fadeOut: clip.fadeOut,
+        alts: (clip.alts || []).map(t => ({ audioId: t.audioId, offset: t.offset + passed(t), tempo: t.tempo })),
+        comp: regions.filter(r => r.to > cut + EPS).map(r => ({ at: Math.max(0, r.from - cut), take: r.take })),
+      }));
+      if (clip.comp) clip.comp = mergeComp(regions.filter(r => r.from < cut - EPS).map(r => ({ at: r.from, take: r.take })));
+      clip.fadeOut = 0;
+      clip.length = cut;
+      fitFades(clip);
     } else {
       right.notes = clip.notes.filter(n => n.t >= cut).map(n =>
         createNote({ t: n.t - cut, d: Math.min(n.d, right.length - (n.t - cut)), n: n.n, v: n.v }));
@@ -593,9 +989,12 @@
     const copy = createClip({
       name: src.name, start: src.start + src.length, length: src.length,
       audioId: src.audioId, offset: src.offset, gain: src.gain, tempo: src.tempo, stretch: src.stretch,
+      fadeIn: src.fadeIn, fadeOut: src.fadeOut, alts: src.alts, comp: src.comp,
       notes: src.notes ? src.notes.map(n => ({ t: n.t, d: n.d, n: n.n, v: n.v })) : undefined,
     });
-    found.track.clips.splice(found.track.clips.indexOf(src) + 1, 0, copy);
+    // On an audio track the copy goes on top, where it is heard.
+    if (found.track.kind === 'audio') found.track.clips.push(copy);
+    else found.track.clips.splice(found.track.clips.indexOf(src) + 1, 0, copy);
     return copy;
   }
 
@@ -748,6 +1147,10 @@
     project.loop.on = loop.on === true;
     project.loop.start = num(loop.start, 0, LIMITS.beats, 0);
     project.loop.end = num(loop.end, project.loop.start + MIN_LENGTH, LIMITS.beats, project.loop.start + 16);
+    const punch = raw.punch && typeof raw.punch === 'object' ? raw.punch : {};
+    project.punch.start = num(punch.start, 0, LIMITS.beats, 0);
+    project.punch.end = num(punch.end, project.punch.start, LIMITS.beats, project.punch.start);
+    project.punch.on = punch.on === true && project.punch.end - project.punch.start >= MIN_LENGTH - EPS;
 
     project.markers = (Array.isArray(raw.markers) ? raw.markers : [])
       .filter(m => m && typeof m === 'object' && typeof m.name === 'string' &&
@@ -761,7 +1164,7 @@
         id: keepId(rt.id, 't', seen), name: rt.name, instrument: rt.instrument,
         color: typeof rt.color === 'string' && COLOR_RE.test(rt.color)
           ? rt.color : TRACK_COLORS[project.tracks.length % TRACK_COLORS.length],
-        volume: rt.volume, pan: rt.pan, mute: rt.mute, solo: rt.solo, armed: rt.armed,
+        volume: rt.volume, pan: rt.pan, mute: rt.mute, solo: rt.solo, armed: rt.armed, showTakes: rt.showTakes,
         fx: rt.fx && typeof rt.fx === 'object' ? rt.fx : {},
       });
       track.plugins = cleanPlugins(rt.plugins, seen, takesInstrument(track));
@@ -772,6 +1175,7 @@
           if (typeof rc.audioId !== 'string' || !ID_RE.test(rc.audioId)) return;
           track.clips.push(createClip(Object.assign(base, {
             audioId: rc.audioId, offset: rc.offset, gain: rc.gain, tempo: rc.tempo, stretch: rc.stretch,
+            fadeIn: rc.fadeIn, fadeOut: rc.fadeOut, alts: rc.alts, comp: rc.comp,
           })));
         } else {
           const clip = createClip(base);
@@ -913,10 +1317,12 @@
     DENOMINATORS, stretches, stretchAt, tempoAt, beatToSeconds, secondsToBeat, positionAt, barsBetween, nearestBar, clipBars, clicksBetween,
     setChange, removeChange,
     clipRate, clipSpan, setStretch, setClipTempo,
+    takesOf, takeAt, takeRate, compRegions, takeIndexAt, setComp, useTake, removeTake, removeUnusedTakes, setFade,
+    takesFromRecording, placeTakes, audioPieces, punchRange, XFADE,
     audioFileProblem, audioLengthProblem,
     addTrack, removeTrack,
     addPlugin, removePlugin, movePlugin, findPlugin, pluginIds, instrumentPlugin,
-    addClip, removeClip, moveClip, resizeClip, splitClip, duplicateClip,
+    addClip, removeClip, moveClip, raiseClip, resizeClip, trimStart, splitClip, duplicateClip,
     addNote, removeNote, updateNote, quantize, transpose, setVelocity,
     notesWithin, shiftNotes, stretchNotes, removeNotes, copyNotes, pasteNotes,
     sanitize, serialize, deserialize, History, toMidi,

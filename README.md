@@ -92,7 +92,7 @@ Open a song in the DAW and its parts arrive as tracks: chords, bass, drums,
 vocal melody and under melody, one clip per section, with the sections as
 markers along the top. From there the project is yours to change.
 
-- **Timeline.** Drag a clip to move it, drag its right edge to trim it,
+- **Timeline.** Drag a clip to move it, drag either edge to trim it,
   double-click an empty stretch to start a new one. Click a section name to
   loop that section, or drag in the bar ruler to loop any range. `S` splits
   at the playhead, `Ctrl+D` duplicates, `?` lists every shortcut.
@@ -117,6 +117,18 @@ markers along the top. From there the project is yours to change.
   on Monitor to hear yourself through the app while you play (with
   headphones). Or bring in an audio file (WAV, MP3, OGG, FLAC) with Import
   or by dropping it on the window.
+- **Takes and comping.** Record with the loop on and every pass is kept as
+  a take of one clip; play over a clip again and the new take joins it.
+  "Takes" on the track shows each take in a row of its own: drag along a
+  row to use that take there, so the best of each can be put together.
+  Nothing is cut away, and where the takes change they crossfade.
+- **Punch in and out.** Turn on Punch (`P`) and Shift-drag in the bar ruler
+  to mark a range: recording starts a bar ahead so you can play yourself in,
+  keeps only what was played inside the range, and stops a bar after it.
+- **Fades.** Drag the small squares on an audio clip's top corners to fade
+  it in or out. Where one clip lies over another, the one on top is heard,
+  and the two crossfade at its edges; a split clip plays on across the cut
+  as if it were whole.
 - **Takes keep time.** Change the tempo and a recording is stretched or
   squeezed to stay on its beats, with its pitch unchanged. For a loop from
   somewhere else, tell its clip what tempo it is at and tick "Keep in time".

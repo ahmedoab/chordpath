@@ -1293,18 +1293,19 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
   display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap;
   padding: 0.45rem 0.8rem; background: var(--surface); border-bottom: 1px solid var(--line);
 }
-.daw-bar button { padding: 0.3rem 0.5rem; font-size: 0.78rem; }
+.daw-bar button { padding: 0.3rem 0.44rem; font-size: 0.78rem; }
 .daw-bar button.primary { min-width: 5.4rem; border: 1px solid var(--accent); border-radius: var(--radius-s); }
 .daw-bar .daw-rec.on, [data-theme="dark"] .daw-bar .daw-rec.on { background: var(--tense); border-color: var(--tense); color: #fff; }
 .daw-bar .daw-toggle.on, [data-theme="dark"] .daw-bar .daw-toggle.on { background: var(--accent-2); border-color: var(--accent); color: var(--ink); }
+.daw-bar .daw-punch.on, [data-theme="dark"] .daw-bar .daw-punch.on { border-color: var(--tense); color: var(--tense); background: var(--surface); }
 .daw-pos { display: flex; align-items: baseline; gap: 0.5rem; min-width: 6.6rem; padding: 0 0.4rem; }
 #dawBars { font-size: 1.05rem; font-weight: 500; min-width: 2.6rem; }
 .daw-field { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; color: var(--ink-2); white-space: nowrap; }
-.daw-zoom { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.76rem; color: var(--ink-2); margin: 0 0.2rem; }
-.daw-field input[type="number"] { width: 3.8rem; padding: 0.25rem 0.35rem; }
+.daw-zoom { display: inline-flex; align-items: center; gap: 0.2rem; margin: 0 0.15rem; }
+.daw-field input[type="number"] { width: 3.4rem; padding: 0.25rem 0.35rem; }
 .daw-field select { width: auto; padding: 0.25rem 0.35rem; font-size: 0.76rem; }
 /* A fixed width: input names vary a great deal and must not shove the toolbar about. */
-#dawInput { width: 7.4rem; text-overflow: ellipsis; }
+#dawInput { width: 6.9rem; text-overflow: ellipsis; }
 .daw-field input[type="range"] { accent-color: var(--accent); width: 96px; }
 /* The buttons at the far end wrap together when the window is narrow. */
 .daw-actions { display: flex; align-items: center; gap: 0.3rem; margin-left: auto; }
@@ -1321,10 +1322,12 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
   padding: 0 0.6rem; font-size: 0.72rem; line-height: 1.25; color: var(--accent); overflow: hidden;
 }
 .daw-head {
-  display: flex; flex-direction: column; justify-content: center; gap: 0.28rem;
+  display: flex; flex-direction: column; justify-content: flex-start;
   padding: 0 0.5rem 0 0.55rem; cursor: pointer;
   border-bottom: 1px solid var(--line); border-left: 3px solid var(--tc);
 }
+/* The part beside the track's own lane; any rows of takes are beneath it. */
+.daw-head-main { flex: 0 0 auto; display: flex; flex-direction: column; justify-content: center; gap: 0.28rem; }
 .daw-head.selected { background: var(--bg); }
 .daw-head-top { display: flex; align-items: center; gap: 0.3rem; }
 .daw-name { flex: 1; min-width: 0; font-size: 0.8rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1355,6 +1358,7 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .mx-btn.on, [data-theme="dark"] .mx-btn.on { background: var(--warn); border-color: var(--warn); color: #fff; }
 .mx-btn.solo.on, [data-theme="dark"] .mx-btn.solo.on { background: var(--good); border-color: var(--good); }
 .mx-btn.arm.on, [data-theme="dark"] .mx-btn.arm.on { background: var(--tense); border-color: var(--tense); }
+.mx-btn.takes.on, [data-theme="dark"] .mx-btn.takes.on { background: var(--accent); border-color: var(--accent); }
 
 .daw-panel {
   display: grid; grid-template-rows: auto minmax(0, 1fr);
@@ -1377,6 +1381,16 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .daw-audio p { margin: 0; }
 .daw-check { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--ink-2); }
 .daw-check input { accent-color: var(--accent); }
+.daw-audio-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; }
+/* The takes of an audio clip, to choose between. */
+.daw-takes { margin-top: 0.35rem; padding-top: 0.55rem; border-top: 1px solid var(--line); width: 100%; }
+.daw-takes-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; margin-bottom: 0.3rem; }
+.daw-takes .meta { font-size: 0.76rem; }
+.daw-take-list { list-style: none; margin: 0.45rem 0 0; padding: 0; display: grid; gap: 0.2rem; }
+.daw-take-list li { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) auto auto; align-items: center; gap: 0.5rem; padding: 0.15rem 0.4rem; border-left: 3px solid var(--line); }
+.daw-take-list li.used { border-left-color: var(--accent); }
+.daw-take-name { font-weight: 600; font-size: 0.8rem; }
+.daw-take-list button { padding: 0.12rem 0.45rem; font-size: 0.7rem; }
 .daw-tab { height: 100%; max-height: none; margin: 0; border: 0; border-radius: 0; font-size: 0.74rem; background: var(--bg); }
 
 /* Mixer: each strip is a name over two columns, the fader with its meter as

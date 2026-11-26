@@ -52,8 +52,9 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
         const p = eng.project;
         return {
           tracks: p.tracks.map(t => ({ id: t.id, name: t.name, kind: t.kind, instrument: t.instrument, mute: t.mute, solo: t.solo, armed: t.armed,
-            volume: t.volume, clips: t.clips.map(c => ({ id: c.id, start: c.start, length: c.length, notes: c.notes ? c.notes.length : -1, audioId: c.audioId || null })) })),
-          tempo: p.tempo, loop: p.loop, markers: p.markers, master: p.master,
+            volume: t.volume, showTakes: t.showTakes, clips: t.clips.map(c => ({ id: c.id, start: c.start, length: c.length, notes: c.notes ? c.notes.length : -1, audioId: c.audioId || null,
+              takes: DawProject.takesOf(c).length, comp: c.comp || null, fadeIn: c.fadeIn, fadeOut: c.fadeOut })) })),
+          tempo: p.tempo, loop: p.loop, punch: p.punch, markers: p.markers, master: p.master,
           playing: eng.isPlaying(), recording: eng.isRecording(), position: eng.position(),
         };
       };
@@ -498,13 +499,89 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     // A take cannot grow for ever. The limit is twenty minutes; it is shortened here to keep the test quick.
     await page.evaluate(() => { DawProject.LIMITS.audioSeconds = 1.5; });
     await page.click('#dawRec');
-    await page.waitForFunction(() => window.__daw().tracks[5].clips.length === 2, null, { timeout: 30000 }).catch(() => {});
+    await page.waitForFunction(() => !window.__daw().recording && window.__daw().tracks[5].clips[0].takes === 2, null, { timeout: 30000 }).catch(() => {});
     st = await state();
-    check('recording stops by itself at the longest take a project can hold', !st.recording && st.tracks[5].clips.length === 2);
+    check('recording stops by itself at the longest take a project can hold', !st.recording);
     check('and says why', /longest take/i.test(await page.textContent('#toast')));
     await page.evaluate(() => { DawProject.LIMITS.audioSeconds = 1200; });
+    check('played over the first take, it becomes a second take of the same clip', st.tracks[5].clips.length === 1 && st.tracks[5].clips[0].takes === 2);
+    check('and used from where it was played', st.tracks[5].clips[0].comp[0].take === 1);
+    check('the status line says so', /take 2 of 2/i.test(await page.textContent('#dawStatus')));
+
+    // The takes are shown in rows under the track, to choose between.
+    const TAKE_H = 26;
+    const audioHead = () => page.locator('#dawHeads .daw-head').nth(5);
+    check('the takes are shown under the track, and its header grows to match',
+      st.tracks[5].showTakes && Math.round((await audioHead().boundingBox()).height) === LANE_H + 2 * TAKE_H + 4 &&
+      await audioHead().locator('.mx-btn.takes.on').count() === 1);
+    await page.click('#dawPanelTabs [data-panel="notes"]');
+    check('the panel lists both takes and what each is used for', await page.locator('.daw-take-list li').count() === 2 &&
+      /in use/.test(await page.locator('.daw-take-list li').nth(1).textContent()));
+    await audioHead().scrollIntoViewIfNeeded();         // the audio track is below the others
+    v = await view();
+    const rowY = k => v.y + TOP + 5 * LANE_H + LANE_H + 2 + k * TAKE_H + TAKE_H / 2;
+    const recorded = st.tracks[5].clips[0];
+    await page.mouse.move(v.x + 0.05 * ppb - v.scroll, rowY(0));
+    await page.mouse.down();
+    await page.mouse.move(v.x + (recorded.length + 1) * ppb - v.scroll, rowY(0), { steps: 5 });
+    await page.mouse.up();
+    st = await state();
+    check('dragging along the first take\'s row uses it there', JSON.stringify(st.tracks[5].clips[0].comp.map(r => r.take)) === '[0]');
+    await page.mouse.dblclick(v.x + 1 * ppb - v.scroll, rowY(1));
+    st = await state();
+    check('double-clicking the second take\'s row uses it all through', JSON.stringify(st.tracks[5].clips[0].comp.map(r => r.take)) === '[1]');
+    check('and the panel follows', /in use all through/.test(await page.locator('.daw-take-list li').nth(1).textContent()));
+    await shot(page, '14b-daw-takes');
+
+    // Fades: the squares on the clip's top corners.
+    const clipTop = v.y + TOP + 5 * LANE_H + 5;
+    const endX = v.x + (recorded.start + recorded.length) * ppb - v.scroll;
+    await page.mouse.move(endX - 1, clipTop);
+    await page.mouse.down();
+    await page.mouse.move(endX - 1 - 1 * ppb, clipTop, { steps: 4 });
+    await page.mouse.up();
+    st = await state();
+    check(`dragging the top-right square fades the clip out (${st.tracks[5].clips[0].fadeOut.toFixed(2)} beats)`,
+      Math.abs(st.tracks[5].clips[0].fadeOut - 1) < 0.35 && st.tracks[5].clips[0].length === recorded.length);
+    check('and the fade can be typed too', Math.abs(parseFloat(await page.inputValue('#dawFadeOut')) - st.tracks[5].clips[0].fadeOut) < 0.01);
+    await page.fill('#dawFadeOut', '0');
+    await page.locator('#dawFadeOut').dispatchEvent('change');
+    check('a fade typed as nothing is gone', (await state()).tracks[5].clips[0].fadeOut === 0);
+
+    await page.locator('[data-take-del="1"]').click();
+    st = await state();
+    check('a take can be deleted from the list', st.tracks[5].clips[0].takes === 1 && await page.locator('.daw-take-list').count() === 0);
+    check('with one take left the rows go and the header shrinks back', Math.round((await audioHead().boundingBox()).height) === LANE_H);
+
+    // Punching in and out.
+    await page.evaluate(() => { document.getElementById('dawArrange').scrollTop = 0; });
+    await page.keyboard.press('p');
+    check('P turns punching on', (await state()).punch.on && await page.locator('#dawPunch.on').count() === 1);
+    v = await view();
+    await page.keyboard.down('Shift');
+    await page.mouse.move(v.x + 8 * ppb - v.scroll, v.y + RIBBON_H + 10);
+    await page.mouse.down();
+    await page.mouse.move(v.x + 12 * ppb - v.scroll, v.y + RIBBON_H + 10, { steps: 4 });
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    st = await state();
+    check('Shift-dragging in the ruler marks the punch range', st.punch.on && Math.abs(st.punch.start - 8) < 0.3 && Math.abs(st.punch.end - 12) < 0.3);
+    check('without touching the loop', !st.loop.on);
+    const punchRange = [st.punch.start, st.punch.end];
+    await page.keyboard.press('Home');
+    await page.click('#dawRec');
+    await page.waitForFunction(() => window.__daw().recording, null, { timeout: 15000 });
+    check('the status line says what will be kept', /only bar \d+ to bar \d+ is kept/i.test(await page.textContent('#dawStatus')));
+    await page.waitForFunction(() => !window.__daw().recording, null, { timeout: 40000 }).catch(() => {});
+    await page.waitForFunction(() => window.__daw().tracks[5].clips.length === 2, null, { timeout: 10000 }).catch(() => {});
+    st = await state();
+    const punchedIn = st.tracks[5].clips.find(c => c.start > 1);
+    check('recording stops by itself a bar after the punch range', !st.recording && st.position === 0);
+    check(`and keeps only the punch range (${punchRange.join('-')}: ${st.tracks[5].clips.map(c => c.start.toFixed(2) + '+' + c.length.toFixed(2)).join(', ')})`, !!punchedIn && Math.abs(punchedIn.start - punchRange[0]) < 1e-6 &&
+      Math.abs(punchedIn.start + punchedIn.length - punchRange[1]) < 1e-6);
     await page.keyboard.press('Delete');
-    check('the extra take can be deleted again', (await state()).tracks[5].clips.length === 1);
+    await page.keyboard.press('p');
+    check('the punched take can be deleted, and punching turned off', (await state()).tracks[5].clips.length === 1 && !(await state()).punch.on);
 
     // Wandering off to another page mid-take must not throw the take away, nor leave the input open.
     await page.click('#dawMonitor');
@@ -517,11 +594,12 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     check('and stops listening to the input', !(await listening()) && await page.evaluate(() => DawEngine.get().input === null));
     await page.click('#navTabs [data-nav="daw"]');
     await page.waitForSelector('#dawCanvas');
-    await page.waitForFunction(() => window.__daw().tracks[5].clips.length === 2, null, { timeout: 10000 }).catch(() => {});
+    await page.waitForFunction(() => window.__daw().tracks[5].clips[0].takes === 2, null, { timeout: 10000 }).catch(() => {});
     st = await state();
-    check('and keeps what was recorded', st.tracks[5].clips.length === 2 && st.tracks[5].clips[1].length > 0.5);
-    await page.keyboard.press('Delete');
-    check('ready to be kept or deleted', (await state()).tracks[5].clips.length === 1);
+    check('and keeps what was recorded, as another take', st.tracks[5].clips.length === 1 && st.tracks[5].clips[0].takes === 2);
+    await page.click('#dawPanelTabs [data-panel="notes"]');
+    await page.locator('[data-take-del="1"]').click();
+    check('ready to be kept or deleted', (await state()).tracks[5].clips[0].takes === 1);
 
     // ── Export ─────────────────────────────────────────────────────────────
     section('Export');

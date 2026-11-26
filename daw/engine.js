@@ -410,29 +410,67 @@
   // The name a stretched copy of a recording is kept under.
   function fitKey(audioId, rate) { return audioId + '@' + rate; }
 
-  // Starts (part of) an audio clip. `lasts` is how long the clip's place on
-  // the timeline is in seconds, `skip` how far into it to begin, and `rate`
-  // how much its audio is stretched to follow the tempo (1 = not at all).
-  // Until a stretched copy has been made the take plays as it was recorded.
-  Mixer.prototype.playClip = function (trackId, clip, when, skip, lasts, rate) {
+  // A fade's shape: 'linear' where the same sound carries on (it sums to one
+  // across a crossfade), equal power where two different sounds meet.
+  function faded(x, shape) {
+    const k = x <= 0 ? 0 : x >= 1 ? 1 : x;
+    return shape === 'linear' ? k : Math.sin(k * Math.PI / 2);
+  }
+
+  // Shapes a piece's loudness: its fades, and never a click at either end.
+  // Times are seconds from the piece's start: it is `lasts` long, and this
+  // much of it, from `into` to `stop`, is being played, starting at `t0`.
+  function envelope(param, t0, into, stop, piece) {
+    const { lasts, gain, fadeIn, fadeOut, shapeIn, shapeOut } = piece;
+    const g = tau => gain *
+      (fadeIn > 0 && tau < fadeIn ? faded(tau / fadeIn, shapeIn) : 1) *
+      (fadeOut > 0 && tau > lasts - fadeOut ? faded((lasts - tau) / fadeOut, shapeOut) : 1);
+    const at = tau => t0 + (tau - into);
+    const IN = 0.004, OUT = 0.006;                    // the shortest ramps, so nothing clicks
+    param.setValueAtTime(0, t0);
+    if (stop - into <= IN + OUT) {
+      const mid = (into + stop) / 2;
+      param.linearRampToValueAtTime(g(mid), at(mid));
+      param.linearRampToValueAtTime(0, at(stop));
+      return;
+    }
+    const points = new Set([into + IN, stop - OUT]);
+    const STEPS = 8;
+    for (let k = 1; k < STEPS; k++) {
+      if (fadeIn > 0) points.add(fadeIn * k / STEPS);
+      if (fadeOut > 0) points.add(lasts - fadeOut + fadeOut * k / STEPS);
+    }
+    if (fadeIn > 0) points.add(fadeIn);
+    if (fadeOut > 0) points.add(lasts - fadeOut);
+    Array.from(points).filter(tau => tau >= into + IN - 1e-9 && tau <= stop - OUT + 1e-9).sort((a, b) => a - b)
+      .forEach(tau => param.linearRampToValueAtTime(g(tau), at(tau)));
+    param.linearRampToValueAtTime(0, at(stop));
+  }
+
+  // Plays (part of) a piece of an audio track: one take, from one beat to
+  // another, with its fades (see DawProject.audioPieces). c is the piece as
+  // flatten() keeps it, its times in seconds; `skip` is how far into it to
+  // begin. Until a stretched copy has been made a take plays as recorded.
+  Mixer.prototype.playPiece = function (trackId, c, when, skip, until) {
     const strip = this.strips.get(trackId);
-    const fitted = rate && rate !== 1 ? this.buffers.get(fitKey(clip.audioId, rate)) : null;
-    const buffer = fitted || this.buffers.get(clip.audioId);
+    const p = c.piece;
+    const fitted = p.rate !== 1 ? this.buffers.get(fitKey(p.audioId, p.rate)) : null;
+    const buffer = fitted || this.buffers.get(p.audioId);
     if (!strip || !buffer) return;
-    const offset = clip.offset * (fitted ? rate : 1) + skip;
-    const seconds = Math.min(lasts - skip, buffer.duration - offset);
+    let from = p.at * (fitted ? p.rate : 1) + skip;   // where in the buffer to begin
+    let t0 = when, into = skip;
+    if (from < 0) { t0 -= from; into -= from; from = 0; }   // the recording starts later than the piece
+    // `until`: seconds into the piece where it must stop, as when a loop turns back there.
+    const seconds = Math.min(c.lasts - into, buffer.duration - from, until == null ? Infinity : until - into);
     if (seconds <= 0.001) return;
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
     const amp = this.ctx.createGain();
-    amp.gain.setValueAtTime(0, when);
-    amp.gain.linearRampToValueAtTime(clip.gain, when + 0.004);
-    amp.gain.setValueAtTime(clip.gain, when + Math.max(0.004, seconds - 0.006));
-    amp.gain.linearRampToValueAtTime(0, when + seconds);
+    envelope(amp.gain, t0, into, into + seconds, c);
     src.connect(amp);
     amp.connect(strip.input);
-    src.start(when, offset, seconds);
-    strip.live.add({ amp, sources: [src], end: when + seconds });
+    src.start(t0, from, seconds);
+    strip.live.add({ amp, sources: [src], end: t0 + seconds });
   };
 
   Mixer.prototype.cut = function (strip, now) {
@@ -459,12 +497,19 @@
   };
 
   // ── Flattening a project into time-ordered events ────────────────────────
+  // Audio tracks become pieces (see DawProject.audioPieces), their lengths
+  // and fades turned into seconds by the tempo map.
   function flatten(project) {
     const notes = [];
     const clips = [];
+    const seconds = (a, b) => P().beatToSeconds(project, b) - P().beatToSeconds(project, a);
     project.tracks.forEach(track => {
       if (track.kind === 'audio') {
-        track.clips.forEach(clip => clips.push({ trackId: track.id, clip, beat: clip.start, end: clip.start + clip.length }));
+        P().audioPieces(project, track).forEach(piece => clips.push({
+          trackId: track.id, piece, beat: piece.beat, end: piece.end, lasts: seconds(piece.beat, piece.end),
+          fadeIn: seconds(piece.beat, piece.beat + piece.fadeIn), fadeOut: seconds(piece.end - piece.fadeOut, piece.end),
+          shapeIn: piece.shapeIn, shapeOut: piece.shapeOut, gain: piece.gain,
+        }));
         return;
       }
       track.clips.forEach(clip => clip.notes.forEach(n => {
@@ -684,17 +729,29 @@
     return [project.tempo].concat((project.changes || []).map(c => c.beat + ':' + c.tempo)).join(',');
   }
 
-  // Brings the engine in line with the project after any edit.
+  // Where the loop is, for telling when it has been changed.
+  function loopingOf(project) {
+    const loop = project.loop || {};
+    return loop.on ? loop.start + '-' + loop.end : 'off';
+  }
+
+  // Brings the engine in line with the project after any edit. The project
+  // is usually the very one it already had, changed in place, so what it was
+  // like is remembered as text to compare against.
   Engine.prototype.sync = function (project) {
-    const retimed = this.project && timingOf(this.project) !== timingOf(project);
+    const timing = timingOf(project), looping = loopingOf(project);
+    const retimed = this.timing != null && this.timing !== timing;
+    const relooped = this.looping != null && this.looping !== looping;
+    this.timing = timing;
+    this.looping = looping;
     const here = this.playing ? this.position() : this.paused;
     this.project = project;
     this.flat = flatten(project);
     if (this.mixer) this.mixer.sync(project, true);
     this.growNative();
     if (!this.playing) return;
-    if (retimed) {
-      // Re-anchor at the playhead so a tempo change takes effect at once.
+    if (retimed || relooped) {
+      // Re-anchor at the playhead so a tempo change, or a new loop, takes effect at once.
       const now = this.ctx.currentTime;
       this.mixer.cutAll();
       this.anchors = [{ time: now + 0.03, beat: here, spb: this.spbAt(here) }];
@@ -707,6 +764,7 @@
 
   Engine.prototype.setAudio = function (audioId, sampleRate, channels) {
     this.audio.set(audioId, { sampleRate, channels });
+    if (this.peakCache) this.peakCache.delete(audioId);
     if (this.mixer) this.mixer.setAudio(audioId, sampleRate, channels);
   };
   Engine.prototype.hasAudio = function (audioId) { return this.audio.has(audioId); };
@@ -717,6 +775,7 @@
     this.audio.forEach((a, id) => {
       if (keep.has(id)) return;
       this.audio.delete(id);
+      if (this.peakCache) this.peakCache.delete(id);
       if (this.mixer) this.mixer.buffers.delete(id);
     });
   };
@@ -727,13 +786,13 @@
   // a moment, so it is done ahead of playing.
   function wantedFits(project) {
     const wanted = new Map();
-    project.tracks.forEach(track => track.clips.forEach(clip => {
-      const rate = clip.audioId ? P().clipRate(project, clip) : 1;
-      const limits = global.Stretch.LIMITS;
+    const limits = global.Stretch.LIMITS;
+    project.tracks.forEach(track => track.clips.forEach(clip => P().takesOf(clip).forEach(take => {
+      const rate = P().takeRate(project, clip, take);
       if (rate !== 1 && rate >= limits.least && rate <= limits.most) {
-        wanted.set(fitKey(clip.audioId, rate), { key: fitKey(clip.audioId, rate), audioId: clip.audioId, rate });
+        wanted.set(fitKey(take.audioId, rate), { key: fitKey(take.audioId, rate), audioId: take.audioId, rate });
       }
-    }));
+    })));
     return wanted;
   }
 
@@ -767,6 +826,36 @@
   Engine.prototype.audioPeaks = function (audioId, buckets) {
     const a = this.audio.get(audioId);
     return a ? global.Wav.peaks(a.channels[0], buckets) : null;
+  };
+  // The loudest a recording gets between two points (seconds), for drawing
+  // its waveform: -1 when the recording is not here. Read from a summary
+  // made once per recording, so the timeline can redraw every frame without
+  // going through every sample.
+  const PEAK_FRAMES = 256;
+  Engine.prototype.peakBetween = function (audioId, from, to) {
+    const a = this.audio.get(audioId);
+    if (!a) return -1;
+    if (!this.peakCache) this.peakCache = new Map();
+    let sum = this.peakCache.get(audioId);
+    if (!sum) {
+      const data = a.channels[0];
+      sum = new Float32Array(Math.ceil(data.length / PEAK_FRAMES));
+      for (let b = 0; b < sum.length; b++) {
+        let max = 0;
+        for (let i = b * PEAK_FRAMES, end = Math.min(data.length, i + PEAK_FRAMES); i < end; i++) {
+          const v = data[i] < 0 ? -data[i] : data[i];
+          if (v > max) max = v;
+        }
+        sum[b] = max;
+      }
+      this.peakCache.set(audioId, sum);
+    }
+    const per = a.sampleRate / PEAK_FRAMES;
+    const first = Math.max(0, Math.floor(from * per));
+    const last = Math.min(sum.length, Math.max(first + 1, Math.ceil(to * per)));
+    let max = 0;
+    for (let i = first; i < last; i++) if (sum[i] > max) max = sum[i];
+    return max;
   };
   Engine.prototype.audioSeconds = function (audioId) {
     const a = this.audio.get(audioId);
@@ -809,14 +898,21 @@
     return this.beatAt(this.ctx.currentTime - (this.native ? this.native.heardAfter() : 0));
   };
 
-  // Audio clips that are already under way at `beat` start part-way through.
+  // Audio already under way at `beat` starts part-way through.
   Engine.prototype.startRunningClips = function (beat, when) {
     this.flat.clips.forEach(c => {
-      if (c.beat < beat && c.end > beat) {
-        this.mixer.playClip(c.trackId, c.clip, when, this.secondsBetween(c.beat, beat), this.secondsBetween(c.beat, c.end),
-          P().clipRate(this.project, c.clip));
-      }
+      if (c.beat < beat && c.end > beat) this.mixer.playPiece(c.trackId, c, when, this.secondsBetween(c.beat, beat), this.cutFor(c, beat));
     });
+  };
+
+  // Where a piece of audio started at `beat` must stop because the loop
+  // turns back before it ends: seconds into the piece, or undefined. Notes
+  // may ring on past the turn; a recording would go on playing under its
+  // own beginning, one more copy every time round.
+  Engine.prototype.cutFor = function (c, beat) {
+    const loop = this.project.loop;
+    if (!loop.on || !(loop.end > loop.start) || beat >= loop.end - 1e-9 || c.end <= loop.end + 1e-9) return undefined;
+    return this.secondsBetween(c.beat, loop.end);
   };
 
   // Starts playback from the resting playhead. `at` delays the start to a
@@ -886,9 +982,7 @@
     const clips = this.flat.clips;
     while (this.clipCursor < clips.length && clips[this.clipCursor].beat < to) {
       const c = clips[this.clipCursor++];
-      if (c.beat >= from) {
-        this.mixer.playClip(c.trackId, c.clip, this.timeOf(c.beat), 0, this.secondsBetween(c.beat, c.end), P().clipRate(this.project, c.clip));
-      }
+      if (c.beat >= from) this.mixer.playPiece(c.trackId, c, this.timeOf(c.beat), 0, this.cutFor(c, c.beat));
     }
     if (this.clickOn) {
       P().clicksBetween(this.project, from, to).forEach(click => this.tick(this.timeOf(click.beat), click.accent));
@@ -1097,7 +1191,7 @@
     const startTime = first + bar.num * every;
     this.recording = {
       stream: input.stream, source: input.source, node, chunks, countIn, startTime,
-      fromBeat: this.paused, sampleRate: this.ctx.sampleRate,
+      fromBeat: this.paused, sampleRate: this.ctx.sampleRate, loop: this.loopAround(this.paused),
     };
     await this.play(startTime);
     return { fellBack: input.fellBack };
@@ -1136,7 +1230,7 @@
     // again (input path); the clip skips that much of the take to line up.
     const latency = Math.min(0.5, (this.ctx.outputLatency || 0) + (this.ctx.baseLatency || 0) + CHAIN_DELAY);
     const endsAt = P().secondsToBeat(this.project, P().beatToSeconds(this.project, rec.fromBeat) + total / rec.sampleRate);
-    return { sampleRate: rec.sampleRate, channels, latency, startBeat: rec.fromBeat, beats: endsAt - rec.fromBeat };
+    return { sampleRate: rec.sampleRate, channels, latency, startBeat: rec.fromBeat, beats: endsAt - rec.fromBeat, seconds: total / rec.sampleRate, loop: rec.loop };
   };
 
   // Recording through the audio host: the card's input is kept by the host,
@@ -1151,7 +1245,7 @@
     const countIn = [];
     for (let i = 0; i < bar.num; i++) countIn.push(this.tick(first + i * every, i === 0));
     const startTime = first + bar.num * every;
-    this.recording = { viaHost: true, countIn, startTime, fromBeat: this.paused, sampleRate: this.ctx.sampleRate };
+    this.recording = { viaHost: true, countIn, startTime, fromBeat: this.paused, sampleRate: this.ctx.sampleRate, loop: this.loopAround(this.paused) };
     await this.play(startTime);
     return { fellBack: false };
   };
@@ -1187,10 +1281,16 @@
       if (to > from) channels[c].set(data.subarray(from, to), shift + from);
     });
     const endsAt = P().secondsToBeat(this.project, P().beatToSeconds(this.project, rec.fromBeat) + total / rate);
-    return { sampleRate: rate, channels, latency: 0, startBeat: rec.fromBeat, beats: endsAt - rec.fromBeat, dropouts: got.dropouts || 0 };
+    return { sampleRate: rate, channels, latency: 0, startBeat: rec.fromBeat, beats: endsAt - rec.fromBeat, seconds: total / rate, loop: rec.loop, dropouts: got.dropouts || 0 };
   };
 
   Engine.prototype.isRecording = function () { return !!this.recording; };
+  // The loop that will keep coming round while playing from `beat`: { start, end }, or null.
+  Engine.prototype.loopAround = function (beat) {
+    const loop = this.project && this.project.loop;
+    return loop && loop.on && loop.end > loop.start && beat >= loop.start - 1e-9 && beat < loop.end - 1e-9
+      ? { start: loop.start, end: loop.end } : null;
+  };
   // How long the take is so far; nothing during the count-in.
   Engine.prototype.recordedSeconds = function () {
     return this.recording ? Math.max(0, this.ctx.currentTime - this.recording.startTime) : 0;
@@ -1226,7 +1326,7 @@
     mixer.sync(source, false);
 
     const flat = flatten(source);
-    flat.clips.forEach(c => mixer.playClip(c.trackId, c.clip, timeOf(c.beat), 0, timeOf(c.end) - timeOf(c.beat), P().clipRate(source, c.clip)));
+    flat.clips.forEach(c => mixer.playPiece(c.trackId, c, timeOf(c.beat), 0));
     // Notes are created a couple of seconds at a time while the render is
     // paused, so the graph never holds more than what is currently sounding.
     const CHUNK = 2;
@@ -1299,7 +1399,7 @@
       await N.call('mixReverb', room[0], room[1]);
 
       const flat = flatten(source);
-      flat.clips.forEach(c => mixer.playClip(c.trackId, c.clip, timeOf(c.beat), 0, timeOf(c.end) - timeOf(c.beat), P().clipRate(source, c.clip)));
+      flat.clips.forEach(c => mixer.playPiece(c.trackId, c, timeOf(c.beat), 0));
       let cursor = 0;
       const scheduleUntil = time => {
         const beat = P().secondsToBeat(source, time);

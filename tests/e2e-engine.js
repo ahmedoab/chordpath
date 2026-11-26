@@ -619,6 +619,159 @@ const { check, section, tempDataDir, launch, crashed, finish, cleanup } = requir
     check('and listening carries on after the take', monitor.stillOn && monitor.stillHeard > -50);
     check(`turning it off silences the input and lets go of it (${monitor.after.toFixed(0)} dB)`, monitor.off && monitor.closed && monitor.after < -60);
 
+    // ── Takes, comping, fades and punch ──────────────────────────────────────
+    section('Takes, fades and crossfades');
+    const takes = await page.evaluate(async () => {
+      const T = window.__t;
+      const SR = 44100;
+      // A steady tone (with a little wobble, so that a gap or a doubling would show) at a given level.
+      const tone = (seconds, level, hz) => {
+        const d = new Float32Array(Math.round(seconds * SR));
+        for (let i = 0; i < d.length; i++) d[i] = level * Math.sin(2 * Math.PI * (hz || 220) * i / SR) * (0.8 + 0.2 * Math.sin(2 * Math.PI * 3 * i / SR));
+        return { sampleRate: SR, channels: [d] };
+      };
+      const audio = new Map([['aud_loud', tone(12, 0.5)], ['aud_soft', tone(12, 0.1, 330)]]);
+      const P = DawProject;
+      const one = clips => {
+        const p = P.createProject({ tempo: 120 });
+        const t = P.addTrack(p, 'audio', { volume: 0 });
+        clips.forEach(c => P.addClip(t, c));
+        return p;
+      };
+      const opts = { tail: 0.2, sampleRate: SR };
+      const diff = (a, b) => {
+        let most = 0;
+        for (let c = 0; c < 2; c++) for (let i = 0; i < Math.min(a.channels[c].length, b.channels[c].length); i++) {
+          most = Math.max(most, Math.abs(a.channels[c][i] - b.channels[c][i]));
+        }
+        return most;
+      };
+      const res = {};
+
+      // A split clip sounds exactly like the clip it was.
+      const whole = one([{ start: 0, length: 8, audioId: 'aud_loud', offset: 1 }]);
+      const cut = JSON.parse(JSON.stringify(whole));
+      P.splitClip(cut, cut.tracks[0].clips[0].id, 3);
+      const wholeOut = await T.render(whole, opts, audio);
+      const cutOut = await T.render(cut, opts, audio);
+      res.splitDiff = diff(wholeOut, cutOut);
+      res.wholePeak = T.measure(wholeOut, 0.2, 3.8).peak[0];
+      // The same split, moved apart, would have a gap: the test can tell.
+      const apart = JSON.parse(JSON.stringify(cut));
+      apart.tracks[0].clips[1].start = 3.25;
+      res.apartDiff = diff(wholeOut, await T.render(apart, opts, audio));
+
+      // Fades.
+      const fadedOut = await T.render(one([{ start: 0, length: 8, audioId: 'aud_loud', fadeIn: 2, fadeOut: 2 }]), opts, audio);
+      res.fadeStart = T.measure(fadedOut, 0, 0.03).peak[0];
+      res.fadeMid = T.measure(fadedOut, 0.45, 0.55).peak[0];
+      res.fadeFull = T.measure(fadedOut, 1.5, 2.5).peak[0];
+      res.fadeEnd = T.measure(fadedOut, 3.97, 4.0).peak[0];
+
+      // Takes chosen within a clip: the loud one, then the soft one, with no hole between.
+      const comped = one([{ start: 0, length: 8, audioId: 'aud_loud', alts: [{ audioId: 'aud_soft' }], comp: [{ at: 0, take: 0 }, { at: 4, take: 1 }] }]);
+      const compOut = await T.render(comped, opts, audio);
+      res.compFirst = T.measure(compOut, 0.2, 1.8).peak[0];
+      res.compSecond = T.measure(compOut, 2.2, 3.8).peak[0];
+      let lowest = 1;
+      for (let at = 1.98; at < 2.03; at += 0.002) lowest = Math.min(lowest, T.measure(compOut, at, at + 0.006).peak[0]);
+      res.compSeam = lowest;
+
+      // A clip on top is heard instead of the one beneath.
+      const stacked = one([{ start: 0, length: 8, audioId: 'aud_loud' }, { start: 2, length: 2, audioId: 'aud_soft' }]);
+      const stackOut = await T.render(stacked, opts, audio);
+      res.under = T.measure(stackOut, 0.2, 0.9).peak[0];
+      res.top = T.measure(stackOut, 1.1, 1.9).peak[0];
+      res.after = T.measure(stackOut, 2.1, 3.9).peak[0];
+
+      // A take that starts later than its clip is silent until it does.
+      const late = await T.render(one([{ start: 0, length: 4, audioId: 'aud_loud', offset: -1 }]), opts, audio);
+      res.lateBefore = T.measure(late, 0, 0.98).peak[0];
+      res.lateAfter = T.measure(late, 1.1, 1.9).peak[0];
+
+      // Playing live: fades and takes are scheduled without complaint.
+      const eng = DawEngine.get();
+      eng.stop();
+      audio.forEach((a, id) => eng.setAudio(id, a.sampleRate, a.channels));
+      eng.sync(comped);
+      await eng.seek(3.5);
+      await eng.play();
+      let peak = -160;
+      for (let i = 0; i < 40; i++) { await T.wait(25); peak = Math.max(peak, eng.levels().master); }
+      eng.stop();
+      res.live = peak;
+
+      // Looping over the middle of a long recording: it stops where the loop turns, rather than playing on under itself.
+      const long = one([{ start: 0, length: 24, audioId: 'aud_loud' }]);
+      long.loop = { on: true, start: 2, end: 4 };            // one second
+      eng.sync(long);
+      await eng.seek(2);
+      await eng.play();
+      let looped = -160;
+      for (let i = 0; i < 160; i++) { await T.wait(25); looped = Math.max(looped, eng.levels().master); }
+      eng.stop();
+      res.looped = looped;
+
+      // A tempo changed in place while playing takes effect at once.
+      const pace = P.createProject({ tempo: 120 });
+      eng.sync(pace);
+      await eng.seek(0);
+      await eng.play();
+      await T.wait(400);
+      pace.tempo = 60;
+      eng.sync(pace);
+      const before = eng.position();
+      await T.wait(1000);
+      res.pace = eng.position() - before;
+      eng.stop();
+      res.peakSummary = eng.peakBetween('aud_loud', 1, 1.5);
+      res.peakMissing = eng.peakBetween('aud_nothing', 0, 1);
+      return res;
+    });
+    check(`a split clip sounds the same as before it was split (differs by ${takes.splitDiff.toFixed(4)})`, takes.splitDiff < 0.02 && takes.wholePeak > 0.3);
+    check(`(a real gap would be heard: ${takes.apartDiff.toFixed(2)})`, takes.apartDiff > 0.2);
+    check(`a fade-in starts silent and rises (${takes.fadeStart.toFixed(3)} → ${takes.fadeMid.toFixed(2)} → ${takes.fadeFull.toFixed(2)})`,
+      takes.fadeStart < 0.03 && takes.fadeMid > 0.2 && takes.fadeMid < 0.4 && takes.fadeFull > 0.4);
+    check(`a fade-out ends silent (${takes.fadeEnd.toFixed(3)})`, takes.fadeEnd < 0.03);
+    check(`each stretch plays the take chosen for it (${takes.compFirst.toFixed(2)}, then ${takes.compSecond.toFixed(2)})`,
+      takes.compFirst > 0.4 && takes.compSecond > 0.05 && takes.compSecond < 0.13);
+    check(`and where the take changes there is no hole (${takes.compSeam.toFixed(3)} at its quietest)`, takes.compSeam > 0.05);
+    check(`a clip on top is heard instead of the one beneath (${takes.under.toFixed(2)}, ${takes.top.toFixed(2)}, ${takes.after.toFixed(2)})`,
+      takes.under > 0.4 && takes.top < 0.13 && takes.after > 0.4);
+    check('a take that starts after its clip is silent until it does', takes.lateBefore < 1e-4 && takes.lateAfter > 0.4);
+    check(`played live, a clip with takes is heard (${takes.live.toFixed(0)} dB)`, takes.live > -30);
+    check(`looping inside a long recording does not pile copies of it up (${takes.looped.toFixed(1)} dB at its loudest)`, takes.looped < -4 && takes.looped > -12);
+    check(`a tempo changed while playing takes effect at once (${takes.pace.toFixed(2)} beats in a second at 60)`, Math.abs(takes.pace - 1) < 0.25);
+    check('the waveform summary finds a recording\'s loudness, and says when one is missing',
+      takes.peakSummary > 0.4 && takes.peakSummary <= 0.51 && takes.peakMissing === -1);
+
+    section('Recording round a loop');
+    const looping = await page.evaluate(async () => {
+      const T = window.__t;
+      const eng = DawEngine.get();
+      const p = DawProject.createProject({ tempo: 120 });
+      p.loop = { on: true, start: 0, end: 4 };             // two seconds a pass
+      DawProject.addTrack(p, 'audio', { volume: 0 });
+      eng.sync(p);
+      await eng.seek(0);
+      await eng.startRecording();
+      let highest = 0;
+      for (let i = 0; i < (2000 + 5200) / 50; i++) { await T.wait(50); highest = Math.max(highest, eng.position()); }
+      const take = await eng.finishTake();
+      const made = DawProject.takesFromRecording(p, { audioId: 'aud_loop', startBeat: take.startBeat, latency: take.latency, seconds: take.seconds, loop: take.loop });
+      const placed = DawProject.placeTakes(p, p.tracks[0], made, 'Take 1');
+      return {
+        loop: take.loop, seconds: take.seconds, highest, offsets: made.offsets, active: made.active,
+        clips: p.tracks[0].clips.length, count: DawProject.takesOf(placed.clip).length, start: placed.clip.start, length: placed.clip.length,
+      };
+    });
+    check('a take recorded round a loop knows the loop', looping.loop && looping.loop.start === 0 && looping.loop.end === 4);
+    check(`the playhead stayed in the loop while recording (${looping.highest.toFixed(2)})`, looping.highest < 4.05);
+    check(`about five seconds became a take for each pass (${looping.offsets.length}: ${looping.offsets.map(o => o.toFixed(2)).join(', ')})`,
+      looping.offsets.length === 3 && Math.abs(looping.offsets[1] - looping.offsets[0] - 2) < 0.001);
+    check('they lie together in one clip over the loop, the last whole pass in use',
+      looping.clips === 1 && looping.count === 3 && looping.start === 0 && looping.length === 4 && looping.active === 1);
+
     // ── Audio files ──────────────────────────────────────────────────────────
     section('Audio files and clean-up');
     const files = await page.evaluate(async () => {

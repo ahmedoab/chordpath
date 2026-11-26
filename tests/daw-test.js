@@ -862,6 +862,178 @@ section('Plugins on tracks');
   check('and undo puts it back, the very same one', undone.tracks[1].plugins.some(q => q.id === verb.id));
 }
 
+// ── Takes, comping, punch and fades ────────────────────────────────────────
+section('Takes and comping');
+{
+  const P = DawProject;
+  const near = (a, b, tol) => Math.abs(a - b) < (tol || 1e-9);
+  const nearAll = (a, b) => a.length === b.length && a.every((x, i) => near(x, b[i], 1e-6));
+  const p = P.createProject({ tempo: 120 });           // half a second a beat
+
+  // A plain take: what was played after the count-in, lined up by the latency.
+  const plain = P.takesFromRecording(p, { audioId: 'aud_r', startBeat: 4, latency: 0.05, seconds: 4.05 });
+  check('a take covers the beats it was played over', plain.start === 4 && near(plain.length, 8) && nearAll(plain.offsets, [0.05]));
+  check('and follows the tempo, played at the song\'s', plain.stretch && plain.tempo === 120 && plain.active === 0 && nearAll(plain.keep, [4, 12]));
+  eq('nothing recorded makes nothing', P.takesFromRecording(p, { audioId: 'aud_r', startBeat: 0, latency: 0.05, seconds: 0.06 }), null);
+
+  // Recording while a loop of eight beats (four seconds) goes round.
+  const loop = { start: 0, end: 8 };
+  const laps = P.takesFromRecording(p, { audioId: 'aud_l', startBeat: 0, latency: 0.05, seconds: 0.05 + 12 + 1.5, loop });
+  check('each pass of a loop is a take of its own, lined up on the loop', laps.start === 0 && laps.length === 8 && nearAll(laps.offsets, [0.05, 4.05, 8.05, 12.05]));
+  eq('the last whole pass is the one used; the part-pass after it is kept to choose from', laps.active, 2);
+  const short = P.takesFromRecording(p, { audioId: 'aud_l', startBeat: 0, latency: 0.05, seconds: 0.05 + 8 + 0.5, loop });
+  check('a pass stopped soon after it began is let go', short.offsets.length === 2 && short.active === 1);
+  const midway = P.takesFromRecording(p, { audioId: 'aud_l', startBeat: 2, latency: 0.05, seconds: 0.05 + 3 + 4 + 0.2, loop });
+  check('begun inside the loop, the first pass starts late in its take', nearAll(midway.offsets, [-0.95, 3.05]) && midway.active === 1);
+  const once = P.takesFromRecording(p, { audioId: 'aud_l', startBeat: 0, latency: 0.05, seconds: 2.05, loop });
+  check('stopped before the loop came round, it is an ordinary take', once.offsets.length === 1 && near(once.length, 4));
+
+  // Punching in and out.
+  const punched = P.takesFromRecording(p, { audioId: 'aud_p', startBeat: 0, latency: 0.05, seconds: 8.05, punch: { start: 4, end: 8 } });
+  check('a punch range keeps only what was played inside it', nearAll(punched.keep, [4, 8]) && punched.start === 0);
+  eq('and a take that missed it altogether keeps nothing',
+    P.takesFromRecording(p, { audioId: 'aud_p', startBeat: 0, latency: 0, seconds: 1, punch: { start: 40, end: 48 } }), null);
+  const tempoed = P.createProject({ tempo: 120 });
+  P.setChange(tempoed, 8, { tempo: 60 });
+  check('a take that ran across a tempo change does not follow later tempo changes',
+    P.takesFromRecording(tempoed, { audioId: 'aud_t', startBeat: 0, latency: 0, seconds: 8 }).stretch === false);
+
+  // Placing takes on a track.
+  const track = P.addTrack(p, 'audio', {});
+  const fresh = P.placeTakes(p, track, punched, 'Take 1');
+  check('on an empty stretch a punched take is a clip over the punch range alone',
+    !fresh.joined && fresh.clip.start === 4 && near(fresh.clip.length, 4) && near(fresh.clip.offset, 2.05) && !fresh.clip.alts);
+
+  const t2 = P.addTrack(p, 'audio', {});
+  const old = P.addClip(t2, { start: 0, length: 16, audioId: 'aud_old', offset: 0, tempo: 120, stretch: true });
+  const over = P.placeTakes(p, t2, punched);
+  check('played over a clip, it joins it as a second take', over.joined && over.clip === old && P.takesOf(old).length === 2 && t2.clips.length === 1);
+  check('lined up with the clip', old.alts[0].audioId === 'aud_p' && near(old.alts[0].offset, 0.05));
+  eq('and used only over the punch range', P.compRegions(old).map(r => [r.from, r.to, r.take]), [[0, 4, 0], [4, 8, 1], [8, 16, 0]]);
+
+  const t3 = P.addTrack(p, 'audio', {});
+  const inner = P.addClip(t3, { start: 4, length: 4, audioId: 'aud_in', offset: 1, tempo: 120, stretch: true });
+  P.placeTakes(p, t3, plain.start === 4 ? P.takesFromRecording(p, { audioId: 'aud_big', startBeat: 0, latency: 0, seconds: 8 }) : null);
+  check('a longer take played over a short clip makes the clip grow to hold it', inner.start === 0 && near(inner.length, 16));
+  check('the old take slides so it is still heard where it was played', near(inner.offset, -1) && near(P.takeAt(p, inner, inner, 4), 1));
+  eq('and the new take plays all through', P.compRegions(inner).map(r => r.take), [1]);
+
+  const t4 = P.addTrack(p, 'audio', {});
+  const looped = P.placeTakes(p, t4, laps).clip;
+  check('a loop recording is one clip holding every pass', P.takesOf(looped).length === 4 && looped.start === 0 && looped.length === 8);
+  eq('playing the last whole pass', P.compRegions(looped).map(r => r.take), [2]);
+  P.placeTakes(p, t4, laps);
+  check('going round the loop again adds to the same clip', t4.clips.length === 1 && P.takesOf(looped).length === 8 && P.compRegions(looped)[0].take === 6);
+
+  // Choosing takes.
+  const c = P.createClip({ start: 0, length: 16, audioId: 'aud_a', alts: [{ audioId: 'aud_b' }, { audioId: 'aud_c' }] });
+  eq('a clip with takes plays its newest unless told otherwise', P.compRegions(c).map(r => r.take), [2]);
+  P.useTake(c, 0);
+  P.setComp(c, 4, 8, 1);
+  P.setComp(c, 6, 12, 2);
+  eq('stretches of other takes can be chosen over one another', P.compRegions(c).map(r => [r.from, r.to, r.take]), [[0, 4, 0], [4, 6, 1], [6, 12, 2], [12, 16, 0]]);
+  P.setComp(c, 12, 16, 2);
+  eq('neighbours using the same take become one stretch', c.comp, [{ at: 0, take: 0 }, { at: 4, take: 1 }, { at: 6, take: 2 }]);
+  check('a take that does not exist cannot be chosen', P.setComp(c, 0, 4, 7) === false && P.setComp(c, 0, 4, 1.5) === false);
+  eq('the take at a beat', [P.takeIndexAt(c, 0), P.takeIndexAt(c, 5), P.takeIndexAt(c, 15)], [0, 1, 2]);
+
+  P.removeTake(c, 1);
+  eq('deleting a take hands its stretch to the one before', P.compRegions(c).map(r => [r.from, r.to, r.take]), [[0, 6, 0], [6, 16, 1]]);
+  check('and the others keep their recordings', c.alts.length === 1 && c.alts[0].audioId === 'aud_c');
+  P.removeTake(c, 0);
+  check('deleting the first take makes the next the clip\'s own', c.audioId === 'aud_c' && !c.alts && !c.comp);
+  const unused = P.createClip({ start: 0, length: 8, audioId: 'aud_a', alts: [{ audioId: 'aud_b' }, { audioId: 'aud_c' }, { audioId: 'aud_d' }], comp: [{ at: 0, take: 1 }, { at: 4, take: 3 }] });
+  eq('takes that play nowhere can be cleared away', [P.removeUnusedTakes(unused), P.takesOf(unused).map(t => t.audioId), P.compRegions(unused).map(r => r.take)],
+    [2, ['aud_b', 'aud_d'], [0, 1]]);
+
+  // Splitting and trimming keep every take in line.
+  const q = P.createProject({ tempo: 120 });
+  const qt = P.addTrack(q, 'audio', {});
+  const s = P.addClip(qt, { start: 0, length: 8, audioId: 'aud_a', offset: 1, tempo: 120, stretch: true, fadeIn: 1, fadeOut: 2,
+    alts: [{ audioId: 'aud_b', offset: 3, tempo: 120 }], comp: [{ at: 0, take: 0 }, { at: 6, take: 1 }] });
+  const [left, right] = P.splitClip(q, s.id, 4);
+  check('split, each take of the second part starts where the first part left off', near(right.offset, 3) && near(right.alts[0].offset, 5));
+  eq('the choice of takes is split with it', [P.compRegions(left).map(r => [r.from, r.to, r.take]), P.compRegions(right).map(r => [r.from, r.to, r.take])],
+    [[[0, 4, 0]], [[0, 2, 0], [2, 4, 1]]]);
+  eq('the fade-in stays at the front and the fade-out at the back', [left.fadeIn, left.fadeOut, right.fadeIn, right.fadeOut], [1, 0, 0, 2]);
+  P.trimStart(q, right.id, 5);
+  check('trimming the start slides every take with it', right.start === 5 && right.length === 3 && near(right.offset, 3.5) && near(right.alts[0].offset, 5.5));
+  eq('and moves the choice of takes too', P.compRegions(right).map(r => [r.from, r.to, r.take]), [[0, 1, 0], [1, 3, 1]]);
+  P.trimStart(q, right.id, 4);
+  check('pulled back out, it is as it was', right.start === 4 && near(right.offset, 3) && P.compRegions(right)[0].to === 2);
+  const notes = P.addClip(P.addTrack(q, 'instrument', {}), { start: 0, length: 8, notes: [{ t: 1, d: 1, n: 60 }, { t: 5, d: 1, n: 62 }] });
+  P.trimStart(q, notes.id, 2);
+  eq('a clip of notes trimmed from the front keeps its notes where they were in the song', notes.notes.map(n => [n.t, n.n]), [[3, 62]]);
+
+  // Fades.
+  const f = P.createClip({ start: 0, length: 4, audioId: 'aud_f', fadeIn: 3, fadeOut: 3 });
+  eq('fades never add up to more than the clip', [f.fadeIn, f.fadeOut], [3, 1]);
+  P.setFade(f, 'in', 1);
+  P.setFade(f, 'out', 9);
+  eq('and are set within what room there is', [f.fadeIn, f.fadeOut], [1, 3]);
+
+  // Saving.
+  const saved = P.sanitize(JSON.parse(JSON.stringify(Object.assign(p, { punch: { on: true, start: 4, end: 8 } }))));
+  const back = saved.tracks[1].clips[0];
+  check('takes and their choosing are saved', P.takesOf(back).length === 2 && JSON.stringify(back.comp) === JSON.stringify(old.comp));
+  eq('so is the punch range', saved.punch, { on: true, start: 4, end: 8 });
+  const junk = P.sanitize({ tempo: 120, punch: { on: true, start: 8, end: 2 }, tracks: [{ kind: 'audio', showTakes: 'yes', clips: [
+    { start: 0, length: 4, audioId: 'aud_1', fadeIn: -3, alts: [{ audioId: 'bad id!' }, { audioId: 'aud_2', offset: 'x' }, 'nothing'],
+      comp: [{ at: 2, take: 9 }, { at: -1, take: 0 }, { at: 1, take: 1 }] }] }] });
+  const jc = junk.tracks[0].clips[0];
+  check('nonsense takes are dropped and the rest made sound', jc.alts.length === 1 && jc.alts[0].audioId === 'aud_2' && jc.alts[0].offset === 0);
+  eq('nonsense choosing is set right', jc.comp, [{ at: 0, take: 1 }]);
+  check('a backwards punch range is not used', junk.punch.on === false && junk.tracks[0].showTakes === false && jc.fadeIn === 0);
+  eq('a note clip has no takes or fades', Object.keys(P.createClip({ start: 0, length: 4 })).sort(), ['id', 'length', 'name', 'notes', 'start']);
+}
+
+section('What an audio track plays');
+{
+  const P = DawProject;
+  const near = (a, b) => Math.abs(a - b) < 1e-6;
+  const p = P.createProject({ tempo: 120 });
+  const xf = P.XFADE * 2;                               // the crossfade, in beats at 120
+  const track = P.addTrack(p, 'audio', {});
+  const lone = P.addClip(track, { start: 0, length: 8, audioId: 'aud_a', offset: 1 });
+  let pieces = P.audioPieces(p, track);
+  check('one clip is one piece', pieces.length === 1 && pieces[0].beat === 0 && pieces[0].end === 8 && pieces[0].fadeIn === 0 && pieces[0].fadeOut === 0 && pieces[0].at === 1);
+  lone.fadeIn = 1; lone.fadeOut = 2;
+  pieces = P.audioPieces(p, track);
+  check('with its own fades', pieces[0].fadeIn === 1 && pieces[0].fadeOut === 2);
+  lone.fadeIn = 0; lone.fadeOut = 0;
+
+  const top = P.addClip(track, { start: 2, length: 2, audioId: 'aud_b', offset: 0 });
+  pieces = P.audioPieces(p, track);
+  eq('a clip on top of another is heard instead of it', pieces.map(x => [x.audioId, +x.beat.toFixed(4), +x.end.toFixed(4)]),
+    [['aud_a', 0, +(2 + xf).toFixed(4)], ['aud_b', 2, 4], ['aud_a', +(4 - xf).toFixed(4), 8]]);
+  check('the one beneath fades out under its start and back in under its end',
+    near(pieces[0].fadeOut, xf) && near(pieces[2].fadeIn, xf) && near(pieces[1].fadeIn, xf) && near(pieces[1].fadeOut, xf));
+  check('and comes back in at the right place in its recording', near(pieces[2].at, 1 + (4 - xf) * 0.5));
+  top.fadeIn = 0.5;
+  check('a longer fade on the top clip makes a longer crossfade', near(P.audioPieces(p, track)[0].end, 2.5));
+  P.removeClip(p, top.id);
+
+  // A split clip carries straight on: the two halves crossfade as one sound.
+  const [, second] = P.splitClip(p, lone.id, 4);
+  pieces = P.audioPieces(p, track);
+  check('a split clip plays on across the cut', pieces.length === 2 && near(pieces[0].end, 4 + xf) && near(pieces[1].beat, 4));
+  check('with a straight crossfade, as it is the same sound', pieces[0].shapeOut === 'linear' && pieces[1].shapeIn === 'linear' && near(pieces[1].fadeIn, xf));
+  P.moveClip(p, second.id, 4.5);
+  pieces = P.audioPieces(p, track);
+  check('with a gap between them, neither fades', pieces[0].end === 4 && pieces[0].fadeOut === 0 && pieces[1].fadeIn === 0);
+
+  // Takes chosen within one clip crossfade where they change.
+  const q = P.createProject({ tempo: 120 });
+  const qt = P.addTrack(q, 'audio', {});
+  P.addClip(qt, { start: 0, length: 8, audioId: 'aud_a', offset: 0, alts: [{ audioId: 'aud_b', offset: 10 }], comp: [{ at: 0, take: 0 }, { at: 4, take: 1 }] });
+  pieces = P.audioPieces(q, qt);
+  check('each stretch plays its own take', pieces.length === 2 && pieces[0].audioId === 'aud_a' && pieces[1].audioId === 'aud_b');
+  check('the first runs on under the second', near(pieces[0].end, 4 + xf) && near(pieces[0].fadeOut, xf) && near(pieces[1].beat, 4) && near(pieces[1].fadeIn, xf));
+  check('both from the right places in their recordings', pieces[0].at === 0 && near(pieces[1].at, 12));
+  check('with an equal-power crossfade, being different sounds', pieces[0].shapeOut === 'equal' && pieces[1].shapeIn === 'equal');
+  eq('a track of notes plays no pieces', P.audioPieces(q, P.addTrack(q, 'instrument', {})), []);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) {
   console.error('\nFailed checks:');

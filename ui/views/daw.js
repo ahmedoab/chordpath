@@ -93,12 +93,18 @@
     S.history.push(S.project);
     scheduleSave();
     fitTakes();
-    if (opts.structure) { render(); return; }
+    if (opts.structure || headShape() !== S.headShape) { render(); return; }
     if (!opts.keepPanel) refreshPanel();
     refreshHeads();
     updateBar();
     S.arrange.resize();
     S.dirty = true;
+  }
+
+  // Undo and redo. Not while a take is being made: that could take away the track it is going onto.
+  function undo(back) {
+    if (S.engine.isRecording()) { UI().toast('Stop recording before undoing'); return; }
+    restore(back ? S.history.undo() : S.history.redo());
   }
 
   function restore(state) {
@@ -115,8 +121,7 @@
 
   // ── Opening ──────────────────────────────────────────────────────────────
   async function loadAudio(project) {
-    const ids = new Set();
-    project.tracks.forEach(t => t.clips.forEach(c => { if (c.audioId && !S.engine.hasAudio(c.audioId)) ids.add(c.audioId); }));
+    const ids = new Set(audioIds(project).filter(id => !S.engine.hasAudio(id)));
     for (const id of ids) {
       try {
         const a = await global.DawStore.getAudio(id);
@@ -125,10 +130,11 @@
     }
   }
 
+  // Every recording the project uses: each clip's own, and those of its other takes.
   function audioIds(project) {
-    const ids = [];
-    project.tracks.forEach(t => t.clips.forEach(c => { if (c.audioId) ids.push(c.audioId); }));
-    return ids;
+    const ids = new Set();
+    project.tracks.forEach(t => t.clips.forEach(c => P().takesOf(c).forEach(take => ids.add(take.audioId))));
+    return Array.from(ids);
   }
 
   // Removes everything the DAW keeps for a song. Called when the song is deleted.
@@ -200,6 +206,11 @@
   }
 
   // ── Layout ───────────────────────────────────────────────────────────────
+  // What decides how the track headers are laid out: when it changes, they are drawn again.
+  function headShape() {
+    return S.project.tracks.map(t => t.id + ':' + global.DawArrange.laneHeight(t) + ':' + hasTakes(t)).join(',');
+  }
+
   function headHTML(track) {
     const A = global.DawArrange;
     const insts = track.kind === 'instrument'
@@ -207,19 +218,26 @@
           `<option value="${i.id}"${i.id === track.instrument ? ' selected' : ''}>${esc(i.name)}</option>`).join('')}</select>`
       : `<span class="daw-kind">${track.kind === 'drums' ? 'Drum kit' : 'Audio'}</span>`;
     return `
-      <div class="daw-head${track.id === S.sel.trackId ? ' selected' : ''}" data-track="${esc(track.id)}" style="height:${A.LANE_H}px;--tc:${esc(track.color)}">
-        <div class="daw-head-top">
-          <span class="daw-swatch"></span>
-          <span class="daw-name" title="Double-click to rename">${esc(track.name)}</span>
-          <button type="button" class="daw-x" data-act="remove" title="Remove track" aria-label="Remove track">×</button>
-        </div>
-        <div class="daw-head-row">
-          ${insts}
-          <button type="button" class="mx-btn${track.mute ? ' on' : ''}" data-act="mute" title="Mute">M</button>
-          <button type="button" class="mx-btn solo${track.solo ? ' on' : ''}" data-act="solo" title="Solo">S</button>
-          ${track.kind === 'audio' ? `<button type="button" class="mx-btn arm${track.armed ? ' on' : ''}" data-act="arm" title="Record onto this track">●</button>` : ''}
+      <div class="daw-head${track.id === S.sel.trackId ? ' selected' : ''}" data-track="${esc(track.id)}" style="height:${A.laneHeight(track)}px;--tc:${esc(track.color)}">
+        <div class="daw-head-main" style="height:${A.LANE_H - 1}px">
+          <div class="daw-head-top">
+            <span class="daw-swatch"></span>
+            <span class="daw-name" title="Double-click to rename">${esc(track.name)}</span>
+            <button type="button" class="daw-x" data-act="remove" title="Remove track" aria-label="Remove track">×</button>
+          </div>
+          <div class="daw-head-row">
+            ${insts}
+            <button type="button" class="mx-btn${track.mute ? ' on' : ''}" data-act="mute" title="Mute">M</button>
+            <button type="button" class="mx-btn solo${track.solo ? ' on' : ''}" data-act="solo" title="Solo">S</button>
+            ${track.kind === 'audio' ? `<button type="button" class="mx-btn arm${track.armed ? ' on' : ''}" data-act="arm" title="Record onto this track">●</button>` : ''}
+            ${hasTakes(track) ? `<button type="button" class="mx-btn takes${track.showTakes ? ' on' : ''}" data-act="takes" title="Show every take in rows under the track, to choose the best of each">Takes</button>` : ''}
+          </div>
         </div>
       </div>`;
+  }
+
+  function hasTakes(track) {
+    return track.kind === 'audio' && track.clips.some(c => P().takesOf(c).length > 1);
   }
 
   // The choices in the input picker. An input chosen earlier that is not
@@ -261,14 +279,15 @@
         <div class="daw-pos"><span id="dawBars" class="mono">1.1</span><span id="dawClock" class="meta">0:00.0</span></div>
         <label class="daw-field" title="The tempo where the playhead is. Typing here changes it for that stretch of the song.">♩ <input id="dawTempo" aria-label="Tempo" type="number" min="40" max="240" value="${esc(p.tempo)}" /></label>
         <button type="button" class="ghost" id="dawMeter" title="Time signature where the playhead is. Click to change tempo or time signature part-way through the song.">4/4</button>
-        <button type="button" class="ghost daw-toggle" id="dawLoop" title="Loop (L). Drag in the bar ruler to set the range, or click a section.">Loop</button>
+        <button type="button" class="ghost daw-toggle" id="dawLoop" title="Loop (L). Drag in the bar ruler to set the range, or click a section. Recording while it loops keeps every pass as a take.">Loop</button>
+        <button type="button" class="ghost daw-toggle daw-punch" id="dawPunch" title="Punch in and out (P): recording keeps only the stretch marked in red on the bar ruler. Shift-drag in the ruler to mark it.">Punch</button>
         <button type="button" class="ghost daw-toggle" id="dawClick" title="Metronome">Click</button>
         <label class="daw-field">Snap <select id="dawSnap">${SNAPS.map(([v, name]) =>
           `<option value="${v}"${v === S.snap ? ' selected' : ''}>${name}</option>`).join('')}</select></label>
         <div class="daw-actions">
           <button type="button" class="ghost" id="dawUndo" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
           <button type="button" class="ghost" id="dawRedo" title="Redo (Ctrl+Y)" aria-label="Redo">↷</button>
-          <span class="daw-zoom" title="Zoom the timeline (- and +, or Ctrl and the mouse wheel)">Zoom
+          <span class="daw-zoom" role="group" aria-label="Zoom" title="Zoom the timeline (- and +, or Ctrl and the mouse wheel)">
             <button type="button" class="ghost" id="dawZoomOut" title="Zoom out (-)" aria-label="Zoom out">−</button>
             <button type="button" class="ghost" id="dawZoomIn" title="Zoom in (+)" aria-label="Zoom in">+</button>
           </span>
@@ -307,6 +326,7 @@
         <div class="daw-panel-body" id="dawPanelBody"></div>
       </div>`;
 
+    S.headShape = headShape();
     showPanelHeight();
     S.arrange = A.create($('dawCanvas'), arrangeHost);
     S.roll = null;
@@ -328,7 +348,7 @@
       if (!track) return;
       node.classList.toggle('selected', track.id === S.sel.trackId);
       const set = (act, on) => { const b = node.querySelector(`[data-act="${act}"]`); if (b) b.classList.toggle('on', on); };
-      set('mute', track.mute); set('solo', track.solo); set('arm', track.armed);
+      set('mute', track.mute); set('solo', track.solo); set('arm', track.armed); set('takes', track.showTakes);
       node.querySelector('.daw-name').textContent = track.name;
     });
   }
@@ -341,6 +361,7 @@
     $('dawRec').classList.toggle('on', recording);
     $('dawMonitor').classList.toggle('on', S.engine.isMonitoring());
     $('dawLoop').classList.toggle('on', S.project.loop.on);
+    $('dawPunch').classList.toggle('on', !!P().punchRange(S.project));
     $('dawClick').classList.toggle('on', S.click);
     $('dawUndo').disabled = !S.history.canUndo();
     $('dawRedo').disabled = !S.history.canRedo();
@@ -368,17 +389,26 @@
       project: S.project, sel: S.sel, pxPerBeat: S.pxPerBeat, scrollBeat: S.scrollBeat,
       snap: S.snap, playhead: S.engine.position(),
     }),
-    audioPeaks: (id, n) => S.engine.audioPeaks(id, n),
-    audioSeconds: id => S.engine.audioSeconds(id),
+    peakBetween: (id, from, to) => S.engine.peakBetween(id, from, to),
     snapBeat, gridStep,
     actions: {
       select, seek,
       openTiming,
       redraw: () => { S.dirty = true; },
       commit: () => commit(),
-      previewLoop(a, b) { S.project.loop.start = a; S.project.loop.end = Math.max(b, a + 0.25); S.project.loop.on = true; S.dirty = true; },
-      commitLoop() { commit({ keepPanel: true }); },
+      previewLoop(a, b) {
+        if (loopLocked()) return;
+        S.project.loop.start = a; S.project.loop.end = Math.max(b, a + 0.25); S.project.loop.on = true; S.dirty = true;
+      },
+      commitLoop() { if (!loopLocked()) commit({ keepPanel: true }); },
+      previewPunch(a, b) {
+        if (S.engine.isRecording()) return;
+        S.project.punch = { on: true, start: a, end: Math.max(b, a + 0.25) };
+        S.dirty = true;
+      },
+      commitPunch() { if (!S.engine.isRecording()) commit({ keepPanel: true }); },
       pickSection(index) {
+        if (loopLocked()) return;
         const m = S.project.markers[index];
         const end = index + 1 < S.project.markers.length ? S.project.markers[index + 1].beat : P().endBeat(S.project);
         const same = S.project.loop.on && S.project.loop.start === m.beat && S.project.loop.end === end;
@@ -406,6 +436,37 @@
       scrollBy(beats) { S.scrollBeat = Math.max(0, S.scrollBeat + beats); syncScrollbar(); S.dirty = true; },
     },
   };
+
+  // While a take is being recorded round a loop the loop stays as it is:
+  // the passes are cut from the take by it.
+  function loopLocked() {
+    if (!S.engine.isRecording()) return false;
+    UI().toast('Stop recording to change the loop');
+    return true;
+  }
+  function toggleLoop() {
+    if (loopLocked()) return;
+    S.project.loop.on = !S.project.loop.on;
+    commit({ keepPanel: true });
+  }
+
+  // Punch in and out. Turned on with no range marked, it marks the loop's,
+  // or else the bar the playhead is in.
+  function togglePunch() {
+    if (S.engine.isRecording()) { UI().toast('Stop recording to change the punch range'); return; }
+    const punch = S.project.punch;
+    if (punch.on) { punch.on = false; commit({ keepPanel: true }); return; }
+    if (!(punch.end - punch.start >= 0.25)) {
+      const loop = S.project.loop;
+      const bar = P().positionAt(S.project, S.engine.position());
+      const range = loop.end > loop.start ? [loop.start, loop.end] : [bar.start, bar.start + bar.length];
+      punch.start = range[0];
+      punch.end = range[1];
+    }
+    punch.on = true;
+    commit({ keepPanel: true });
+    setStatus(`Punch: recording keeps bar ${P().positionAt(S.project, punch.start).bar} to bar ${P().positionAt(S.project, punch.end - 1e-6).bar}. Shift-drag in the ruler to change it.`);
+  }
 
   // The name of the section a beat falls in, going by the song's markers.
   function sectionAt(beat) {
@@ -541,6 +602,57 @@
       });
   }
 
+  // The takes of an audio clip, to choose between, when it has more than one.
+  function takesHTML(track, clip) {
+    const takes = P().takesOf(clip);
+    if (takes.length < 2) return '';
+    const regions = P().compRegions(clip);
+    const used = k => regions.filter(r => r.take === k).reduce((sum, r) => sum + r.to - r.from, 0);
+    const share = k => {
+      const beats = used(k);
+      if (beats < 1e-6) return 'not in use';
+      if (clip.length - beats < 1e-6) return 'in use all through';
+      return `in use for ${Math.round(beats * 100) / 100} of ${Math.round(clip.length * 100) / 100} beats`;
+    };
+    return `
+      <div class="daw-takes">
+        <div class="daw-takes-head">
+          <strong>${takes.length} takes</strong>
+          <label class="daw-check"><input type="checkbox" id="dawShowTakes"${track.showTakes ? ' checked' : ''} /> Show them under the track</label>
+          <button type="button" class="ghost small" id="dawDropTakes" title="Delete the takes that are not in use anywhere in this clip">Remove unused</button>
+        </div>
+        <p class="meta">With the takes shown, drag along a take's row to use it there, click a stretch to swap it, or double-click a row to use that take all through.</p>
+        <ol class="daw-take-list">
+          ${takes.map((t, k) => `
+            <li class="${used(k) > 1e-6 ? 'used' : ''}">
+              <span class="daw-take-name">Take ${k + 1}</span>
+              <span class="meta">${share(k)}</span>
+              <button type="button" class="ghost small" data-take-use="${k}" title="Use this take all through the clip">Use all through</button>
+              <button type="button" class="ghost small danger" data-take-del="${k}" title="Delete this take">Delete</button>
+            </li>`).join('')}
+        </ol>
+      </div>`;
+  }
+  function wireTakes(track, clip) {
+    const show = $('dawShowTakes');
+    if (!show) return;
+    show.addEventListener('change', () => { track.showTakes = show.checked; commit({ structure: true }); });
+    $('dawDropTakes').addEventListener('click', () => {
+      const gone = P().removeUnusedTakes(clip);
+      if (!gone) { UI().toast('Every take is in use somewhere'); return; }
+      commit({ structure: true });
+      UI().toast(`${gone} take${gone === 1 ? '' : 's'} removed. Undo brings ${gone === 1 ? 'it' : 'them'} back.`);
+    });
+    doc.querySelectorAll('[data-take-use]').forEach(b => b.addEventListener('click', () => {
+      P().useTake(clip, parseInt(b.dataset.takeUse, 10));
+      commit();
+    }));
+    doc.querySelectorAll('[data-take-del]').forEach(b => b.addEventListener('click', () => {
+      P().removeTake(clip, parseInt(b.dataset.takeDel, 10));
+      commit({ structure: true });
+    }));
+  }
+
   // Opens the note editor zoomed so the whole clip fills its width.
   function fitRoll(wrap, clip) {
     const room = wrap.offsetWidth - global.DawRoll.KEYS_W - 44;      // less the keys and a scrollbar's worth
@@ -578,15 +690,27 @@
     }
     if (!clip.notes) {
       S.roll = null; S.rollClipId = null;
+      const fadeBox = (id, value, name) => `<label class="daw-field" title="${name} in beats. You can also drag the small square on the clip's top corner.">${name}
+        <input type="number" id="${id}" min="0" step="0.25" value="${esc(Math.round(value * 1000) / 1000)}" /> beats</label>`;
       body.innerHTML = `
         <div class="daw-hint daw-audio">
-          <p>Recorded audio. Drag it on the timeline to move it, drag its right edge to trim it, press S to split it at the playhead.</p>
-          <label class="daw-field">Clip gain <input type="range" id="dawGain" min="0" max="2" step="0.01" value="${esc(clip.gain)}" /></label>
+          <p>Recorded audio. Drag it on the timeline to move it, drag either edge to trim it, drag the squares on its top corners to fade it in or out, press S to split it at the playhead.</p>
+          <div class="daw-audio-row">
+            <label class="daw-field">Clip gain <input type="range" id="dawGain" min="0" max="2" step="0.01" value="${esc(clip.gain)}" /></label>
+            ${fadeBox('dawFadeIn', clip.fadeIn, 'Fade in')}
+            ${fadeBox('dawFadeOut', clip.fadeOut, 'Fade out')}
+          </div>
           <label class="daw-check"><input type="checkbox" id="dawStretch"${clip.stretch ? ' checked' : ''} /> Keep in time when the tempo changes</label>
           <label class="daw-field" title="The tempo the audio was played at. For a loop from elsewhere, type its own tempo.">Played at
             <input type="number" id="dawClipTempo" min="20" max="400" value="${esc(clip.tempo || P().tempoAt(S.project, clip.start))}" /> bpm</label>
           <p class="meta" id="dawStretchNote">${esc(stretchNote(clip))}</p>
+          ${takesHTML(track, clip)}
         </div>`;
+      wireTakes(track, clip);
+      [['dawFadeIn', 'in'], ['dawFadeOut', 'out']].forEach(([id, which]) => $(id).addEventListener('change', () => {
+        P().setFade(clip, which, Math.max(0, parseFloat($(id).value) || 0));
+        commit();
+      }));
       const gain = $('dawGain');
       gain.addEventListener('input', () => { clip.gain = parseFloat(gain.value); S.engine.sync(S.project); S.dirty = true; });
       gain.addEventListener('change', () => commit({ keepPanel: true }));
@@ -801,10 +925,20 @@
       commit({ structure: true });
     }
     S.recTrackId = track.id;
+    // Round a loop, recording starts in it. Punching in, it starts a bar
+    // before the punch range, unless the playhead is already before it.
+    const loop = S.project.loop.on && S.project.loop.end > S.project.loop.start ? S.project.loop : null;
+    const punch = P().punchRange(S.project);
+    const here = S.engine.position();
+    if (loop && (here < loop.start || here >= loop.end)) await S.engine.seek(loop.start);
+    else if (!loop && punch && here >= punch[0]) await S.engine.seek(P().positionAt(S.project, Math.max(0, punch[0] - 1e-6)).start);
     setStatus('Opening the input…');
     try {
       const opened = await S.engine.startRecording();
-      setStatus('One bar of clicks, then recording. Press Stop when done.');
+      const bars = range => `bar ${P().positionAt(S.project, range[0]).bar} to bar ${P().positionAt(S.project, range[1] - 1e-6).bar}`;
+      setStatus(loop ? 'One bar of clicks, then recording round the loop: every pass is kept as a take. Press Stop when done.'
+        : punch ? `One bar of clicks, then play along: only ${bars(punch)} is kept.`
+          : 'One bar of clicks, then recording. Press Stop when done.');
       heardFrom(opened);
       refreshInputs();                                // their real names are known once recording is allowed
     } catch (e) {
@@ -815,26 +949,45 @@
   }
 
   async function finishRecording() {
-    const take = S.engine.stopRecording();
+    if (S.finishing) return;
+    S.finishing = true;
+    try { await keepTake(await S.engine.finishTake()); }
+    finally { S.finishing = false; }
+  }
+
+  // Turns what was recorded into takes on the track it was recorded onto.
+  async function keepTake(take) {
     setStatus('');
     const track = P().findTrack(S.project, S.recTrackId);
-    if (!take || take.beats < 0.1 || !track) { UI().toast('Nothing was recorded'); updateBar(); return; }
+    const punch = P().punchRange(S.project);
     const audioId = newAudioId();
+    const made = take && track ? P().takesFromRecording(S.project, {
+      audioId, startBeat: take.startBeat, latency: take.latency, seconds: take.seconds,
+      loop: take.loop, punch: punch ? { start: punch[0], end: punch[1] } : null,
+    }) : null;
+    if (!made) {
+      UI().toast(take && punch ? 'Nothing was played inside the punch range' : 'Nothing was recorded');
+      updateBar();
+      return;
+    }
+    if (take.dropouts > 0) UI().toast('The sound card could not keep up for a moment while recording. Listen back to check the take.');
+    // On the track at once; then onto the disk, and the project saved with it.
+    const project = S.project;
+    const placed = P().placeTakes(project, track, made, 'Take ' + (track.clips.length + 1));
+    if (!placed) { UI().toast('No room on that track for another take'); updateBar(); return; }
     S.engine.setAudio(audioId, take.sampleRate, take.channels);
+    const count = P().takesOf(placed.clip).length;
+    if (count > 1) track.showTakes = true;            // there is a choice to make, so the takes are shown
+    S.sel = { trackId: track.id, clipId: placed.clip.id, noteIds: [] };
+    commit({ structure: true });
+    if (placed.joined) setStatus(`Kept as take ${placed.take + 1} of ${count}. Drag along a take's row to use it instead.`);
+    else if (made.offsets.length > 1) setStatus(`${made.offsets.length} takes, one for each pass. Take ${placed.take + 1} is in use; drag along another's row to use it instead.`);
     try {
-      await global.DawStore.putAudio(audioId, S.project.id, take.sampleRate, take.channels);
+      await global.DawStore.putAudio(audioId, project.id, take.sampleRate, take.channels);
     } catch (e) {
       UI().toast('The take could not be saved; it will be lost when the app closes');
     }
-    // A take belongs to the beats it was played over, so it follows the tempo from the start.
-    const clip = P().addClip(track, {
-      start: take.startBeat, length: take.beats, audioId, offset: take.latency,
-      name: 'Take ' + (track.clips.length + 1),
-      tempo: P().tempoAt(S.project, take.startBeat), stretch: true,
-    });
-    if (clip) S.sel = { trackId: track.id, clipId: clip.id, noteIds: [] };
-    commit();
-    flushSave();                                      // a take is not left waiting on the autosave timer
+    if (S.project === project) flushSave();            // a take is not left waiting on the autosave timer
   }
 
   // ── Bringing audio in ────────────────────────────────────────────────────
@@ -946,6 +1099,7 @@
   }
 
   function openExport() {
+    if (S.engine.isRecording()) { UI().toast('Stop recording before exporting'); return; }
     UI().openModal(`
       <div class="daw-export">
         <h2>Export</h2>
@@ -1389,6 +1543,7 @@
         const fresh = P().fromSong(sg);
         fresh.id = S.project.id;
         fresh.master = S.project.master;
+        fresh.punch = S.project.punch;
         // Timing that was shaped here stays; otherwise the song's own tempo comes across.
         const now = S.project;
         if (now.changes.length || now.meter.num !== 4 || now.meter.den !== 4) {
@@ -1511,10 +1666,11 @@
     press('dawHome', goHome);
     press('dawPlay', togglePlay);
     press('dawRec', toggleRecord);
-    press('dawLoop', () => { S.project.loop.on = !S.project.loop.on; commit({ keepPanel: true }); });
+    press('dawLoop', toggleLoop);
+    press('dawPunch', togglePunch);
     press('dawClick', () => { S.click = !S.click; S.engine.setClick(S.click); updateBar(); });
-    press('dawUndo', () => restore(S.history.undo()));
-    press('dawRedo', () => restore(S.history.redo()));
+    press('dawUndo', () => undo(true));
+    press('dawRedo', () => undo(false));
     press('dawZoomIn', () => zoom(1.3, S.engine.position()));
     press('dawZoomOut', () => zoom(1 / 1.3, S.engine.position()));
     press('dawRebuild', rebuild);
@@ -1594,6 +1750,10 @@
           S.project.tracks.forEach(t => { t.armed = false; });
           track.armed = next;
           commit({ keepPanel: true });
+        } else if (act === 'takes') {
+          e.target.blur();
+          track.showTakes = !track.showTakes;
+          commit({ structure: true });
         } else if (act === 'remove') {
           UI().confirmBox(`Remove the track "${track.name}" and everything on it?`).then(ok => {
             if (!ok) return;
@@ -1650,6 +1810,9 @@
     if (S.engine.recordedSeconds() >= P().LIMITS.audioSeconds) {
       finishRecording().then(() => UI().toast('Recording stopped: that is the longest take a project can hold.'));
     }
+    // Punching in without a loop, recording stops a bar after the punch range.
+    const punch = S.engine.isRecording() && !S.engine.recording.loop ? P().punchRange(S.project) : null;
+    if (punch && !S.finishing && pos >= punch[1] + P().positionAt(S.project, punch[1]).length) finishRecording();
 
     if (playing) {
       const canvas = $('dawCanvas');
@@ -1682,8 +1845,8 @@
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (k === ' ') { e.preventDefault(); togglePlay(); }
     else if (k === 'Home') { e.preventDefault(); goHome(); }
-    else if (mod && k === 'z') { e.preventDefault(); restore(e.shiftKey ? S.history.redo() : S.history.undo()); }
-    else if (mod && k === 'y') { e.preventDefault(); restore(S.history.redo()); }
+    else if (mod && k === 'z') { e.preventDefault(); undo(!e.shiftKey); }
+    else if (mod && k === 'y') { e.preventDefault(); undo(false); }
     else if (mod && k === 'd') { e.preventDefault(); duplicateSelected(); }
     else if (mod && k === 'a') {
       e.preventDefault();                               // never "select all the text on the page"
@@ -1700,7 +1863,8 @@
       if (nudgeNotes(0, (k === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 12 : 1))) e.preventDefault();
     }
     else if (k === 'r') toggleRecord();
-    else if (k === 'l') { S.project.loop.on = !S.project.loop.on; commit({ keepPanel: true }); }
+    else if (k === 'l') toggleLoop();
+    else if (k === 'p') togglePunch();
     else if (k === 's') splitSelected();
     else if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); deleteSelected(); }
     else if (k === '+' || k === '=') zoom(1.3, S.engine.position());
