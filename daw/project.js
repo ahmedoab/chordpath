@@ -10,7 +10,7 @@
   'use strict';
 
   const FORMAT = 'chordpath-daw';
-  const LIMITS = { tracks: 64, clips: 512, notes: 8192, markers: 256, changes: 128, name: 60, title: 120, beats: 100000, audioSeconds: 1200, plugins: 8, takes: 32, comp: 512 };
+  const LIMITS = { tracks: 64, clips: 512, notes: 8192, markers: 256, changes: 128, name: 60, title: 120, beats: 100000, audioSeconds: 1200, plugins: 8, takes: 32, comp: 512, lanes: 16, points: 4096 };
   const XFADE = 0.01;                                    // seconds: the crossfade where takes or clips meet
   const EPS = 1e-6;
   const DENOMINATORS = [2, 4, 8, 16];                    // the note a time signature counts in
@@ -167,12 +167,14 @@
       solo: opts.solo === true,
       armed: opts.armed === true,
       showTakes: kind === 'audio' && opts.showTakes === true,   // its clips' takes are shown in rows beneath it
+      showAuto: opts.showAuto === true,                 // its automation lanes are shown beneath it
       fx: {
         low: num(fx.low, -18, 18, 0), mid: num(fx.mid, -18, 18, 0), high: num(fx.high, -18, 18, 0),
         comp: fx.comp === true,
         reverb: num(fx.reverb, 0, 1, 0), delay: num(fx.delay, 0, 1, 0),
       },
       plugins: [],                                       // VST plugins the track passes through, in order
+      auto: [],                                          // automation lanes: its fader, pan or a plugin's setting over time
       clips: [],
     };
   }
@@ -215,6 +217,8 @@
       scale: text(opts.scale, 40, 'major'),
       master: num(opts.master, -60, 6, 0),               // master fader, dB
       masterPlugins: [],                                 // plugins the whole mix passes through
+      masterAuto: [],                                    // automation of the master fader and its plugins
+      showMaster: false,                                 // the master's automation is shown under the tracks
       loop: { on: false, start: 0, end: 16 },
       punch: { on: false, start: 0, end: 0 },            // recording keeps only this stretch while on
       markers: [],
@@ -844,6 +848,9 @@
     const found = findPlugin(project, pluginId);
     if (!found) return false;
     found.list.splice(found.list.indexOf(found.plugin), 1);
+    // Its settings' automation goes with it.
+    const lanes = found.track ? found.track.auto : project.masterAuto;
+    for (let i = lanes.length - 1; i >= 0; i--) if (lanes[i].plugin === pluginId) lanes.splice(i, 1);
     return true;
   }
   // Moves a plugin earlier (by < 0) or later in its chain.
@@ -857,6 +864,179 @@
     found.list.splice(to, 0, found.plugin);
     return true;
   }
+  // ── Automation ───────────────────────────────────────────────────────────
+  // A lane moves one thing as the song plays: a track's fader (in dB), its
+  // pan (-1 left … 1 right), the master fader, or a setting of one of the
+  // plugins on that track or the master (0 … 1, as the plugin counts it).
+  // Points are { b, v }: a beat and the value there; between two points the
+  // value moves in a straight line, and it holds before the first and after
+  // the last. A lane that is switched off, or has no points, moves nothing,
+  // and the fader or pan is where the mixer has it.
+  const AUTO = {
+    volume: { lo: -60, hi: 6, name: 'Volume' },
+    pan: { lo: -1, hi: 1, name: 'Pan' },
+    param: { lo: 0, hi: 1, name: 'Plugin setting' },
+  };
+  function laneRange(target) { return AUTO[target] || null; }
+
+  function cleanPoints(raw, target) {
+    const r = AUTO[target];
+    const byBeat = new Map();
+    (Array.isArray(raw) ? raw : []).forEach(p => {
+      if (!p || typeof p !== 'object' || typeof p.b !== 'number' || typeof p.v !== 'number' ||
+          !Number.isFinite(p.b) || !Number.isFinite(p.v) || p.b < 0 || p.b > LIMITS.beats) return;
+      byBeat.set(p.b, Math.max(r.lo, Math.min(r.hi, p.v)));
+    });
+    return Array.from(byBeat, ([b, v]) => ({ b, v })).sort((x, y) => x.b - y.b).slice(0, LIMITS.points);
+  }
+
+  // Null for anything that is not a lane.
+  function createLane(opts) {
+    opts = opts && typeof opts === 'object' ? opts : {};
+    const target = AUTO[opts.target] ? opts.target : null;
+    if (!target) return null;
+    const isParam = target === 'param';
+    if (isParam && !(typeof opts.plugin === 'string' && ID_RE.test(opts.plugin) &&
+        Number.isInteger(opts.param) && opts.param >= 0 && opts.param <= 4294967295)) return null;
+    return {
+      id: opts.id || uid('a'),
+      target,
+      plugin: isParam ? opts.plugin : null,
+      param: isParam ? opts.param : null,
+      name: text(opts.name, LIMITS.title, AUTO[target].name),
+      on: opts.on !== false,
+      points: cleanPoints(opts.points, target),
+    };
+  }
+  const laneKey = lane => lane.target + (lane.target === 'param' ? ':' + lane.plugin + ':' + lane.param : '');
+
+  // A saved list of lanes made safe: one for each thing moved, and none for a plugin no longer there.
+  function cleanLanes(raw, seen, pluginIds, targets) {
+    const keys = new Set();
+    return (Array.isArray(raw) ? raw : [])
+      .map(l => (l && typeof l === 'object' && targets.includes(l.target) ? createLane(Object.assign({}, l, { id: keepId(l.id, 'a', seen) })) : null))
+      .filter(l => {
+        if (!l || (l.target === 'param' && !pluginIds.has(l.plugin)) || keys.has(laneKey(l))) return false;
+        keys.add(laneKey(l));
+        return true;
+      })
+      .slice(0, LIMITS.lanes);
+  }
+
+  // The value of a lane at a beat, or null when it has no points.
+  function laneValue(lane, beat) {
+    const pts = lane.points;
+    if (!pts.length) return null;
+    if (beat <= pts[0].b) return pts[0].v;
+    if (beat >= pts[pts.length - 1].b) return pts[pts.length - 1].v;
+    let lo = 0, hi = pts.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (pts[mid].b <= beat) lo = mid; else hi = mid;
+    }
+    const a = pts[lo], b = pts[hi];
+    return b.b - a.b < EPS ? b.v : a.v + (b.v - a.v) * (beat - a.b) / (b.b - a.b);
+  }
+
+  // Where a lane's value must be set to follow it from one beat to another:
+  // [{ b, v }], each of its points in that stretch and, where `fine` (a fader,
+  // whose loudness is not a straight line between two levels in decibels),
+  // every eighth of a beat while it is moving.
+  function laneSteps(lane, from, to, fine) {
+    const out = [];
+    const pts = lane.points;
+    if (!pts.length || to <= from) return out;
+    const STEP = 0.125;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      if (p.b >= to) break;
+      const next = pts[i + 1];
+      if (p.b >= from) out.push({ b: p.b, v: p.v });
+      if (fine && next && Math.abs(next.v - p.v) > 1e-9 && next.b > from) {
+        const first = Math.max(Math.floor(p.b / STEP) + 1, Math.ceil(from / STEP - 1e-9));
+        for (let k = first; k * STEP < Math.min(next.b, to) - EPS; k++) {
+          if (k * STEP > p.b + EPS) out.push({ b: k * STEP, v: p.v + (next.v - p.v) * (k * STEP - p.b) / (next.b - p.b) });
+        }
+      }
+    }
+    return out.sort((x, y) => x.b - y.b);
+  }
+
+  // The lanes of a track, or of the master when trackId is null.
+  function lanesOf(project, trackId) {
+    if (trackId == null) return project.masterAuto;
+    const track = findTrack(project, trackId);
+    return track ? track.auto : null;
+  }
+  // { lane, track, list }: track is null for the master's. Null when there is no such lane.
+  function findLane(project, laneId) {
+    for (const track of project.tracks) {
+      const lane = track.auto.find(l => l.id === laneId);
+      if (lane) return { lane, track, list: track.auto };
+    }
+    const lane = project.masterAuto.find(l => l.id === laneId);
+    return lane ? { lane, track: null, list: project.masterAuto } : null;
+  }
+  // Adds a lane to a track (or the master, trackId null), or finds the one
+  // already moving the same thing. opts: { target, plugin, param, name, value }:
+  // a new lane starts with one point, at the start, at `value`.
+  function addLane(project, trackId, opts) {
+    opts = opts || {};
+    const track = trackId == null ? null : findTrack(project, trackId);
+    if (trackId != null && !track) return null;
+    const list = track ? track.auto : project.masterAuto;
+    const chain = track ? track.plugins : project.masterPlugins;
+    if (!track && opts.target === 'pan') return null;
+    if (opts.target === 'param' && !chain.some(p => p.id === opts.plugin)) return null;
+    const lane = createLane(Object.assign({}, opts, { id: null, points: [] }));
+    if (!lane) return null;
+    const same = list.find(l => laneKey(l) === laneKey(lane));
+    if (same) return same;
+    if (list.length >= LIMITS.lanes) return null;
+    if (typeof opts.value === 'number' && Number.isFinite(opts.value)) lane.points = cleanPoints([{ b: 0, v: opts.value }], lane.target);
+    list.push(lane);
+    return lane;
+  }
+  function removeLane(project, laneId) {
+    const found = findLane(project, laneId);
+    if (!found) return false;
+    found.list.splice(found.list.indexOf(found.lane), 1);
+    return true;
+  }
+  // Puts a point down, or moves the one already on that beat. Returns its index.
+  function setPoint(lane, b, v) {
+    const r = AUTO[lane.target];
+    const beat = Math.max(0, Math.min(LIMITS.beats, b));
+    const value = Math.max(r.lo, Math.min(r.hi, v));
+    let i = lane.points.findIndex(p => Math.abs(p.b - beat) < EPS);
+    if (i >= 0) { lane.points[i].v = value; return i; }
+    if (lane.points.length >= LIMITS.points) return -1;
+    i = lane.points.findIndex(p => p.b > beat);
+    if (i < 0) i = lane.points.length;
+    lane.points.splice(i, 0, { b: beat, v: value });
+    return i;
+  }
+  // Moves a point, never past its neighbours. Returns its index.
+  function movePoint(lane, index, b, v) {
+    const p = lane.points[index];
+    if (!p) return -1;
+    const r = AUTO[lane.target];
+    const prev = lane.points[index - 1], next = lane.points[index + 1];
+    const gap = 1 / 64;
+    p.b = Math.max(prev ? prev.b + gap : 0, Math.min(next ? next.b - gap : LIMITS.beats, b));
+    p.v = Math.max(r.lo, Math.min(r.hi, v));
+    return index;
+  }
+  function removePoint(lane, index) {
+    if (!lane.points[index]) return false;
+    lane.points.splice(index, 1);
+    return true;
+  }
+  // The lane that has a track's fader or pan (or the master's fader), if one does: on, and with points.
+  function laneInForce(list, target) {
+    return (list || []).find(l => l.target === target && l.on && l.points.length) || null;
+  }
+
   // A saved chain made safe: only whole plugins, each with a name of its own,
   // an instrument (where one is allowed) first and alone.
   function cleanPlugins(raw, seen, instrumentAllowed) {
@@ -1164,10 +1344,11 @@
         id: keepId(rt.id, 't', seen), name: rt.name, instrument: rt.instrument,
         color: typeof rt.color === 'string' && COLOR_RE.test(rt.color)
           ? rt.color : TRACK_COLORS[project.tracks.length % TRACK_COLORS.length],
-        volume: rt.volume, pan: rt.pan, mute: rt.mute, solo: rt.solo, armed: rt.armed, showTakes: rt.showTakes,
+        volume: rt.volume, pan: rt.pan, mute: rt.mute, solo: rt.solo, armed: rt.armed, showTakes: rt.showTakes, showAuto: rt.showAuto,
         fx: rt.fx && typeof rt.fx === 'object' ? rt.fx : {},
       });
       track.plugins = cleanPlugins(rt.plugins, seen, takesInstrument(track));
+      track.auto = cleanLanes(rt.auto, seen, new Set(track.plugins.map(p => p.id)), ['volume', 'pan', 'param']);
       (Array.isArray(rt.clips) ? rt.clips : []).forEach(rc => {
         if (!rc || typeof rc !== 'object' || track.clips.length >= LIMITS.clips) return;
         const base = { id: keepId(rc.id, 'c', seen), name: rc.name, start: rc.start, length: rc.length };
@@ -1187,6 +1368,8 @@
       project.tracks.push(track);
     });
     project.masterPlugins = cleanPlugins(raw.masterPlugins, seen, false);
+    project.masterAuto = cleanLanes(raw.masterAuto, seen, new Set(project.masterPlugins.map(p => p.id)), ['volume', 'param']);
+    project.showMaster = raw.showMaster === true;
     return project;
   }
 
@@ -1322,6 +1505,7 @@
     audioFileProblem, audioLengthProblem,
     addTrack, removeTrack,
     addPlugin, removePlugin, movePlugin, findPlugin, pluginIds, instrumentPlugin,
+    laneRange, laneValue, laneSteps, lanesOf, findLane, addLane, removeLane, setPoint, movePoint, removePoint, laneInForce,
     addClip, removeClip, moveClip, raiseClip, resizeClip, trimStart, splitClip, duplicateClip,
     addNote, removeNote, updateNote, quantize, transpose, setVelocity,
     notesWithin, shiftNotes, stretchNotes, removeNotes, copyNotes, pasteNotes,

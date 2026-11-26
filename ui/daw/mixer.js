@@ -14,9 +14,12 @@
 
   function esc(v) { return global.UI.esc(v); }
 
-  function slider(field, value, min, max, step, title) {
-    return `<input type="range" class="mx-range" data-field="${field}" min="${min}" max="${max}" step="${step}" value="${esc(value)}" title="${esc(title)}" aria-label="${esc(title)}" />`;
+  function slider(field, value, min, max, step, title, held) {
+    return `<input type="range" class="mx-range" data-field="${field}" min="${min}" max="${max}" step="${step}" value="${esc(value)}" title="${esc(held ? AUTOMATED : title)}" aria-label="${esc(title)}"${held ? ' disabled' : ''} />`;
   }
+  // A fader or pan that a lane of automation has is shown as such, and left to it.
+  const AUTOMATED = 'Follows its automation lane as the song plays. Switch the lane off (Auto, on the track) to set it here.';
+  const inForce = (list, target) => !!global.DawProject.laneInForce(list, target);
 
   function dbText(db) { return db <= -59.5 ? '-inf' : (db > 0 ? '+' : '') + db.toFixed(1); }
 
@@ -31,21 +34,22 @@
   // A strip is two columns: the fader with its meter, as tall as the panel
   // allows, and beside it everything else, so nothing needs scrolling.
   function strip(track) {
+    const volumeHeld = inForce(track.auto, 'volume'), panHeld = inForce(track.auto, 'pan');
     return `
       <div class="mx-strip" data-track="${esc(track.id)}" style="--tc:${esc(track.color)}">
         <div class="mx-name"><span class="mx-title" title="${esc(track.name)}">${esc(track.name)}</span>${pluginsButton(track.plugins)}</div>
         <div class="mx-body">
           <div class="mx-main">
             <div class="mx-meter"><span data-meter="${esc(track.id)}"></span></div>
-            <input type="range" class="mx-fader" data-field="volume" min="-60" max="6" step="0.5" value="${esc(track.volume)}" title="Volume. Double-click to reset." aria-label="Volume" />
+            <input type="range" class="mx-fader" data-field="volume" min="-60" max="6" step="0.5" value="${esc(track.volume)}" title="${esc(volumeHeld ? AUTOMATED : 'Volume. Double-click to reset.')}" aria-label="Volume"${volumeHeld ? ' disabled' : ''} />
           </div>
           <div class="mx-side">
             <div class="mx-row">
-              <span class="mx-db mono" data-db title="Volume, dB">${dbText(track.volume)}</span>
+              <span class="mx-db mono" data-db title="Volume, dB">${volumeHeld ? 'auto' : dbText(track.volume)}</span>
               <button type="button" class="mx-btn${track.mute ? ' on' : ''}" data-toggle="mute" title="Mute">M</button>
               <button type="button" class="mx-btn solo${track.solo ? ' on' : ''}" data-toggle="solo" title="Solo">S</button>
             </div>
-            <label class="mx-ctl"><span>Pan</span>${slider('pan', track.pan, -1, 1, 0.05, 'Pan, left to right')}</label>
+            <label class="mx-ctl"><span>Pan</span>${slider('pan', track.pan, -1, 1, 0.05, 'Pan, left to right', panHeld)}</label>
             <label class="mx-ctl"><span>Low</span>${slider('fx.low', track.fx.low, -18, 18, 0.5, 'Low shelf, dB')}</label>
             <label class="mx-ctl"><span>Mid</span>${slider('fx.mid', track.fx.mid, -18, 18, 0.5, 'Mid, dB')}</label>
             <label class="mx-ctl"><span>High</span>${slider('fx.high', track.fx.high, -18, 18, 0.5, 'High shelf, dB')}</label>
@@ -58,6 +62,7 @@
   }
 
   function render(container, project, actions) {
+    const masterHeld = inForce(project.masterAuto, 'volume');
     container.innerHTML = `
       <div class="mixer">
         ${project.tracks.map(strip).join('')}
@@ -66,9 +71,9 @@
           <div class="mx-body">
             <div class="mx-main">
               <div class="mx-meter"><span data-meter="master"></span></div>
-              <input type="range" class="mx-fader" data-master min="-60" max="6" step="0.5" value="${esc(project.master)}" title="Master volume. Double-click to reset." aria-label="Master volume" />
+              <input type="range" class="mx-fader" data-master min="-60" max="6" step="0.5" value="${esc(project.master)}" title="${esc(masterHeld ? AUTOMATED.replace('(Auto, on the track)', '(Master automation, under the tracks)') : 'Master volume. Double-click to reset.')}" aria-label="Master volume"${masterHeld ? ' disabled' : ''} />
             </div>
-            <div class="mx-side"><span class="mx-db mono" data-db title="Master volume, dB">${dbText(project.master)}</span></div>
+            <div class="mx-side"><span class="mx-db mono" data-db title="Master volume, dB">${masterHeld ? 'auto' : dbText(project.master)}</span></div>
           </div>
         </div>
       </div>`;

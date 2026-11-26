@@ -165,6 +165,61 @@ const DRIVER = 'ChordPath test driver';
       await page.waitForFunction(() => DawEngine.get().position() > 1, null, { timeout: 10000 });
       check('the song plays with the plugin in the chain', (await pluginState(novaId)).state === 'ready');
       await page.click('#dawPlay');
+
+      // Automating one of its settings.
+      const head = page.locator('#dawHeads .daw-head').nth(0);
+      await head.locator('[data-act="auto"]').click();
+      await head.locator('[data-act="laneAdd"][data-target="param"]').click();
+      await page.waitForSelector('#lanePick [data-g]', { timeout: 15000 });
+      check(`+ Plugin… lists the settings of the plugins on the track (${await page.locator('#lanePick [data-g]').count()})`,
+        await page.locator('#lanePick [data-g]').count() > 10);
+      await page.fill('#lpFind', 'output gain');
+      check('and they can be searched', await page.locator('#lanePick [data-g]').count() >= 1 && /Output Gain/.test(await page.textContent('#lpList')));
+      await page.locator('#lanePick [data-g]').first().click();
+      const lane = (await project()).tracks[0].auto[0];
+      check('choosing one makes a lane for it, named after it, starting where the setting is',
+        !!lane && lane.target === 'param' && lane.plugin === novaId && /Output Gain/.test(lane.name) && lane.points.length === 1 && Math.abs(lane.points[0].v - 0.5) < 1e-6);
+      const moved = await page.evaluate(async () => {
+        const eng = DawEngine.get();
+        const p = JSON.parse(JSON.stringify(eng.project));
+        const l = p.tracks[0].auto[0];
+        l.points = [{ b: 0, v: 0.5 }, { b: 8, v: 0.5 }, { b: 8.05, v: 0 }];      // from 0 dB down to -20 at bar 3
+        const only = { onlyTrackId: p.tracks[0].id, tail: 0 };
+        // Without the lane first: a plugin keeps whatever setting automation last gave it.
+        l.on = false;
+        const off = await DawEngine.render(p, eng.audio, only);
+        l.on = true;
+        const on = await DawEngine.render(p, eng.audio, only);
+        const t = b => DawProject.beatToSeconds(p, b);
+        const rms = (out, a, b) => {
+          const d = out.channels[0], sr = out.sampleRate;
+          let s = 0, n = 0;
+          for (let i = Math.floor(a * sr); i < Math.min(d.length, Math.floor(b * sr)); i++, n++) s += d[i] * d[i];
+          return Math.sqrt(s / Math.max(1, n));
+        };
+        const db = (x, y) => 20 * Math.log10(x / y);
+        // The fader too: a volume lane stepping down 12 dB at the same place, the setting left alone.
+        l.on = false;
+        const fader = DawProject.addLane(p, p.tracks[0].id, { target: 'volume', value: p.tracks[0].volume });
+        DawProject.setPoint(fader, 8, p.tracks[0].volume);
+        DawProject.setPoint(fader, 8.05, p.tracks[0].volume - 12);
+        const ridden = await DawEngine.render(p, eng.audio, only);
+        const again = await DawEngine.render(Object.assign(p, { tracks: p.tracks.map((tr, i) => (i ? tr : Object.assign({}, tr, { auto: [] }))) }), eng.audio, only);
+        return {
+          early: db(rms(on, t(1), t(7.5)), rms(off, t(1), t(7.5))), late: db(rms(on, t(9), t(16)), rms(off, t(9), t(16))),
+          faderEarly: db(rms(ridden, t(1), t(7.5)), rms(again, t(1), t(7.5))), faderLate: db(rms(ridden, t(9), t(16)), rms(again, t(9), t(16))),
+        };
+      });
+      check(`in a mixdown through the audio engine the setting follows its lane (${moved.early.toFixed(1)} dB, then ${moved.late.toFixed(1)} dB)`,
+        Math.abs(moved.early) < 0.5 && Math.abs(moved.late + 20) < 1.5);
+    check(`and so does a volume lane, the audio engine moving the fader (${moved.faderEarly.toFixed(1)} dB, then ${moved.faderLate.toFixed(1)} dB)`,
+      Math.abs(moved.faderEarly) < 0.3 && Math.abs(moved.faderLate + 12) < 0.5);
+      await page.click('#dawPlay');
+      await page.waitForFunction(() => DawEngine.get().position() > 1, null, { timeout: 10000 });
+      check('and the song plays with it', true);
+      await page.click('#dawPlay');
+      await head.locator('[data-act="laneRemove"]').click();
+      await head.locator('[data-act="auto"]').click();
     }
 
     // ── Back to this computer ──────────────────────────────────────────────

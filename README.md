@@ -110,6 +110,14 @@ markers along the top. From there the project is yours to change.
   are easiest; drums as a step grid.
 - **Mixer.** Volume, pan, mute and solo, three-band EQ, a compressor and
   reverb and delay sends on every track, a master fader, and level meters.
+- **Automation.** "Auto" on a track shows its lanes: add one for its volume,
+  its pan or a setting of one of its plugins, then click in the lane to put
+  points down and drag them where you want; the value moves in a straight
+  line from one to the next as the song plays. "Master automation", under
+  the tracks, does the same for the whole mix (a fade at the end, say). A
+  fader or pan that a lane has is shown as "auto" in the mixer; switch the
+  lane off to set it by hand again. Plugin settings follow their lanes when
+  a sound card is in use, as plugins play only there.
 - **Sound.** Ten built-in instruments and a drum kit, synthesised by the app
   itself. There are no samples to download.
 - **Recording.** Record a microphone or interface onto audio tracks after a

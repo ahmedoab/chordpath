@@ -1359,6 +1359,28 @@ button.chip.toggle.on { background: var(--accent-2); border-color: var(--accent)
 .mx-btn.solo.on, [data-theme="dark"] .mx-btn.solo.on { background: var(--good); border-color: var(--good); }
 .mx-btn.arm.on, [data-theme="dark"] .mx-btn.arm.on { background: var(--tense); border-color: var(--tense); }
 .mx-btn.takes.on, [data-theme="dark"] .mx-btn.takes.on { background: var(--accent); border-color: var(--accent); }
+.mx-btn.auto.on, [data-theme="dark"] .mx-btn.auto.on { background: var(--accent); border-color: var(--accent); }
+/* A track with automation, while its lanes are hidden: a mark that there is some. */
+.mx-btn.auto.has:not(.on) { border-color: var(--accent); color: var(--accent); }
+
+/* The rows beside a track's automation lanes. */
+.daw-auto-row { display: flex; align-items: center; gap: 0.3rem; border-top: 1px solid var(--line); font-size: 0.72rem; }
+.daw-auto-row input { accent-color: var(--accent); margin: 0; }
+.daw-auto-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); font-weight: 600; }
+.daw-auto-row.add { gap: 0.2rem; }
+.daw-auto-row.add button { padding: 0.1rem 0.35rem; font-size: 0.66rem; white-space: nowrap; }
+.daw-head.master { border-left-color: var(--accent); background: var(--surface); cursor: default; }
+.daw-add-master { padding-top: 0; }
+.daw-add-master button.on { background: var(--accent-2); border-color: var(--accent); color: var(--ink); }
+.mx-fader:disabled, .mx-range:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Choosing a plugin setting to automate. */
+.daw-lanepick { min-width: min(36rem, 100%); }
+.daw-lanepick input[type="search"] { width: 100%; margin: 0.4rem 0 0.6rem; padding: 0.4rem 0.5rem; font: inherit; }
+.lp-list { max-height: 55vh; overflow-y: auto; }
+.lp-list h3 { font-size: 0.85rem; margin: 0.6rem 0 0.3rem; }
+.lp-group { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.lp-group button { font-size: 0.74rem; padding: 0.2rem 0.5rem; }
 
 .daw-panel {
   display: grid; grid-template-rows: auto minmax(0, 1fr);

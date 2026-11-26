@@ -8,7 +8,10 @@
  *
  * Audio clips have fade handles at their top corners and can be trimmed from
  * either edge. A track that shows its takes has a row for each take beneath
- * it: drag along a row to use that take there.
+ * it: drag along a row to use that take there. A track that shows its
+ * automation has a row for each lane: click to add a point, drag one to move
+ * it, right-click or double-click it to take it away. The master's lanes, when
+ * shown, sit below the last track.
  *
  * Draws on one canvas. The view owns the project; this module reads it
  * through host.state() and reports gestures through host.actions.
@@ -20,6 +23,8 @@
   const RULER_H = 20;       // bar numbers; drag here to set a loop
   const LANE_H = 58;
   const TAKE_H = 26;        // a row for one take, under a track that shows them
+  const AUTO_H = 34;        // a row for one lane of automation, and one more to add a lane from
+  const NEAR = 7;           // px round a point of automation that grab it
   const TOP = RIBBON_H + RULER_H;
   const EDGE = 7;           // px at a clip's edges that trim it
   const HANDLE = 7;         // px round a fade handle that grab it
@@ -32,9 +37,38 @@
     const most = track.clips.reduce((n, c) => Math.max(n, P().takesOf(c).length), 0);
     return most > 1 ? most : 0;
   }
-  function laneHeight(track) {
+  function takesHeight(track) {
     const rows = takeRows(track);
-    return LANE_H + (rows ? rows * TAKE_H + 4 : 0);
+    return rows ? rows * TAKE_H + 4 : 0;
+  }
+  function autoRows(track) { return track.showAuto ? track.auto.length + 1 : 0; }
+  function laneHeight(track) {
+    return LANE_H + takesHeight(track) + autoRows(track) * AUTO_H;
+  }
+  // The master's lanes, below the tracks, while they are shown.
+  function masterHeight(project) {
+    return project.showMaster ? (project.masterAuto.length + 1) * AUTO_H : 0;
+  }
+
+  // How high in its row a value of a lane is drawn, from 0 (bottom) to 1 (top).
+  // A fader is drawn as it sounds, so its useful range is not squeezed at the top.
+  const TOP_GAIN = Math.pow(10, 6 / 40);
+  function heightOf(target, v) {
+    if (target === 'volume') return v <= -60 ? 0 : Math.pow(10, v / 40) / TOP_GAIN;
+    if (target === 'pan') return (v + 1) / 2;
+    return v;
+  }
+  function valueAtHeight(target, f) {
+    const k = Math.max(0, Math.min(1, f));
+    if (target === 'volume') return k <= Math.pow(10, -60 / 40) / TOP_GAIN ? -60 : Math.max(-60, Math.min(6, 40 * Math.log10(k * TOP_GAIN)));
+    if (target === 'pan') return Math.round((k * 2 - 1) * 100) / 100;
+    return k;
+  }
+  // A lane's value in words: "-6.0 dB", "L 30", "42%".
+  function valueText(lane, v) {
+    if (lane.target === 'volume') return v <= -60 ? '-inf dB' : (v > 0 ? '+' : '') + v.toFixed(1) + ' dB';
+    if (lane.target === 'pan') return Math.abs(v) < 0.005 ? 'Centre' : (v < 0 ? 'L ' : 'R ') + Math.round(Math.abs(v) * 100);
+    return Math.round(v * 100) + '%';
   }
 
   function create(canvas, host) {
@@ -51,12 +85,13 @@
       };
     }
 
-    // Where each track's lane begins, from the top of the canvas, and where the last one ends.
+    // Where each track's lane begins, from the top of the canvas, where the
+    // master's lanes begin, and where it all ends.
     function lanes(project) {
       const tops = [];
       let y = TOP;
       project.tracks.forEach(t => { tops.push(y); y += laneHeight(t); });
-      return { tops, bottom: y };
+      return { tops, master: y, bottom: y + masterHeight(project) };
     }
 
     function resize() {
@@ -88,10 +123,36 @@
       return null;
     }
 
+    // A row of automation under the pointer: { lane, top, track } (track null for the master), or null.
+    function autoAt(project, y) {
+      const where = lanes(project);
+      if (y >= where.master && y < where.bottom) {
+        const row = Math.floor((y - where.master) / AUTO_H);
+        const lane = project.masterAuto[row];
+        return lane ? { lane, top: where.master + row * AUTO_H, track: null } : { lane: null };
+      }
+      const at = laneAt(project, y);
+      if (!at || !at.track.showAuto) return null;
+      const first = at.top + LANE_H + takesHeight(at.track);
+      if (y < first) return null;
+      const row = Math.floor((y - first) / AUTO_H);
+      const lane = at.track.auto[row];
+      return lane ? { lane, top: first + row * AUTO_H, track: at.track } : { lane: null };
+    }
+    // The point of a lane within reach of (x, y), as its index, or -1.
+    function pointAt(row, x, y) {
+      const lane = row.lane;
+      return lane.points.findIndex(q => Math.abs(beatToX(q.b) - x) <= NEAR &&
+        Math.abs(row.top + AUTO_H - 5 - heightOf(lane.target, q.v) * (AUTO_H - 10) - y) <= NEAR);
+    }
+    const valueAtY = (row, y) => valueAtHeight(row.lane.target, (row.top + AUTO_H - 5 - y) / (AUTO_H - 10));
+
     function hit(x, y) {
       const st = host.state();
       if (y < RIBBON_H) return { zone: 'ribbon' };
       if (y < TOP) return { zone: 'ruler' };
+      const row = autoAt(st.project, y);
+      if (row) return row.lane ? { zone: 'auto', row, point: pointAt(row, x, y) } : { zone: 'empty' };
       const lane = laneAt(st.project, y);
       if (!lane) return { zone: 'empty' };
       const { track, index, top } = lane;
@@ -305,6 +366,53 @@
       }
     }
 
+    // One row of automation: the line it follows across the view, its points,
+    // and its name. A lane switched off is drawn faint.
+    function drawAutoRow(lane, top, color, c) {
+      g.fillStyle = c.surface2;
+      g.globalAlpha = 0.55;
+      g.fillRect(0, top, width, AUTO_H);
+      g.globalAlpha = 1;
+      g.fillStyle = c.line;
+      g.fillRect(0, top + AUTO_H - 1, width, 1);
+      const yOf = v => top + AUTO_H - 5 - heightOf(lane.target, v) * (AUTO_H - 10);
+      if (lane.target === 'pan') {
+        g.globalAlpha = 0.5;
+        g.fillRect(0, Math.round(yOf(0)), width, 1);
+        g.globalAlpha = 1;
+      }
+      if (lane.points.length) {
+        g.globalAlpha = lane.on ? 1 : 0.35;
+        g.strokeStyle = color;
+        g.lineWidth = 1.6;
+        g.beginPath();
+        for (let x = 0; x <= width; x += 3) {
+          const y = yOf(global.DawProject.laneValue(lane, xToBeat(x)));
+          if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
+        }
+        g.stroke();
+        g.fillStyle = color;
+        lane.points.forEach((q, i) => {
+          const x = beatToX(q.b);
+          if (x < -NEAR || x > width + NEAR) return;
+          const held = drag && drag.kind === 'point' && drag.lane === lane && drag.index === i;
+          g.beginPath();
+          g.arc(x, yOf(q.v), held ? 4.5 : 3.2, 0, Math.PI * 2);
+          g.fill();
+          if (held) label(valueText(lane, q.v), Math.min(width - 70, x + 8), Math.max(top + 12, yOf(q.v) - 4), 70, c.ink, '600 10px Inter, sans-serif');
+        });
+        g.globalAlpha = 1;
+      }
+      label(lane.points.length ? lane.name : lane.name + ': click to put a point down', 6, top + 12,
+        lane.points.length ? 200 : 320, lane.points.length ? c.ink2 : c.muted, '600 10px Inter, sans-serif');
+    }
+
+    function drawAutoRows(project, track, top, c) {
+      if (!track.showAuto) return;
+      const first = top + LANE_H + takesHeight(track);
+      track.auto.forEach((lane, i) => drawAutoRow(lane, first + i * AUTO_H, track.color, c));
+    }
+
     function draw() {
       view = null;
       const st = host.state();
@@ -429,7 +537,17 @@
         g.globalAlpha = track.mute ? 0.45 : 1;
         drawTakeRows(p, track, y, c);
         g.globalAlpha = 1;
+        drawAutoRows(p, track, y, c);
       });
+      // The master's lanes, under everything.
+      if (p.showMaster) {
+        const where = lanes(p);
+        g.fillStyle = c.surface;
+        g.fillRect(0, where.master, width, where.bottom - where.master);
+        p.masterAuto.forEach((lane, i) => drawAutoRow(lane, where.master + i * AUTO_H, c.accent, c));
+        g.fillStyle = c.line2;
+        g.fillRect(0, where.master, width, 1);
+      }
 
       // Playhead.
       const px = beatToX(st.playhead);
@@ -467,6 +585,17 @@
         drag = { kind: e.shiftKey ? 'punch' : 'ruler', x: pt.x, from: snapBeat(xToBeat(pt.x)), moved: false };
         return;
       }
+      if (h.zone === 'auto') {
+        // A point is grabbed, or put down where the pointer is and grabbed.
+        let index = h.point, made = false;
+        if (index < 0) {
+          index = P().setPoint(h.row.lane, snapBeat(xToBeat(pt.x)), valueAtY(h.row, pt.y));
+          made = index >= 0;
+        }
+        if (index >= 0) drag = { kind: 'point', lane: h.row.lane, row: h.row, index, moved: made };
+        host.actions.redraw();
+        return;
+      }
       if (h.zone === 'take') {
         host.actions.select(h.track.id, h.clip.id);
         drag = { kind: 'comp', clip: h.clip, take: h.take, x: pt.x, from: xToBeat(pt.x), base: JSON.stringify(h.clip.comp || null), moved: false };
@@ -486,6 +615,7 @@
       if (!drag) {
         const h = hit(pt.x, pt.y);
         canvas.style.cursor = h.zone === 'ruler' ? 'text' : h.zone === 'ribbon' ? 'pointer' : h.zone === 'take' ? 'copy'
+          : h.zone === 'auto' ? (h.point >= 0 ? 'move' : 'crosshair')
           : !h.clip ? 'default' : h.part === 'fadeIn' || h.part === 'fadeOut' ? 'col-resize'
             : h.part === 'start' || h.part === 'end' ? 'ew-resize' : 'grab';
         return;
@@ -496,6 +626,12 @@
           const to = snapBeat(xToBeat(pt.x));
           host.actions[drag.kind === 'punch' ? 'previewPunch' : 'previewLoop'](Math.min(drag.from, to), Math.max(drag.from, to));
         }
+        return;
+      }
+      if (drag.kind === 'point') {
+        drag.index = P().movePoint(drag.lane, drag.index, snapBeat(xToBeat(pt.x)), valueAtY(drag.row, pt.y));
+        drag.moved = true;
+        host.actions.redraw();
         return;
       }
       if (drag.kind === 'comp') {
@@ -553,6 +689,9 @@
       } else if (d.kind === 'punch') {
         if (d.moved) host.actions.commitPunch();
         else host.actions.seek(d.from);
+      } else if (d.kind === 'point') {
+        if (d.moved) host.actions.commit();
+        else host.actions.redraw();
       } else if (d.kind === 'comp') {
         // A click without a drag uses the take for the stretch under the pointer.
         if (!d.moved) {
@@ -579,9 +718,23 @@
       if (h.zone === 'ruler') { host.actions.openTiming(); return; }
       // On a take row: that take all the way through.
       if (h.zone === 'take') { P().useTake(h.clip, h.take); host.actions.commit(); return; }
+      // On a point of automation: away with it.
+      if (h.zone === 'auto') {
+        if (h.point >= 0 && P().removePoint(h.row.lane, h.point)) host.actions.commit();
+        return;
+      }
       if (h.zone !== 'lane') return;
       if (h.clip) host.actions.openClip(h.track.id, h.clip.id);
       else if (h.track.kind !== 'audio') host.actions.createClip(h.track.id, xToBeat(pt.x));
+    });
+
+    // Right-click on a point of automation takes it away.
+    canvas.addEventListener('contextmenu', e => {
+      const pt = point(e);
+      const h = hit(pt.x, pt.y);
+      if (h.zone !== 'auto') return;
+      e.preventDefault();
+      if (h.point >= 0 && P().removePoint(h.row.lane, h.point)) host.actions.commit();
     });
 
     canvas.addEventListener('wheel', e => {
@@ -597,5 +750,5 @@
     return { draw, resize };
   }
 
-  global.DawArrange = { create, laneHeight, takeRows, RIBBON_H, RULER_H, LANE_H, TAKE_H, TOP };
+  global.DawArrange = { create, laneHeight, takesHeight, masterHeight, takeRows, valueText, RIBBON_H, RULER_H, LANE_H, TAKE_H, AUTO_H, TOP };
 })(typeof window !== 'undefined' ? window : globalThis);

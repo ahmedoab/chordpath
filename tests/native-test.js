@@ -285,6 +285,40 @@ async function desk({ novaPath, surgePath }) {
   check(`a moved fader glides to its new place (${out.left[100].toFixed(3)} after 2 ms, ${out.left[720].toFixed(3)} after 15, ${out.left[9600].toExponential(1)} after 200)`,
     out.left[100] > 0.3 && out.left[720] > 0.1 && out.left[720] < 0.3 && Math.abs(out.left[9600]) < 1e-4);
 
+  // Automation: while a strip follows it, its fader and pan move on the frames they are told to.
+  {
+    const level = new Float32Array(SR).fill(0.5);
+    const run = (desk, n) => desk.process(lump([[level.subarray(0, n), level.subarray(0, n)]]), n, [0]).left;
+    d = make(1);
+    d.setStrip(0, on({ followGain: true, followPan: true }));
+    const taken = d.schedule([
+      { kind: 'level', frame: 12000, strip: 0, gain: 0 },
+      { kind: 'level', frame: 30000, strip: 0, gain: 2, pan: 1 },
+      { kind: 'level', frame: 100, strip: 7, gain: 1 },             // no such strip: refused
+      { kind: 'param', frame: 100, plugin: 0, param: 1, value: 1 },  // for no plugin: refused
+    ]);
+    out = run(d, SR);
+    check('steps of automation are taken, and those for nothing are not', taken === 2);
+    // A step takes effect with the block it falls in (512 frames at most), then glides as a fader does.
+    check(`the fader follows them, each in its place (${out[11400].toFixed(2)} just before, then ${out[14000].toFixed(3)})`,
+      Math.abs(out[11400] - 0.5) < 1e-6 && out[14000] < 0.03);
+    check(`and the pan with it (${out[46000].toFixed(3)} left once panned right)`, Math.abs(out[46000]) < 1e-3);
+    d.setStrip(0, on({ gain: 0, followGain: false }));               // muted while automated
+    d.schedule([{ kind: 'level', frame: SR + 100, strip: 0, gain: 1, pan: 0 }]);
+    out = run(d, SR / 2);
+    check('muting a strip silences it whatever its automation says', Math.abs(out[20000]) < 1e-4);
+    d.setStrip(0, on({ followGain: true, followPan: true }));
+    out = run(d, SR / 2);
+    check('and unmuted it goes back to where the automation has it', Math.abs(out[20000] - 0.5) < 1e-3);
+
+    d = make(1);
+    d.setStrip(0, on());
+    d.setMaster({ followGain: true });
+    d.schedule([{ kind: 'level', frame: 1, strip: -1, gain: 0.25 }]);
+    out = run(d, SR / 4);
+    check(`the master fader can be automated too (${out[6000].toFixed(3)})`, Math.abs(out[6000] - 0.125) < 1e-3);
+  }
+
   throws('a strip that does not exist cannot be set', () => make(2).setStrip(2, on()), /no such strip/);
   throws('nor fed', () => make(2).process(new Float32Array(8), 4, [3]), /no such strip/);
   throws('the audio has to match what it claims to hold', () => make(2).process(new Float32Array(9), 4, [0]), /every frame/);
@@ -394,6 +428,23 @@ async function desk({ novaPath, surgePath }) {
     for (let i = lateBy; i < L.length; i++) if (out.left[i] !== L[i - lateBy]) held = false;
     check('a bypassed plugin keeps the track in its place', held);
     nova.setBypassed(false);
+
+    // A plugin's setting moved by automation, on its frame: Nova's output gain (1727), from 0 dB to -20.
+    {
+      d = make(1);
+      d.setStrip(0, on());
+      d.setChain(0, [{ id: 4, plugin: nova }]);
+      const tone = sine(440, SR, 0.2);
+      d.schedule([{ kind: 'param', frame: 24000, plugin: 4, param: 1727, value: 0 }]);
+      const heard = d.process(lump([[tone, tone]]), SR, [0]).left;
+      const settled = rms(d.process(lump([[tone, tone]]), SR, [0]).left, 12000, 47000);   // the plugin left at its new setting
+      const before = rms(heard, 12000, 23000), after = rms(heard, 40000, 47000);
+      const db = x => 20 * Math.log10(x / before);
+      check(`automation moves a plugin's setting when it is told to (${db(after).toFixed(1)} dB, settling at ${db(settled).toFixed(1)})`,
+        before > 0.1 && db(settled) < -15 && Math.abs(db(after) - db(settled)) < 0.5 && Math.abs(db(rms(heard, 20000, 23900))) < 0.1);
+      d.schedule([{ kind: 'param', frame: SR + 1, plugin: 4, param: 1727, value: 0.5 }]);
+      d.process(lump([[tone, tone]]), SR, [0]);
+    }
 
     d = make(1);
     d.setStrip(0, on());

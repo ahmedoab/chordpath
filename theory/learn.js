@@ -47,6 +47,7 @@
     { key:'Shift + drag ruler', desc:'Mark the punch range'                   },
     { key:'Drag a take row',  desc:'Use that take over the stretch dragged across. Click: swap the stretch under the pointer. Double-click: use it all through.' },
     { key:'Clip corners',     desc:'Drag the small squares on an audio clip\'s top corners to fade it in or out; drag either edge to trim it' },
+    { key:'Automation rows',  desc:'Auto on a track (or Master automation) shows its lanes. Click in a lane to put a point down, drag one to move it, right-click or double-click it to take it away' },
     { key:'S',                desc:'Split the selected clip at the playhead'  },
     { key:'Ctrl+D',           desc:'Duplicate the selected clip'              },
     { key:'Delete',           desc:'Delete the selected note, or else the selected clip' },

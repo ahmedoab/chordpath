@@ -208,7 +208,28 @@
   // ── Layout ───────────────────────────────────────────────────────────────
   // What decides how the track headers are laid out: when it changes, they are drawn again.
   function headShape() {
-    return S.project.tracks.map(t => t.id + ':' + global.DawArrange.laneHeight(t) + ':' + hasTakes(t)).join(',');
+    const A = global.DawArrange;
+    const lanes = list => list.map(l => l.id + (l.on ? '+' : '-') + l.name).join(';');
+    return S.project.tracks.map(t => t.id + ':' + A.laneHeight(t) + ':' + hasTakes(t) + ':' + (t.showAuto ? lanes(t.auto) : '')).join(',') +
+      '|' + A.masterHeight(S.project) + ':' + (S.project.showMaster ? lanes(S.project.masterAuto) : '');
+  }
+
+  // The rows beside a track's (or the master's) automation: each lane's
+  // name, a switch to use it or not, and a cross to take it away; then a row
+  // to add another from.
+  function autoHeadHTML(list, master) {
+    const A = global.DawArrange;
+    return list.map(lane => `
+      <div class="daw-auto-row" data-lane="${esc(lane.id)}" style="height:${A.AUTO_H}px">
+        <input type="checkbox" data-act="laneOn"${lane.on ? ' checked' : ''} title="Use this lane. Off, the mixer's own setting is used." aria-label="Use this lane" />
+        <span class="daw-auto-name" title="${esc(lane.name)}">${esc(lane.name)}</span>
+        <button type="button" class="daw-x" data-act="laneRemove" title="Remove this lane" aria-label="Remove this lane">×</button>
+      </div>`).join('') + `
+      <div class="daw-auto-row add" style="height:${A.AUTO_H}px">
+        <button type="button" class="ghost small" data-act="laneAdd" data-target="volume" title="Automate the volume">+ Volume</button>
+        ${master ? '' : '<button type="button" class="ghost small" data-act="laneAdd" data-target="pan" title="Automate the pan">+ Pan</button>'}
+        <button type="button" class="ghost small" data-act="laneAdd" data-target="param" title="Automate a setting of one of the plugins here">+ Plugin…</button>
+      </div>`;
   }
 
   function headHTML(track) {
@@ -231,8 +252,20 @@
             <button type="button" class="mx-btn solo${track.solo ? ' on' : ''}" data-act="solo" title="Solo">S</button>
             ${track.kind === 'audio' ? `<button type="button" class="mx-btn arm${track.armed ? ' on' : ''}" data-act="arm" title="Record onto this track">●</button>` : ''}
             ${hasTakes(track) ? `<button type="button" class="mx-btn takes${track.showTakes ? ' on' : ''}" data-act="takes" title="Show every take in rows under the track, to choose the best of each">Takes</button>` : ''}
+            <button type="button" class="mx-btn auto${track.showAuto ? ' on' : ''}${track.auto.length ? ' has' : ''}" data-act="auto" title="Automation: the volume, pan or a plugin setting changing as the song plays">Auto</button>
           </div>
         </div>
+        ${A.takesHeight(track) ? `<div style="height:${A.takesHeight(track)}px"></div>` : ''}
+        ${track.showAuto ? autoHeadHTML(track.auto, false) : ''}
+      </div>`;
+  }
+
+  // The master's lanes, below the tracks, while they are shown.
+  function masterHeadHTML() {
+    if (!S.project.showMaster) return '';
+    return `
+      <div class="daw-head master" data-master="1" style="height:${global.DawArrange.masterHeight(S.project)}px" title="Automation of the master: the whole mix">
+        ${autoHeadHTML(S.project.masterAuto, true)}
       </div>`;
   }
 
@@ -303,10 +336,14 @@
         <div class="daw-heads" id="dawHeads" style="width:${HEAD_W}px;padding-top:${A.TOP}px">
           <div class="daw-status" id="dawStatus" style="height:${A.TOP}px" aria-live="polite">${esc(S.status)}</div>
           ${p.tracks.map(headHTML).join('')}
+          ${masterHeadHTML()}
           <div class="daw-add">
             <button type="button" class="ghost small" data-add="instrument">+ Instrument</button>
             <button type="button" class="ghost small" data-add="drums">+ Drums</button>
             <button type="button" class="ghost small" data-add="audio">+ Audio</button>
+          </div>
+          <div class="daw-add daw-add-master">
+            <button type="button" class="ghost small daw-toggle${p.showMaster ? ' on' : ''}" id="dawMasterAuto" title="Automate the master: the volume of the whole mix, such as a fade at the end, or a setting of a plugin on it">Master automation</button>
           </div>
         </div>
         <div class="daw-lanes" id="dawLanes"><canvas id="dawCanvas"></canvas></div>
@@ -343,12 +380,12 @@
   }
 
   function refreshHeads() {
-    doc.querySelectorAll('#dawHeads .daw-head').forEach(node => {
+    doc.querySelectorAll('#dawHeads .daw-head[data-track]').forEach(node => {
       const track = P().findTrack(S.project, node.dataset.track);
       if (!track) return;
       node.classList.toggle('selected', track.id === S.sel.trackId);
       const set = (act, on) => { const b = node.querySelector(`[data-act="${act}"]`); if (b) b.classList.toggle('on', on); };
-      set('mute', track.mute); set('solo', track.solo); set('arm', track.armed); set('takes', track.showTakes);
+      set('mute', track.mute); set('solo', track.solo); set('arm', track.armed); set('takes', track.showTakes); set('auto', track.showAuto);
       node.querySelector('.daw-name').textContent = track.name;
     });
   }
@@ -1734,7 +1771,7 @@
   }
 
   function wireHeads() {
-    doc.querySelectorAll('#dawHeads .daw-head').forEach(node => {
+    doc.querySelectorAll('#dawHeads .daw-head[data-track]').forEach(node => {
       const id = node.dataset.track;
       node.addEventListener('click', e => {
         const track = P().findTrack(S.project, id);
@@ -1754,6 +1791,12 @@
           e.target.blur();
           track.showTakes = !track.showTakes;
           commit({ structure: true });
+        } else if (act === 'auto') {
+          e.target.blur();
+          track.showAuto = !track.showAuto;
+          commit({ structure: true });
+        } else if (act === 'laneAdd' || act === 'laneRemove' || act === 'laneOn') {
+          // The automation rows look after themselves (wireAutoRows).
         } else if (act === 'remove') {
           UI().confirmBox(`Remove the track "${track.name}" and everything on it?`).then(ok => {
             if (!ok) return;
@@ -1789,6 +1832,89 @@
       S.sel = { trackId: track.id, clipId: null, noteIds: [] };
       commit({ structure: true });
     }));
+    doc.querySelectorAll('#dawHeads .daw-head').forEach(node => wireAutoRows(node, node.dataset.master ? null : node.dataset.track));
+    press('dawMasterAuto', () => {
+      S.project.showMaster = !S.project.showMaster;
+      commit({ structure: true });
+    });
+  }
+
+  // ── Automation ───────────────────────────────────────────────────────────
+  // The rows beside a track's lanes (trackId null: the master's).
+  function wireAutoRows(node, trackId) {
+    node.querySelectorAll('.daw-auto-row').forEach(row => {
+      const lane = row.dataset.lane ? (P().findLane(S.project, row.dataset.lane) || {}).lane : null;
+      row.querySelectorAll('[data-act="laneAdd"]').forEach(btn => btn.addEventListener('click', e => {
+        e.stopPropagation();
+        btn.blur();
+        addLaneFor(trackId, btn.dataset.target);
+      }));
+      const remove = row.querySelector('[data-act="laneRemove"]');
+      if (remove && lane) remove.addEventListener('click', e => {
+        e.stopPropagation();
+        P().removeLane(S.project, lane.id);
+        commit({ structure: true });
+        UI().toast(`${lane.name} automation removed. Undo brings it back.`);
+      });
+      const use = row.querySelector('[data-act="laneOn"]');
+      if (use && lane) use.addEventListener('change', () => {
+        use.blur();
+        lane.on = use.checked;
+        commit({ keepPanel: S.panel !== 'mixer' });
+      });
+    });
+  }
+
+  // A new lane for a track's (or the master's) volume or pan, starting where
+  // the mixer has it; for a plugin's setting, the setting is chosen first.
+  function addLaneFor(trackId, target) {
+    if (target === 'param') { openLanePicker(trackId); return; }
+    const track = trackId == null ? null : P().findTrack(S.project, trackId);
+    if (trackId != null && !track) return;
+    const value = target === 'pan' ? track.pan : track ? track.volume : S.project.master;
+    const lane = P().addLane(S.project, trackId, { target, value });
+    if (!lane) { UI().toast('No room for another lane'); return; }
+    if (track) track.showAuto = true; else S.project.showMaster = true;
+    commit({ structure: true });
+    setStatus(`${lane.name}: click in its row to put a point down, drag one to move it, right-click one to take it away.`);
+  }
+
+  // Chooses a plugin's setting to automate, from the plugins on the track (or master).
+  async function openLanePicker(trackId) {
+    const track = trackId == null ? null : P().findTrack(S.project, trackId);
+    const plugins = track ? track.plugins : S.project.masterPlugins;
+    if (!plugins.length) { UI().toast(`There are no plugins on ${track ? 'this track' : 'the master'} yet. Add one with FX in the mixer.`); return; }
+    if (!S.engine.usingNative()) { UI().toast('Plugin settings can be automated while a sound card is in use: choose one with Audio…'); return; }
+    UI().openModal(`
+      <div class="daw-lanepick" id="lanePick">
+        <h2>Automate a plugin setting</h2>
+        <p class="meta">On ${esc(track ? track.name : 'the master')}. The setting then follows its lane as the song plays.</p>
+        <input type="search" id="lpFind" placeholder="Find a setting" aria-label="Find a setting" />
+        <div id="lpList" class="lp-list"><p class="meta">Asking the plugins what they have…</p></div>
+      </div>`);
+    const groups = await Promise.all(plugins.map(async p => ({ plugin: p, params: await S.engine.pluginParams(p.id).catch(() => []) })));
+    if (!$('lanePick')) return;                        // closed meanwhile
+    const draw = () => {
+      const find = ($('lpFind').value || '').trim().toLowerCase();
+      const html = groups.map((grp, gi) => {
+        const shown = grp.params.map((q, qi) => ({ q, qi })).filter(({ q }) => !find || q.title.toLowerCase().includes(find) || grp.plugin.name.toLowerCase().includes(find));
+        if (!shown.length) return '';
+        return `<h3>${esc(grp.plugin.name)}</h3><div class="lp-group">${shown.slice(0, 300).map(({ q, qi }) =>
+          `<button type="button" class="ghost small" data-g="${gi}" data-q="${qi}">${esc(q.title)}${q.units ? ` <span class="meta">${esc(q.units)}</span>` : ''}</button>`).join('')}</div>`;
+      }).join('');
+      $('lpList').innerHTML = html || '<p class="meta">No setting by that name. (A plugin that is still loading, or failed to, lists none.)</p>';
+      $('lpList').querySelectorAll('[data-g]').forEach(btn => btn.addEventListener('click', () => {
+        const grp = groups[+btn.dataset.g], q = grp.params[+btn.dataset.q];
+        const lane = P().addLane(S.project, trackId, { target: 'param', plugin: grp.plugin.id, param: q.id, name: `${grp.plugin.name}: ${q.title}`, value: q.value });
+        UI().closeModal();
+        if (!lane) { UI().toast('No room for another lane'); return; }
+        if (track) track.showAuto = true; else S.project.showMaster = true;
+        commit({ structure: true });
+      }));
+    };
+    $('lpFind').addEventListener('input', draw);
+    draw();
+    $('lpFind').focus();
   }
 
   // ── Frame loop ───────────────────────────────────────────────────────────

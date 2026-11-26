@@ -135,8 +135,10 @@ struct Plugin::Impl : public IComponentHandler, public IPlugFrame {
   // lists are the audio thread's own; swapping the two back and forth means
   // neither side ever has to ask for memory while audio is running.
   struct Note { bool on; int pitch; float velocity; int offset; };
+  struct Moved { ParamID id; ParamValue value; int offset; };
   std::mutex pendingLock;
   std::vector<Note> pendingNotes, takenNotes, audioNotes;
+  std::vector<Moved> audioParams, movedParams;     // automation, from the audio thread itself
   std::vector<std::pair<ParamID, ParamValue>> pendingParams, takenParams;
   Transport transport, liveTransport;
   std::atomic<bool> jumped{true};
@@ -241,6 +243,8 @@ struct Plugin::Impl : public IComponentHandler, public IPlugFrame {
     paramsIn.setMaxParameters(64);
     paramsOut.setMaxParameters(64);
     for (auto* list : {&pendingNotes, &takenNotes, &audioNotes}) list->reserve(512);
+    audioParams.reserve(512);
+    movedParams.reserve(512);
     pendingParams.reserve(256);
     takenParams.reserve(256);
     for (auto* line : {&dryL, &dryR}) line->assign(DRY_ROOM, 0.0f);
@@ -381,6 +385,13 @@ void Plugin::noteFromAudioThread(bool on, int pitch, float velocity, int sampleO
   if (p.audioNotes.size() < p.audioNotes.capacity()) p.audioNotes.push_back({on, pitch, velocity, sampleOffset});
 }
 
+void Plugin::paramFromAudioThread(uint32_t id, double value, int sampleOffset) {
+  Impl& p = *impl;
+  if (p.audioParams.size() < p.audioParams.capacity()) {
+    p.audioParams.push_back({(ParamID)id, std::max(0.0, std::min(1.0, value)), sampleOffset});
+  }
+}
+
 void Plugin::noteOn(int pitch, float velocity, int sampleOffset) {
   std::lock_guard<std::mutex> lock(impl->pendingLock);
   impl->pendingNotes.push_back({true, pitch, velocity, sampleOffset});
@@ -428,6 +439,9 @@ void Plugin::process(float* left, float* right, int frames) {
     if (notes.size() < notes.capacity()) notes.push_back(note);
   }
   p.audioNotes.clear();
+  std::vector<Impl::Moved>& moved = p.movedParams;
+  moved.clear();
+  moved.swap(p.audioParams);
   const int kept = std::min(p.latency.load(), (int)Impl::DRY_ROOM - 1);
 
   for (int done = 0; done < frames;) {
@@ -446,6 +460,16 @@ void Plugin::process(float* left, float* right, int frames) {
           int32 point = 0;
           queue->addPoint(0, change.second, point);
         }
+      }
+    }
+    // Automation, like notes, goes out with the block it falls in, at its own place there.
+    for (const auto& change : moved) {
+      const int at = std::max(0, std::min(frames - 1, change.offset));
+      if (at < done || at >= done + n) continue;
+      int32 index = 0;
+      if (IParamValueQueue* queue = p.paramsIn.addParameterData(change.id, index)) {
+        int32 point = 0;
+        queue->addPoint(at - done, change.value, point);
       }
     }
     // Notes are given a place in the whole call; each goes out with the block it falls in.

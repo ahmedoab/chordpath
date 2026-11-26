@@ -100,6 +100,9 @@ struct Mixer::Impl {
   struct Strip {
     std::atomic<bool> active{false};
     std::atomic<float> gain{1}, pan{0}, reverb{0}, echo{0};
+    // Where automation has the fader and pan; used instead of the settings while they follow it.
+    std::atomic<float> rideGain{1}, ridePan{0};
+    std::atomic<bool> followGain{false}, followPan{false};
     float nowGain = 1, nowPan = 0, nowReverb = 0, nowEcho = 0;
     DelayLine waitL, waitR;
     std::atomic<float> peakL{0}, peakR{0};
@@ -119,6 +122,7 @@ struct Mixer::Impl {
   std::atomic<bool> masterChanged{true};
   MasterSettings master;
   float nowMaster = 1;
+  std::atomic<float> masterRide{1};                 // the master fader while it follows automation
   std::atomic<unsigned> limiterDelay{0};
   Echo echoL, echoR;
   Limiter limiter;
@@ -148,7 +152,12 @@ struct Mixer::Impl {
     while (read != write) {
       const Stamped& s = queue[read % EVENT_ROOM];
       if (s.generation == current && waiting.size() < EVENT_ROOM) {
-        waiting.push_back(s);
+        Stamped held = s;
+        // A fader acts on sound that has been through the plugins: it waits as long as they hold it back.
+        if (held.event.kind == NoteEvent::Level && held.event.frame) {
+          held.event.frame += held.event.strip < 0 ? routing.most + routing.masterLatency : routing.most;
+        }
+        waiting.push_back(held);
         std::push_heap(waiting.begin(), waiting.end(), later);
       }
       read++;
@@ -166,12 +175,24 @@ struct Mixer::Impl {
       waiting.pop_back();
       if (stale) continue;
       const int offset = s.event.frame > streamFrame ? (int)(s.event.frame - streamFrame) : 0;
+      if (s.event.kind == NoteEvent::Level) {
+        if (s.event.strip < 0) {
+          if (s.event.gain >= 0) masterRide.store(std::min(8.0f, s.event.gain));
+        } else if (s.event.strip < count) {
+          Strip& st = strips[s.event.strip];
+          if (s.event.gain >= 0) st.rideGain.store(std::min(8.0f, s.event.gain));
+          if (s.event.pan >= -1 && s.event.pan <= 1) st.ridePan.store(s.event.pan);
+        }
+        continue;
+      }
       Plugin* target = nullptr;
       for (const auto& chain : routing.strips) {
         for (const auto& slot : chain) if (slot.id == s.event.plugin) target = slot.plugin.get();
       }
       for (const auto& slot : routing.master) if (slot.id == s.event.plugin) target = slot.plugin.get();
-      if (target) target->noteFromAudioThread(s.event.on, s.event.pitch, s.event.velocity, offset);
+      if (!target) continue;
+      if (s.event.kind == NoteEvent::Param) target->paramFromAudioThread(s.event.param, s.event.value, offset);
+      else target->noteFromAudioThread(s.event.on, s.event.pitch, s.event.velocity, offset);
     }
   }
 };
@@ -207,6 +228,8 @@ void Mixer::setStrip(int strip, const StripSettings& settings) {
   Impl::Strip& s = impl->strips[strip];
   s.gain.store(std::max(0.0f, std::min(8.0f, settings.gain)));
   s.pan.store(std::max(-1.0f, std::min(1.0f, settings.pan)));
+  s.followGain.store(settings.followGain);
+  s.followPan.store(settings.followPan);
   s.reverb.store(std::max(0.0f, std::min(4.0f, settings.reverb)));
   s.echo.store(std::max(0.0f, std::min(4.0f, settings.echo)));
   s.active.store(settings.active);
@@ -366,8 +389,10 @@ void Mixer::process(const float* feeds, const float* inL, const float* inR, floa
     strip.waitR.process(R, frames);
 
     // The fader and pan, gliding to where they have been set, then the sends.
-    const float gainTo = strip.nowGain + (strip.gain.load() - strip.nowGain) * glide;
-    const float panTo = strip.nowPan + (strip.pan.load() - strip.nowPan) * glide;
+    const float gainGoal = strip.followGain.load() ? strip.rideGain.load() : strip.gain.load();
+    const float panGoal = strip.followPan.load() ? strip.ridePan.load() : strip.pan.load();
+    const float gainTo = strip.nowGain + (gainGoal - strip.nowGain) * glide;
+    const float panTo = strip.nowPan + (panGoal - strip.nowPan) * glide;
     const float reverbTo = strip.nowReverb + (strip.reverb.load() - strip.nowReverb) * glide;
     const float echoTo = strip.nowEcho + (strip.echo.load() - strip.nowEcho) * glide;
     float from[4], to[4];
@@ -416,7 +441,8 @@ void Mixer::process(const float* feeds, const float* inL, const float* inR, floa
 
   for (const auto& slot : routing->master) slot.plugin->process(m.sumL.data(), m.sumR.data(), (int)frames);
 
-  const float masterTo = m.nowMaster + (m.master.gain - m.nowMaster) * glide;
+  const float masterGoal = m.master.followGain ? m.masterRide.load() : m.master.gain;
+  const float masterTo = m.nowMaster + (masterGoal - m.nowMaster) * glide;
   const float masterFrom = snap ? masterTo : m.nowMaster;
   for (unsigned i = 0; i < frames; i++) {
     const float g = masterFrom + (masterTo - masterFrom) * (float)i * step;

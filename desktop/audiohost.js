@@ -29,7 +29,7 @@ let native = null;
 let loadError = '';
 try { native = require(ADDON); } catch (e) { loadError = String((e && e.message) || e); }
 
-const LIMITS = { plugins: 160, chain: 16, state: 64 * 1024 * 1024, notes: 4096, takeSeconds: 1200, title: 120 };
+const LIMITS = { plugins: 160, chain: 16, state: 64 * 1024 * 1024, notes: 4096, takeSeconds: 1200, title: 120, params: 2000 };
 const TICK_MS = 40;
 
 const S = {
@@ -258,6 +258,17 @@ const api = {
     return card().status().latencyFrames;
   },
   bypass(id, on) { entry(id).plugin.setBypassed(!!on); },
+  // params(id) → [{ id, title, units, value, steps }]: the settings of a plugin that automation may move.
+  params(id) {
+    return entry(id).plugin.parameters()
+      .filter(p => p.automatable && !p.hidden)
+      .slice(0, LIMITS.params)
+      .map(p => ({ id: p.id, title: text(p.title, LIMITS.title) || 'Setting ' + p.id, units: text(p.units, 20), value: p.value, steps: p.steps }));
+  },
+  // paramText(id, param, value) → how the plugin itself would show that value.
+  paramText(id, param, value) {
+    return text(entry(id).plugin.paramText(whole(param, 0, 4294967295, 0), Math.max(0, Math.min(1, Number(value) || 0))), 40);
+  },
   async editor(id, title) {
     const p = entry(id);
     // Under test a plugin's window opens hidden: nothing appears over the screen being worked on.

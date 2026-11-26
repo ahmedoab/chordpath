@@ -246,7 +246,10 @@
     this.limiter.ratio.value = 20;
     this.limiter.attack.value = 0.002;
     this.limiter.release.value = 0.12;
-    this.master.connect(this.limiter);
+    // Automation of the master fader rides on a gain of its own, after the fader.
+    this.masterRide = ctx.createGain();
+    this.master.connect(this.masterRide);
+    this.masterRide.connect(this.limiter);
     this.limiter.connect(ctx.destination);
     this.masterMeter = withMeters ? this.analyser(this.limiter) : null;
     this.clicks = tap ? tap.direct : this.limiter;     // where the metronome joins
@@ -312,6 +315,7 @@
       low: band('lowshelf', 220), mid: band('peaking', 1100), high: band('highshelf', 4200),
       comp: ctx.createDynamicsCompressor(),
       fader: ctx.createGain(),
+      ride: ctx.createGain(),          // where volume automation moves the level, after the fader
       pan: ctx.createStereoPanner(),
       reverbSend: ctx.createGain(),
       delaySend: ctx.createGain(),
@@ -327,7 +331,8 @@
       return strip;
     }
     strip.comp.connect(strip.fader);
-    strip.fader.connect(strip.pan);
+    strip.fader.connect(strip.ride);
+    strip.ride.connect(strip.pan);
     strip.pan.connect(this.master);
     strip.pan.connect(strip.reverbSend);
     strip.pan.connect(strip.delaySend);
@@ -339,7 +344,7 @@
 
   Mixer.prototype.dropStrip = function (strip) {
     this.cut(strip, this.ctx.currentTime);
-    [strip.input, strip.low, strip.mid, strip.high, strip.comp, strip.fader, strip.pan, strip.reverbSend, strip.delaySend]
+    [strip.input, strip.low, strip.mid, strip.high, strip.comp, strip.fader, strip.ride, strip.pan, strip.reverbSend, strip.delaySend]
       .forEach(n => n.disconnect());
     if (strip.meter) strip.meter.node.disconnect();
     if (this.tap) this.tap.release(strip.trackId);
@@ -355,9 +360,12 @@
       else param.value = value;
     };
     this.project = project;
-    set(this.master.gain, dbToGain(project.master));
+    // A fader or pan that automation has is left to it: the fader keeps only mute and solo.
+    const masterLane = P().laneInForce(project.masterAuto, 'volume');
+    set(this.master.gain, masterLane ? 1 : dbToGain(project.master));
+    if (!masterLane) this.free(this.masterRide.gain, 1, smooth);
     this.delay.delayTime.value = Math.min(1.9, (60 / project.tempo) * 0.75);
-    if (this.tap) this.tap.master(project, dbToGain(project.master));
+    if (this.tap) this.tap.master(project, masterLane ? 1 : dbToGain(project.master), !!masterLane);
 
     const alive = new Set(project.tracks.map(t => t.id));
     this.strips.forEach((strip, id) => {
@@ -373,8 +381,10 @@
       strip.kind = track.kind;
       strip.instrument = track.instrument;
       const silent = track.mute || (anySolo && !track.solo);
-      set(strip.fader.gain, silent ? 0 : dbToGain(track.volume));
-      set(strip.pan.pan, track.pan);
+      const volumeLane = P().laneInForce(track.auto, 'volume'), panLane = P().laneInForce(track.auto, 'pan');
+      set(strip.fader.gain, silent ? 0 : volumeLane ? 1 : dbToGain(track.volume));
+      if (!volumeLane) this.free(strip.ride.gain, 1, smooth);
+      if (!panLane) this.free(strip.pan.pan, track.pan, smooth);
       set(strip.low.gain, track.fx.low);
       set(strip.mid.gain, track.fx.mid);
       set(strip.high.gain, track.fx.high);
@@ -386,10 +396,42 @@
       if (this.tap) {
         this.tap.strip(track.id, {
           gain: silent ? 0 : dbToGain(track.volume), pan: track.pan, reverb: track.fx.reverb, echo: track.fx.delay * 0.7,
+          followGain: !silent && !!volumeLane, followPan: !!panLane,
         });
       }
     });
     if (this.tap) this.tap.plugins(project);
+  };
+
+  // A setting automation no longer has goes back to a plain value.
+  Mixer.prototype.free = function (param, value, smooth) {
+    const now = this.ctx.currentTime;
+    param.cancelScheduledValues(now);
+    if (smooth) param.setTargetAtTime(value, now, 0.015);
+    else param.value = value;
+  };
+
+  // Moves what a lane of automation has (a: see automated()) to `value` at
+  // `when`: in a straight line from where it was, or at once (`jump`).
+  // Through the audio host it is the host that moves it, on the frame.
+  Mixer.prototype.ride = function (a, value, when, jump) {
+    if (value == null) return;
+    if (this.tap) { this.tap.ride(a, value, when); return; }
+    if (a.kind === 'param') return;                     // plugins are heard only through the audio host
+    let param;
+    if (a.trackId == null) param = this.masterRide.gain;
+    else {
+      const strip = this.strips.get(a.trackId);
+      if (!strip) return;
+      param = a.kind === 'volume' ? strip.ride.gain : strip.pan.pan;
+    }
+    const v = a.kind === 'volume' ? dbToGain(value) : value;
+    if (jump) {
+      if (param.cancelAndHoldAtTime) param.cancelAndHoldAtTime(when); else param.cancelScheduledValues(when);
+      param.setValueAtTime(v, when);
+    } else {
+      param.linearRampToValueAtTime(v, when);
+    }
   };
 
   Mixer.prototype.setAudio = function (audioId, sampleRate, channels) {
@@ -520,6 +562,34 @@
     notes.sort((a, b) => a.beat - b.beat);
     clips.sort((a, b) => a.beat - b.beat);
     return { notes, clips };
+  }
+
+  // The lanes of automation in force: [{ lane, trackId (null for the
+  // master), kind: 'volume' | 'pan' | 'param' }]. One fader and one pan to a
+  // strip; any number of plugin settings.
+  function automated(project) {
+    const out = [];
+    const each = (list, trackId) => (list || []).forEach(lane => {
+      if (!lane.on || !lane.points.length) return;
+      if (lane.target !== 'param' && P().laneInForce(list, lane.target) !== lane) return;
+      out.push({ lane, trackId, kind: lane.target });
+    });
+    project.tracks.forEach(t => each(t.auto, t.id));
+    each(project.masterAuto, null);
+    return out;
+  }
+
+  // For an off-line render: puts each lane where it is at the start, and
+  // returns what moves them on up to a beat, a stretch at a time.
+  function rider(source, mixer, timeOf) {
+    const autos = automated(source);
+    let done = 0;
+    autos.forEach(a => mixer.ride(a, P().laneValue(a.lane, 0), 0, true));
+    return beat => {
+      if (beat <= done) return;
+      autos.forEach(a => P().laneSteps(a.lane, done, beat, a.kind === 'volume').forEach(s => mixer.ride(a, s.v, timeOf(s.b), false)));
+      done = beat;
+    };
   }
 
   function firstAtOrAfter(list, beat) {
@@ -744,6 +814,10 @@
     const relooped = this.looping != null && this.looping !== looping;
     this.timing = timing;
     this.looping = looping;
+    this.autos = automated(project);
+    const lanes = JSON.stringify(this.autos.map(a => [a.trackId, a.lane]));
+    const relaned = this.lanes != null && this.lanes !== lanes;
+    this.lanes = lanes;
     const here = this.playing ? this.position() : this.paused;
     this.project = project;
     this.flat = flatten(project);
@@ -757,6 +831,11 @@
       this.anchors = [{ time: now + 0.03, beat: here, spb: this.spbAt(here) }];
       this.until = here;
       this.startRunningClips(here, now + 0.03);
+      this.startLanes(here, now + 0.03);
+    } else if (relaned) {
+      // Automation was changed while playing: it takes over from a moment from now.
+      const soon = this.ctx.currentTime + 0.03;
+      this.startLanes(this.beatAt(soon), soon);
     }
     this.noteCursor = firstAtOrAfter(this.flat.notes, this.until);
     this.clipCursor = firstAtOrAfter(this.flat.clips, this.until);
@@ -927,6 +1006,7 @@
     this.noteCursor = firstAtOrAfter(this.flat.notes, this.until);
     this.clipCursor = firstAtOrAfter(this.flat.clips, this.until);
     this.startRunningClips(this.paused, when);
+    this.startLanes(this.paused, when);
     this.playing = true;
     this.pump();
     if (this.timer) this.timer.postMessage('start');
@@ -940,7 +1020,29 @@
     if (this.timer) this.timer.postMessage('stop');
     else clearInterval(this.interval);
     this.mixer.cutAll();
+    this.startLanes(this.paused, this.ctx.currentTime);   // automation rests where the song stopped
     this.sweepLater(600);
+  };
+
+  // Puts every lane of automation where it is at `beat`, at the time `when`.
+  Engine.prototype.startLanes = function (beat, when) {
+    if (!this.mixer || !this.autos) return;
+    this.autos.forEach(a => this.mixer.ride(a, P().laneValue(a.lane, beat), when, true));
+  };
+  // Moves them on from one beat to another, on the current anchor.
+  Engine.prototype.scheduleLanes = function (from, to) {
+    if (!this.autos) return;
+    this.autos.forEach(a => P().laneSteps(a.lane, from, to, a.kind === 'volume')
+      .forEach(s => this.mixer.ride(a, s.v, this.timeOf(s.b), false)));
+  };
+
+  // The settings of a plugin of the project that automation can move:
+  // [{ id, title, units, value }]; none unless the audio host is playing it.
+  Engine.prototype.pluginParams = async function (pluginId) {
+    if (!this.native) return [];
+    await this.native.rack.work;
+    const p = this.native && this.native.rack.loaded.get(pluginId);
+    return p && p.hostId ? global.NativeAudio.call('params', p.hostId) : [];
   };
 
   Engine.prototype.sweepLater = function (ms) {
@@ -987,6 +1089,7 @@
     if (this.clickOn) {
       P().clicksBetween(this.project, from, to).forEach(click => this.tick(this.timeOf(click.beat), click.accent));
     }
+    this.scheduleLanes(from, to);
     this.until = to;
   };
 
@@ -1018,6 +1121,7 @@
       this.noteCursor = firstAtOrAfter(this.flat.notes, loop.start);
       this.clipCursor = firstAtOrAfter(this.flat.clips, loop.start);
       this.startRunningClips(loop.start, time);
+      this.startLanes(loop.start, time);
     }
   };
 
@@ -1327,6 +1431,7 @@
 
     const flat = flatten(source);
     flat.clips.forEach(c => mixer.playPiece(c.trackId, c, timeOf(c.beat), 0));
+    const ride = rider(source, mixer, timeOf);
     // Notes are created a couple of seconds at a time while the render is
     // paused, so the graph never holds more than what is currently sounding.
     const CHUNK = 2;
@@ -1338,6 +1443,7 @@
         const starts = timeOf(ev.beat);
         mixer.note(ev.trackId, ev.n, starts, timeOf(ev.beat + ev.d) - starts, ev.v);
       }
+      ride(beat);
     };
     scheduleUntil(CHUNK);
     for (let t = CHUNK; t < seconds; t += CHUNK) {
@@ -1371,7 +1477,8 @@
     await N.call('mixBegin', { strips });
     try {
       const match = await N.measure(rate);
-      await N.call('mixMaster', N.masterFor(source, dbToGain(source.master), match));
+      const masterLane = P().laneInForce(source.masterAuto, 'volume');
+      await N.call('mixMaster', N.masterFor(source, masterLane ? 1 : dbToGain(source.master), match, !!masterLane));
       for (let i = 0; i < source.tracks.length; i++) await N.call('mixChain', i, hosts(source.tracks[i].plugins));
       // Plugins that take time make the whole mix late by so much: that much
       // more is rendered, and cut from the front. (The limiter's own short
@@ -1400,6 +1507,7 @@
 
       const flat = flatten(source);
       flat.clips.forEach(c => mixer.playPiece(c.trackId, c, timeOf(c.beat), 0));
+      const ride = rider(source, mixer, timeOf);
       let cursor = 0;
       const scheduleUntil = time => {
         const beat = P().secondsToBeat(source, time);
@@ -1408,6 +1516,7 @@
           const starts = timeOf(ev.beat);
           mixer.note(ev.trackId, ev.n, starts, timeOf(ev.beat + ev.d) - starts, ev.v);
         }
+        ride(beat);
       };
 
       const left = new Float32Array(frames), right = new Float32Array(frames);

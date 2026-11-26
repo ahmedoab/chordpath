@@ -252,9 +252,10 @@
   }
 
   // What the host's master needs to know, for a project and a sample rate.
-  function masterFor(project, gain, match) {
+  // `follow`: the master fader is automated, and goes where its lane says.
+  function masterFor(project, gain, match, follow) {
     return {
-      gain, reverbReturn: 3,
+      gain, followGain: !!follow, reverbReturn: 3,
       echoSeconds: Math.min(1.9, (60 / project.tempo) * 0.75), echoFeedback: 0.34, echoDampHz: 3400, echoDampQ: 0.5,
       limiterDelay: match.limiter.delay, limiterGain: match.limiter.gain,
       limiterThresholdDb: -1.5, limiterRatio: 20, limiterAttack: 0.002, limiterRelease: 0.12,
@@ -421,6 +422,19 @@
     return Promise.all(Array.from(this.loaded.keys()).map(id => this.save(id)));
   };
 
+  // What the host is told for a step of automation, without its frame: a
+  // strip's fader or pan (strip -1 is the master), or a plugin's setting.
+  // Null when what it moves is not in the host.
+  function rideStep(tap, a, value) {
+    if (a.kind === 'param') {
+      const p = tap.rack.loaded.get(a.lane.plugin);
+      return p && p.hostId ? { kind: 'param', plugin: p.hostId, param: a.lane.param, value } : null;
+    }
+    const strip = a.trackId == null ? -1 : tap.slotOf(a.trackId);
+    if (strip == null) return null;
+    return a.kind === 'volume' ? { kind: 'level', strip, gain: value <= -60 ? 0 : Math.pow(10, value / 20) } : { kind: 'level', strip, pan: value };
+  }
+
   // ── The live tap: tracks on their way to the sound card ──────────────────
   function LiveTap(ctx, opened, match) {
     this.ctx = ctx;
@@ -503,9 +517,9 @@
     this.sent.set(slot, text);
     call('strip', slot, Object.assign({ active: true }, settings)).catch(() => { /* gone with the host */ });
   };
-  LiveTap.prototype.master = function (project, gain) {
+  LiveTap.prototype.master = function (project, gain, follow) {
     if (!connected()) return;
-    const settings = masterFor(project, gain, this.match);
+    const settings = masterFor(project, gain, this.match, follow);
     const text = JSON.stringify(settings);
     if (this.sentMaster === text) return;
     this.sentMaster = text;
@@ -524,8 +538,19 @@
   LiveTap.prototype.note = function (trackId, midi, when, seconds, velocity) {
     const plugin = this.rack.instruments.get(trackId);
     if (!plugin || this.origin == null) return;
-    this.notes.push({ plugin, frame: this.frameAt(when), on: true, pitch: midi, velocity },
+    this.send({ plugin, frame: this.frameAt(when), on: true, pitch: midi, velocity },
       { plugin, frame: this.frameAt(when + Math.max(0.01, seconds)), on: false, pitch: midi });
+  };
+  // A step of automation (see the engine's Mixer.ride), on the frame it is due.
+  LiveTap.prototype.ride = function (a, value, when) {
+    const step = rideStep(this, a, value);
+    if (!step || this.origin == null) return;
+    step.frame = this.frameAt(when);
+    this.send(step);
+  };
+  // Events go to the host together, once whatever is being scheduled now is done.
+  LiveTap.prototype.send = function () {
+    for (let i = 0; i < arguments.length; i++) this.notes.push(arguments[i]);
     if (this.posting) return;
     this.posting = true;
     Promise.resolve().then(() => {
@@ -603,10 +628,16 @@
     const slot = this.slots.get(trackId);
     if (slot != null) this.settings.set(slot, Object.assign({ active: true }, settings));
   };
-  MixTap.prototype.master = function (project, gain) { this.masterSettings = masterFor(project, gain, this.match); };
+  MixTap.prototype.master = function (project, gain, follow) { this.masterSettings = masterFor(project, gain, this.match, follow); };
   MixTap.prototype.plugins = function () {};
   // The plugin instruments are the ones already loaded for playing live.
   MixTap.prototype.plays = function (trackId) { return this.rack.instruments.has(trackId); };
+  MixTap.prototype.ride = function (a, value, when) {
+    const step = rideStep(this, a, value);
+    if (!step) return;
+    step.frame = Math.max(0, Math.round(when * this.rate) + this.match.strip.delay);
+    this.notes.push(step);
+  };
   MixTap.prototype.note = function (trackId, midi, when, seconds, velocity) {
     const plugin = this.rack.instruments.get(trackId);
     if (!plugin) return;

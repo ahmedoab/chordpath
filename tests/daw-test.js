@@ -1034,6 +1034,69 @@ section('What an audio track plays');
   eq('a track of notes plays no pieces', P.audioPieces(q, P.addTrack(q, 'instrument', {})), []);
 }
 
+section('Automation');
+{
+  const P = DawProject;
+  const p = P.createProject({ tempo: 120 });
+  const track = P.addTrack(p, 'instrument', { volume: -8 });
+  const vol = P.addLane(p, track.id, { target: 'volume', value: -8 });
+  check('a new lane starts where the fader is, at the start of the song', vol.points.length === 1 && vol.points[0].b === 0 && vol.points[0].v === -8);
+  check('asking for the same lane again finds the one there', P.addLane(p, track.id, { target: 'volume' }) === vol && track.auto.length === 1);
+  P.setPoint(vol, 8, -20);
+  eq('between two points the value moves in a straight line, and holds beyond them',
+    [P.laneValue(vol, 0), P.laneValue(vol, 4), P.laneValue(vol, 8), P.laneValue(vol, 100)], [-8, -14, -20, -20]);
+  P.setPoint(vol, 8, 99);
+  eq('a point on a beat already taken moves that one, kept in range', [vol.points.length, vol.points[1].v], [2, 6]);
+  P.setPoint(vol, 4, -30);
+  eq('points stay in order', vol.points.map(q => q.b), [0, 4, 8]);
+  P.movePoint(vol, 1, 20, -60);
+  check('a point dragged cannot pass its neighbours', vol.points[1].b < 8 && vol.points[1].b > 7.9 && vol.points[1].v === -60);
+  P.removePoint(vol, 1);
+  eq('and can be taken away', vol.points.map(q => q.b), [0, 8]);
+
+  const steps = P.laneSteps(vol, 0, 1, true);
+  check('a moving fader is set every eighth of a beat, in decibels along the line',
+    steps.length === 8 && steps[0].b === 0 && Math.abs(steps[4].v - P.laneValue(vol, 0.5)) < 1e-9);
+  eq('a level stretch needs only its points', P.laneSteps({ points: [{ b: 0, v: 1 }, { b: 4, v: 1 }] }, 0, 8, true).map(s => s.b), [0, 4]);
+  eq('a pan is set only at its points', P.laneSteps({ points: [{ b: 0, v: -1 }, { b: 4, v: 1 }] }, 1, 8, false).map(s => s.b), [4]);
+  eq('a stretch before the first point or after the last needs nothing', P.laneSteps(vol, 20, 30, true), []);
+
+  const pan = P.addLane(p, track.id, { target: 'pan', value: 0 });
+  check('a pan lane holds a pan', pan.target === 'pan' && P.laneRange('pan').lo === -1);
+  check('the master has no pan to move', P.addLane(p, null, { target: 'pan' }) === null);
+  const master = P.addLane(p, null, { target: 'volume', value: 0 });
+  check('but its fader can be automated', !!master && p.masterAuto.length === 1);
+
+  // Plugin settings.
+  const NOVA = { path: 'C:\\Program Files\\Common Files\\VST3\\TDR Nova.vst3', uid: '0123456789ABCDEF0123456789ABCDEF', name: 'Nova' };
+  check('a plugin setting can only be automated where that plugin is', P.addLane(p, track.id, { target: 'param', plugin: 'p_missing', param: 1727 }) === null);
+  const plug = P.addPlugin(p, track.id, NOVA);
+  const gain = P.addLane(p, track.id, { target: 'param', plugin: plug.id, param: 1727, name: 'Nova: Output Gain', value: 0.5 });
+  check('one of its settings gets a lane of its own', !!gain && gain.plugin === plug.id && gain.param === 1727 && track.auto.length === 3);
+  check('settings run from 0 to 1', P.setPoint(gain, 4, 3) >= 0 && gain.points[1].v === 1);
+
+  eq('the lane in force is the one switched on with points', [P.laneInForce(track.auto, 'volume') === vol, P.laneInForce([], 'volume')], [true, null]);
+  vol.on = false;
+  check('a lane switched off moves nothing', P.laneInForce(track.auto, 'volume') === null);
+  vol.on = true;
+
+  // Saving, and nonsense.
+  const back = P.sanitize(JSON.parse(JSON.stringify(p)));
+  eq('lanes are saved with the track and the master', [back.tracks[0].auto.map(l => l.target), back.masterAuto.map(l => l.target)], [['volume', 'pan', 'param'], ['volume']]);
+  P.removePlugin(p, plug.id);
+  check('taking a plugin off takes its lanes with it', track.auto.length === 2 && !track.auto.some(l => l.target === 'param'));
+  const junk = P.sanitize({ tempo: 120, masterAuto: [{ target: 'pan', points: [{ b: 0, v: 0 }] }], tracks: [{ kind: 'instrument', auto: [
+    { target: 'volume', points: [{ b: 4, v: 100 }, { b: 'x', v: 1 }, { b: 4, v: -3 }, { b: -1, v: 0 }, { b: 2, v: -12 }] },
+    { target: 'volume', points: [] },
+    { target: 'param', plugin: 'p_gone', param: 3, points: [] },
+    { target: 'loudness' }, 'nothing'] }] });
+  eq('nonsense lanes are dropped: a second lane for one thing, a plugin not there, no such thing',
+    junk.tracks[0].auto.map(l => l.target), ['volume']);
+  eq('and points are made sound: in range, in order, one to a beat', junk.tracks[0].auto[0].points, [{ b: 2, v: -12 }, { b: 4, v: -3 }]);
+  eq('the master\'s pan is not kept', junk.masterAuto, []);
+  check('a project from before automation opens with none', P.sanitize({ tracks: [{ kind: 'audio' }] }).tracks[0].auto.length === 0);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) {
   console.error('\nFailed checks:');

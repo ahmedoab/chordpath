@@ -430,6 +430,70 @@ const TOP = 44, LANE_H = 58, RIBBON_H = 24;
     await page.click('#cbOk');
     check('a track can be removed after confirming', (await state()).tracks.length === 5);
 
+    // ── Automation ─────────────────────────────────────────────────────────
+    section('Automation');
+    const AUTO_H = 34;
+    const lanesNow = () => page.evaluate(() => DawEngine.get().project.tracks.map(t => t.auto.map(l => ({ target: l.target, on: l.on, points: l.points.map(q => [q.b, q.v]) }))));
+    const chordsHead = () => page.locator('#dawHeads .daw-head').nth(0);
+    await chordsHead().locator('[data-act="auto"]').click();
+    check('Auto on a track shows a row to add automation from',
+      Math.round((await chordsHead().boundingBox()).height) === LANE_H + AUTO_H && await chordsHead().locator('[data-act="laneAdd"]').count() === 3);
+    await chordsHead().locator('[data-act="laneAdd"][data-target="volume"]').click();
+    let lanes = await lanesNow();
+    const chordsVolume = (await state()).tracks[0].volume;
+    check('+ Volume makes a lane that starts where the fader is', lanes[0].length === 1 && lanes[0][0].target === 'volume' &&
+      lanes[0][0].points.length === 1 && lanes[0][0].points[0][1] === chordsVolume);
+    check('the header grows a row for it, named', Math.round((await chordsHead().boundingBox()).height) === LANE_H + 2 * AUTO_H &&
+      (await chordsHead().locator('.daw-auto-name').textContent()) === 'Volume');
+    // Points: click to put one down, low in the row, at bar 5.
+    await page.evaluate(() => { document.getElementById('dawArrange').scrollTop = 0; });
+    v = await view();
+    const rowTop = v.y + TOP + LANE_H;
+    await page.mouse.click(v.x + 16 * ppb - v.scroll, rowTop + AUTO_H - 6);
+    lanes = await lanesNow();
+    check(`clicking in the row puts a point down there (${JSON.stringify(lanes[0][0].points)})`,
+      lanes[0][0].points.length === 2 && Math.abs(lanes[0][0].points[1][0] - 16) < 0.3 && lanes[0][0].points[1][1] < -40);
+    await page.mouse.move(v.x + 16 * ppb - v.scroll, rowTop + AUTO_H - 6);
+    await page.mouse.down();
+    await page.mouse.move(v.x + 20 * ppb - v.scroll, rowTop + 8, { steps: 5 });
+    await page.mouse.up();
+    lanes = await lanesNow();
+    check(`dragging a point moves it (${JSON.stringify(lanes[0][0].points[1])})`,
+      Math.abs(lanes[0][0].points[1][0] - 20) < 0.3 && lanes[0][0].points[1][1] > -3);
+    await page.click('#dawPanelTabs [data-panel="mixer"]');
+    const chordsStrip = page.locator('.mx-strip[data-track]').nth(0);
+    check('the mixer shows the fader is following its lane', await chordsStrip.locator('.mx-fader').isDisabled() &&
+      (await chordsStrip.locator('[data-db]').textContent()) === 'auto');
+    await chordsHead().locator('[data-act="laneOn"]').uncheck();
+    check('switched off, the lane lets the fader have it again', !(await lanesNow())[0][0].on && !(await chordsStrip.locator('.mx-fader').isDisabled()));
+    await chordsHead().locator('[data-act="laneOn"]').check();
+    await page.mouse.click(v.x + 20 * ppb - v.scroll, rowTop + 8, { button: 'right' });
+    check('right-clicking a point takes it away', (await lanesNow())[0][0].points.length === 1);
+    await chordsHead().locator('[data-act="laneAdd"][data-target="pan"]').click();
+    check('+ Pan makes a pan lane', (await lanesNow())[0].map(l => l.target).join() === 'volume,pan');
+    await chordsHead().locator('[data-act="laneAdd"][data-target="param"]').click();
+    check('+ Plugin… says when there are no plugins to automate', /no plugins/i.test(await page.textContent('#toast')));
+    await shot(page, '13b-daw-automation');
+
+    // The master: below the tracks.
+    await page.click('#dawMasterAuto');
+    check('Master automation shows the master\'s lanes below the tracks', await page.locator('#dawHeads .daw-head.master').count() === 1 &&
+      await page.locator('#dawHeads .daw-head.master [data-act="laneAdd"][data-target="pan"]').count() === 0);
+    await page.locator('#dawHeads .daw-head.master [data-act="laneAdd"][data-target="volume"]').click();
+    check('the master\'s volume can be automated', await page.evaluate(() => DawEngine.get().project.masterAuto.length === 1) &&
+      await page.locator('.mx-strip.master .mx-fader').isDisabled());
+    await page.locator('#dawHeads .daw-head.master [data-act="laneRemove"]').click();
+    await page.click('#dawMasterAuto');
+    check('and the lane removed and the rows hidden again', await page.evaluate(() => DawEngine.get().project.masterAuto.length === 0) &&
+      await page.locator('#dawHeads .daw-head.master').count() === 0);
+
+    // Removing the track's lanes and hiding the rows leaves the timeline as it was.
+    await chordsHead().locator('[data-act="laneRemove"]').first().click();
+    await chordsHead().locator('[data-act="laneRemove"]').first().click();
+    await chordsHead().locator('[data-act="auto"]').click();
+    check('lanes can be removed, and Auto hides the rows', (await lanesNow())[0].length === 0 &&
+      Math.round((await chordsHead().boundingBox()).height) === LANE_H);
+
     // ── Recording ──────────────────────────────────────────────────────────
     section('Recording');
     // The test shell offers a few pretend inputs.

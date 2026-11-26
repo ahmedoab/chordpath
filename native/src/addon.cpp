@@ -416,12 +416,15 @@ void deskStrip(cp::Mixer& desk, const Napi::CallbackInfo& info) {
   s.pan = (float)numberIn(o, "pan", 0);
   s.reverb = (float)numberIn(o, "reverb", 0);
   s.echo = (float)numberIn(o, "echo", 0);
+  s.followGain = flagIn(o, "followGain", false);
+  s.followPan = flagIn(o, "followPan", false);
   desk.setStrip(strip, s);
 }
 
 void deskMaster(cp::Mixer& desk, const Napi::CallbackInfo& info) {
   const Napi::Object o = objectArg(info, 0, "the master's settings");
   cp::MasterSettings s;
+  s.followGain = flagIn(o, "followGain", false);
   s.gain = (float)std::max(0.0, std::min(8.0, numberIn(o, "gain", 1)));
   s.reverbReturn = (float)std::max(0.0, std::min(16.0, numberIn(o, "reverbReturn", 3)));
   s.echoSeconds = std::max(0.001, std::min(1.9, numberIn(o, "echoSeconds", 0.375)));
@@ -468,7 +471,10 @@ void deskChain(cp::Mixer& desk, const Napi::CallbackInfo& info) {
   hostNow(env, [target, strip, &chain] { target->setChain(strip, chain); });
 }
 
-// schedule([{ plugin, frame, on, pitch, velocity }]) → how many were taken.
+// schedule([event]) → how many were taken. An event is a note,
+// { plugin, frame, on, pitch, velocity }, or a step of automation:
+// { kind: 'level', frame, strip, gain?, pan? } (strip -1 is the master) or
+// { kind: 'param', frame, plugin, param, value }.
 // `counted` is true where frames are counted from the start of a mixdown;
 // played live, they are places in the stream and 0 means at once.
 Napi::Value deskSchedule(cp::Mixer& desk, const Napi::CallbackInfo& info, bool counted) {
@@ -484,6 +490,25 @@ Napi::Value deskSchedule(cp::Mixer& desk, const Napi::CallbackInfo& info, bool c
     e.plugin = (uint32_t)numberIn(o, "plugin", 0);
     const double frame = numberIn(o, "frame", 0);
     e.frame = (frame > 0 ? (uint64_t)frame : 0) + (counted ? 1 : 0);
+    const std::string kind = textIn(o, "kind");
+    if (kind == "level") {
+      e.kind = cp::NoteEvent::Level;
+      e.strip = (int)numberIn(o, "strip", -2);
+      if (e.strip < -1 || e.strip >= desk.strips()) continue;
+      if (o.Has("gain")) e.gain = (float)std::max(0.0, std::min(8.0, numberIn(o, "gain", 1)));
+      if (o.Has("pan")) e.pan = (float)std::max(-1.0, std::min(1.0, numberIn(o, "pan", 0)));
+      if (desk.schedule(e)) taken++;
+      continue;
+    }
+    if (kind == "param") {
+      e.kind = cp::NoteEvent::Param;
+      const double param = numberIn(o, "param", -1);
+      if (!e.plugin || !(param >= 0) || param > 4294967295.0) continue;
+      e.param = (uint32_t)param;
+      e.value = std::max(0.0, std::min(1.0, numberIn(o, "value", 0)));
+      if (desk.schedule(e)) taken++;
+      continue;
+    }
     e.on = flagIn(o, "on", false);
     e.pitch = (int)numberIn(o, "pitch", 60);
     e.velocity = (float)numberIn(o, "velocity", 0.8);

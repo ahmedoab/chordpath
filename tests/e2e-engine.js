@@ -745,6 +745,86 @@ const { check, section, tempDataDir, launch, crashed, finish, cleanup } = requir
     check('the waveform summary finds a recording\'s loudness, and says when one is missing',
       takes.peakSummary > 0.4 && takes.peakSummary <= 0.51 && takes.peakMissing === -1);
 
+    section('Automation');
+    const auto = await page.evaluate(async () => {
+      const T = window.__t;
+      const P = DawProject;
+      const SR = 44100;
+      const d = new Float32Array(SR * 6);
+      for (let i = 0; i < d.length; i++) d[i] = 0.5 * Math.sin(2 * Math.PI * 220 * i / SR);
+      const audio = new Map([['aud_steady', { sampleRate: SR, channels: [d] }]]);
+      const opts = { tail: 0.2, sampleRate: SR };
+      // A steady tone for six seconds (twelve beats at 120), on a track at 0 dB, and a lane made by `lanes`.
+      const make = lanes => {
+        const p = P.createProject({ tempo: 120 });
+        const t = P.addTrack(p, 'audio', { volume: 0 });
+        P.addClip(t, { start: 0, length: 12, audioId: 'aud_steady' });
+        lanes(p, t);
+        return p;
+      };
+      const res = {};
+      const peak = (out, a, b, ch) => T.measure(out, a, b).peak[ch || 0];
+
+      const fade = await T.render(make((p, t) => {
+        const l = P.addLane(p, t.id, { target: 'volume', value: 0 });
+        P.setPoint(l, 4, 0);
+        P.setPoint(l, 8, -60);
+      }), opts, audio);
+      res.fadeBefore = peak(fade, 0.5, 1.8);
+      res.fadeHalf = peak(fade, 2.95, 3.05);                 // beat 6: half way down in decibels
+      res.fadeAfter = peak(fade, 4.1, 5.9);
+
+      const off = await T.render(make((p, t) => {
+        const l = P.addLane(p, t.id, { target: 'volume', value: -60 });
+        l.on = false;
+      }), opts, audio);
+      res.offLevel = peak(off, 1, 5);
+
+      const muted = await T.render(make((p, t) => { P.addLane(p, t.id, { target: 'volume', value: 0 }); t.mute = true; }), opts, audio);
+      res.mutedLevel = peak(muted, 0.5, 5);
+
+      const swing = await T.render(make((p, t) => {
+        const l = P.addLane(p, t.id, { target: 'pan', value: -1 });
+        P.setPoint(l, 8, 1);
+      }), opts, audio);
+      res.panStart = [peak(swing, 0.1, 0.4, 0), peak(swing, 0.1, 0.4, 1)];
+      res.panEnd = [peak(swing, 4.2, 5.5, 0), peak(swing, 4.2, 5.5, 1)];
+
+      const master = await T.render(make(p => {
+        const l = P.addLane(p, null, { target: 'volume', value: 0 });
+        P.setPoint(l, 6, 0);
+        P.setPoint(l, 6.5, -60);
+      }), opts, audio);
+      res.masterBefore = peak(master, 1, 2.9);
+      res.masterAfter = peak(master, 3.4, 5.5);
+
+      // Live: the fade is heard, and a change to a lane while playing takes over at once.
+      const eng = DawEngine.get();
+      eng.stop();
+      audio.forEach((a, id) => eng.setAudio(id, a.sampleRate, a.channels));
+      const live = make((p, t) => { P.addLane(p, t.id, { target: 'volume', value: 0 }); });
+      eng.sync(live);
+      await eng.seek(0);
+      await eng.play();
+      const loudest = async ms => { let top = -160; for (let i = 0; i < ms / 25; i++) { await T.wait(25); top = Math.max(top, eng.levels().master); } return top; };
+      res.liveLoud = await loudest(500);
+      live.tracks[0].auto[0].points = [{ b: 0, v: -60 }];
+      eng.sync(live);
+      await T.wait(150);
+      res.liveQuiet = await loudest(500);
+      eng.stop();
+      return res;
+    });
+    check(`a volume lane fades the track where it says (${auto.fadeBefore.toFixed(2)} → ${auto.fadeHalf.toFixed(3)} → ${auto.fadeAfter.toFixed(4)})`,
+      auto.fadeBefore > 0.45 && Math.abs(auto.fadeHalf - 0.5 * Math.pow(10, -30 / 20)) < 0.01 && auto.fadeAfter < 1e-3);
+    check('a lane switched off leaves the fader in charge', auto.offLevel > 0.45);
+    check('a muted track stays silent whatever its lane says', auto.mutedLevel < 1e-4);
+    check(`a pan lane moves the sound from left to right (${auto.panStart.map(v => v.toFixed(2))} → ${auto.panEnd.map(v => v.toFixed(2))})`,
+      auto.panStart[0] > 0.45 && auto.panStart[1] < 0.05 && auto.panEnd[1] > 0.45 && auto.panEnd[0] < 0.05);
+    check(`the master can be faded out (${auto.masterBefore.toFixed(2)} → ${auto.masterAfter.toFixed(4)})`, auto.masterBefore > 0.45 && auto.masterAfter < 1e-3);
+    check(`played live, a lane is followed, and changed while playing it takes over (${auto.liveLoud.toFixed(0)} dB, then ${auto.liveQuiet.toFixed(0)} dB)`,
+      auto.liveLoud > -12 && auto.liveQuiet < -50);
+
     section('Recording round a loop');
     const looping = await page.evaluate(async () => {
       const T = window.__t;

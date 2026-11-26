@@ -76,6 +76,9 @@ class Plugin {
   void process(float* left, float* right, int frames);
   // Audio thread, just before process(): a note for the block about to be made.
   void noteFromAudioThread(bool on, int pitch, float velocity, int sampleOffset);
+  // The same for one of its settings (0 … 1), as automation moves it. The
+  // plugin's own window is not told, as only the window's thread may tell it.
+  void paramFromAudioThread(uint32_t id, double value, int sampleOffset);
 
   // Any thread; takes effect in the next process() call.
   void noteOn(int pitch, float velocity, int sampleOffset);

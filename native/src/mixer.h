@@ -37,9 +37,13 @@ struct StripSettings {
   float pan = 0;            // -1 left … 1 right
   float reverb = 0;         // send levels, taken after the fader and pan
   float echo = 0;
+  // While automated, the fader and pan follow Level events instead of these.
+  bool followGain = false;
+  bool followPan = false;
 };
 
 struct MasterSettings {
+  bool followGain = false;  // the master fader follows Level events for strip -1
   float gain = 1;
   float reverbReturn = 3;
   double echoSeconds = 0.375;
@@ -54,12 +58,22 @@ struct MasterSettings {
   float limiterRelease = 0.12f;
 };
 
+// Something to happen at a given place in the stream: a note for a plugin
+// instrument, or a step of automation — a strip's fader and pan (Level), or
+// one of a plugin's settings (Param).
 struct NoteEvent {
+  enum Kind : uint8_t { Note = 0, Level = 1, Param = 2 };
   uint64_t frame = 0;       // place in the stream of feeds; 0 = as soon as possible
-  uint32_t plugin = 0;      // the ChainSlot id of the instrument it is for
+  uint32_t plugin = 0;      // the ChainSlot id of the instrument (Note) or plugin (Param) it is for
   bool on = false;
   int pitch = 60;
   float velocity = 0.8f;
+  uint8_t kind = Note;
+  int strip = -1;           // Level: the strip; -1 the master
+  float gain = -1;          // Level: the fader as a multiplier; below 0 leaves it as it is
+  float pan = 2;            // Level: -1 … 1; outside that leaves it as it is
+  uint32_t param = 0;       // Param: which of the plugin's settings
+  double value = 0;         // Param: 0 … 1
 };
 
 class Mixer {
